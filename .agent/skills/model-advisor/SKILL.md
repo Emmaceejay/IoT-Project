@@ -37,3 +37,8 @@ To preserve the user's compute quota, especially when working on complex project
 - **Micro-Verifications:** Instead of running comprehensive, quota-heavy recursive workspace searches, check specific files intentionally.
 - **Batching Tool Calls:** Execute multiple non-conflicting tool calls (e.g., creating 5 files) in a single response turn simultaneously, rather than burning 5 response turns to do them one by one.
 - **Measure Twice, Cut Once:** For Heavyweight tasks, output a brief markdown `Implementation Plan` artifact for user approval *before* generating hundreds of lines of code. If the user spots a logic flaw early, you save the massive quota cost of re-generating it.
+
+## 5. Documentation Maintenance Protocol
+To ensure the project remains professional and easily hand-off ready:
+- **Continuous README Sync:** Whenever you implement a new feature, change the project architecture, or add significant capabilities, you MUST automatically evaluate if the root `README.md` (or other core docs) requires an update.
+- **Silent Updates:** Treat documentation (`README.md`, `QUICKSTART_GUIDE.md`) as living code. If it goes out of sync with your changes, update it in tandem automatically to ensure zero technical debt.
