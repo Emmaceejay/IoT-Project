@@ -1,0 +1,26 @@
+# Nexus Firmware SDK Config Defaults
+# These override ESP-IDF defaults for production IoT use
+
+# ── Partition table (dual-bank OTA) ──────────────────────────────────────────
+CONFIG_PARTITION_TABLE_TWO_OTA=y
+
+# ── MQTT ─────────────────────────────────────────────────────────────────────
+CONFIG_MQTT_BUFFER_SIZE=2048
+CONFIG_MQTT_TASK_STACK_SIZE=6144
+
+# ── Secure Boot / Flash Encryption (enable for production) ───────────────────
+# CONFIG_SECURE_BOOT=y
+# CONFIG_FLASH_ENCRYPTION_ENABLED=y
+
+# ── Matter / CHIP SDK ─────────────────────────────────────────────────────────
+CONFIG_ENABLE_CHIP_SHELL=n
+CONFIG_CHIP_ENABLE_PAIRING_AUTOSTART=y
+CONFIG_CHIP_TASK_STACK_SIZE=8192
+
+# ── TLS / mbedTLS ─────────────────────────────────────────────────────────────
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+CONFIG_MBEDTLS_TLS_CLIENT=y
+
+# ── Logging (reduce in production) ───────────────────────────────────────────
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_PARTITION_TABLE_CUSTOM=y\nCONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
