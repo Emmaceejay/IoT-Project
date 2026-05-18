@@ -42,3 +42,6 @@ To preserve the user's compute quota, especially when working on complex project
 To ensure the project remains professional and easily hand-off ready:
 - **Continuous README Sync:** Whenever you implement a new feature, change the project architecture, or add significant capabilities, you MUST automatically evaluate if the root `README.md` (or other core docs) requires an update.
 - **Silent Updates:** Treat documentation (`README.md`, `QUICKSTART_GUIDE.md`) as living code. If it goes out of sync with your changes, update it in tandem automatically to ensure zero technical debt.
+
+## 6. Git Action Integration
+To ensure code changes are safely persisted, whenever you successfully complete any task across the Light, Standard, or Heavy tiers, you MUST silently invoke the `@git-action` skill. Follow its exact protocol to proactively prompt the user to commit and push their changes.
