@@ -1,0 +1,13 @@
+subprojects {
+    afterEvaluate { project ->
+        if (project.hasProperty("android")) {
+            if (project.android.namespace == null) {
+                def group = project.group.toString()
+                if (group == null || group.isEmpty()) {
+                    group = "com.example." + project.name.replaceAll("-", "_")
+                }
+                project.android.namespace = group
+            }
+        }
+    }
+}
