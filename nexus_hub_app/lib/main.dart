@@ -1,12 +1,36 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:isar/isar.dart';
+import 'package:path_provider/path_provider.dart';
+
+import 'core/isar_provider.dart';
+import 'data/models/isar_device.dart';
 import 'presentation/widgets/app_shell.dart';
 
-void main() {
+/// App entry point.
+///
+/// Performs one-time async initialisation before the widget tree is mounted:
+///   1. Isar database — offline-first device cache (architecture whitepaper §4)
+///
+/// The [isarProvider] override makes the singleton available to every Riverpod
+/// provider that depends on it without manual passing through constructors.
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // ── Initialise Isar (offline-first device persistence) ────────────────────
+  final dir = await getApplicationDocumentsDirectory();
+  final isar = await Isar.open(
+    [IsarDeviceSchema],
+    directory: dir.path,
+    inspector: false, // Disable Isar Inspector in release builds
+  );
+
   runApp(
-    // ProviderScope is the Riverpod root — wraps the entire app
-    const ProviderScope(
-      child: NexusHubApp(),
+    ProviderScope(
+      overrides: [
+        isarProvider.overrideWithValue(isar),
+      ],
+      child: const NexusHubApp(),
     ),
   );
 }
@@ -29,7 +53,7 @@ class NexusHubApp extends StatelessWidget {
       useMaterial3: true,
       brightness: Brightness.dark,
       colorScheme: ColorScheme.fromSeed(
-        seedColor: const Color(0xFF00E5FF), // Cyan accent
+        seedColor: const Color(0xFF00E5FF),
         brightness: Brightness.dark,
       ),
       scaffoldBackgroundColor: const Color(0xFF0A0E1A),

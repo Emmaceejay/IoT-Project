@@ -15,6 +15,7 @@ class MockDeviceDatasource implements DeviceRepository {
       status: DeviceStatus.online,
       capabilities: ['relay', 'dimmer', 'color_temperature'],
       telemetry: {'power': true, 'brightness': 75, 'color_temp': 3000},
+      localIp: '192.168.1.101', // Simulate device on local LAN
     ),
     const MatterDevice(
       uniqueDeviceId: 'MOCK-ESP32-002',
@@ -22,6 +23,7 @@ class MockDeviceDatasource implements DeviceRepository {
       status: DeviceStatus.online,
       capabilities: ['temperature_sensor', 'hvac_control'],
       telemetry: {'current_temp': 22.5, 'target_temp': 24.0, 'mode': 'cool'},
+      localIp: '192.168.1.102',
     ),
     const MatterDevice(
       uniqueDeviceId: 'MOCK-ESP32-003',
@@ -29,6 +31,7 @@ class MockDeviceDatasource implements DeviceRepository {
       status: DeviceStatus.offline,
       capabilities: ['relay'],
       telemetry: {'power': false},
+      // No localIp — simulates a device not reachable on local network
     ),
   ];
 

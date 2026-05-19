@@ -1,10 +1,12 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:mqtt_client/mqtt_client.dart';
 import 'package:mqtt_client/mqtt_server_client.dart';
+import '../models/matter_device.dart';
 import '../models/mqtt_config.dart';
 import 'device_manager.dart';
 
@@ -191,6 +193,7 @@ class MqttConnectivityService extends StateNotifier<MqttConnectionStatus> {
   void _subscribeToFleet() {
     _client!.subscribe('devices/+/status', MqttQos.atLeastOnce);
     _client!.subscribe('devices/+/telemetry', MqttQos.atLeastOnce);
+    _client!.subscribe('devices/+/announce', MqttQos.atLeastOnce);
 
     _messageSubscription?.cancel();
     _messageSubscription =
@@ -210,26 +213,51 @@ class MqttConnectivityService extends StateNotifier<MqttConnectionStatus> {
     final deviceId = segments[1];
     final messageType = segments[2];
 
-    if (messageType == 'status' && payload == 'offline') {
-      _ref.read(deviceManagerProvider.notifier).markDeviceOffline(deviceId);
-      debugPrint('[MQTT] Device $deviceId went offline (LWT).');
-    } else if (messageType == 'telemetry') {
-      debugPrint('[MQTT] Telemetry from $deviceId: $payload');
+    switch (messageType) {
+      case 'status':
+        if (payload == 'offline') {
+          _ref.read(deviceManagerProvider.notifier).markDeviceOffline(deviceId);
+          debugPrint('[MQTT] Device $deviceId went offline (LWT).');
+        }
+
+      case 'telemetry':
+        // Parse and apply live telemetry to the matching device in DeviceManager
+        try {
+          final map = jsonDecode(payload) as Map<String, dynamic>;
+          _ref.read(deviceManagerProvider.notifier).applyTelemetry(deviceId, map);
+          debugPrint('[MQTT] Telemetry applied for $deviceId');
+        } catch (_) {
+          debugPrint('[MQTT] Malformed telemetry from $deviceId: $payload');
+        }
+
+      case 'announce':
+        // Firmware publishes this on every MQTT connect.
+        // Registers new devices or updates localIp for known ones.
+        try {
+          final map = jsonDecode(payload) as Map<String, dynamic>;
+          final device = MatterDevice.fromJson(map);
+          _ref.read(deviceManagerProvider.notifier).handleAnnounce(device);
+          debugPrint('[MQTT] Announce from $deviceId — IP: ${device.localIp}');
+        } catch (_) {
+          debugPrint('[MQTT] Malformed announce from $deviceId: $payload');
+        }
     }
   }
 
   /// Publish a command to a specific device topic.
   Future<void> publishCommand(String deviceId, String payloadJson) async {
+    await publish('devices/$deviceId/command', payloadJson);
+  }
+
+  /// General-purpose publish — used by OTA and other services that need
+  /// arbitrary topic routing (e.g. devices/{id}/ota-trigger).
+  Future<void> publish(String topic, String payloadJson) async {
     if (_client == null || !state.isConnected) {
-      debugPrint('[MQTT] Not connected — command dropped.');
+      debugPrint('[MQTT] Not connected — publish to $topic dropped.');
       return;
     }
     final builder = MqttClientPayloadBuilder()..addString(payloadJson);
-    _client!.publishMessage(
-      'devices/$deviceId/command',
-      MqttQos.atLeastOnce,
-      builder.payload!,
-    );
+    _client!.publishMessage(topic, MqttQos.atLeastOnce, builder.payload!);
   }
 
   void _onDisconnected() {

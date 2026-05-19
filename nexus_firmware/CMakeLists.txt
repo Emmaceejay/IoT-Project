@@ -17,15 +17,18 @@ idf_component_register(
         "main/mqtt/nexus_mqtt.c"
         "main/ota/nexus_ota.c"
         "main/gpio/nexus_gpio.c"
+        "main/http/nexus_http_server.c"
     INCLUDE_DIRS
         "include"
     REQUIRES
         nvs_flash
         esp_wifi
+        esp_netif
         esp_event
         mqtt
         esp_https_ota
         esp_http_client
+        esp_http_server
         driver
         json
 )

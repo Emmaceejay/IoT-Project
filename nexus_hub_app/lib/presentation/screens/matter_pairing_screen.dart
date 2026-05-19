@@ -1,29 +1,62 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 import '../../domain/services/matter_commissioning_service.dart';
 
 /// Matter QR Pairing Screen
 ///
 /// Guides the user through commissioning a new Matter device.
-/// On real hardware, triggers the OS-native Matter QR flow.
-/// Shows progress clearly with animated feedback.
+/// Scans a Matter QR code (MT: prefix) with the phone camera,
+/// then triggers the OS-native Matter commissioning flow.
 class MatterPairingScreen extends ConsumerStatefulWidget {
   const MatterPairingScreen({super.key});
 
   @override
-  ConsumerState<MatterPairingScreen> createState() => _MatterPairingScreenState();
+  ConsumerState<MatterPairingScreen> createState() =>
+      _MatterPairingScreenState();
 }
 
 class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
   final _nameController = TextEditingController();
+  final _scannerController = MobileScannerController(
+    detectionSpeed: DetectionSpeed.noDuplicates,
+    facing: CameraFacing.back,
+  );
+
   bool _isPairing = false;
+  bool _scannerActive = true;
+  String? _scannedCode;
   String? _statusMessage;
   bool _success = false;
 
   @override
   void dispose() {
     _nameController.dispose();
+    _scannerController.dispose();
     super.dispose();
+  }
+
+  void _onBarcodeDetected(BarcodeCapture capture) {
+    final barcode = capture.barcodes.firstOrNull;
+    final raw = barcode?.rawValue;
+    if (raw == null || !raw.startsWith('MT:')) return;
+
+    setState(() {
+      _scannedCode = raw;
+      _scannerActive = false;
+      _statusMessage = 'QR code captured. Enter a name and tap Commission.';
+    });
+    _scannerController.stop();
+  }
+
+  void _resetScanner() {
+    setState(() {
+      _scannedCode = null;
+      _scannerActive = true;
+      _statusMessage = null;
+      _success = false;
+    });
+    _scannerController.start();
   }
 
   Future<void> _startPairing() async {
@@ -31,16 +64,20 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
       setState(() => _statusMessage = 'Please enter a device name.');
       return;
     }
+    if (_scannedCode == null) {
+      setState(() => _statusMessage = 'Please scan the device QR code first.');
+      return;
+    }
 
     setState(() {
       _isPairing = true;
-      _statusMessage = 'Scanning for Matter device...';
+      _statusMessage = 'Commissioning Matter device…';
       _success = false;
     });
 
     final service = ref.read(matterCommissioningProvider);
     final result = await service.commissionDevice(
-      qrCodeString: null, // In production: pass scanned QR code value
+      qrCodeString: _scannedCode,
       assignedName: _nameController.text.trim(),
     );
 
@@ -63,37 +100,80 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
       appBar: AppBar(
         backgroundColor: const Color(0xFF0A0E1A),
         iconTheme: const IconThemeData(color: Colors.white),
-        title: const Text('Pair New Device',
-            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        title: const Text(
+          'Pair New Device',
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+        ),
       ),
       body: Padding(
         padding: const EdgeInsets.all(24),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // ── QR Illustration ────────────────────────────────────
-            Container(
-              height: 200,
-              decoration: BoxDecoration(
-                color: const Color(0xFF121826),
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: const Color(0xFF00E5FF).withValues(alpha: 0.3)),
-              ),
-              child: const Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.qr_code_2, size: 80, color: Color(0xFF00E5FF)),
-                  SizedBox(height: 12),
-                  Text(
-                    'Point camera at your device\'s\nMatter QR Code',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: Colors.white54, fontSize: 13),
+            // ── QR Scanner / Preview ────────────────────────────────
+            ClipRRect(
+              borderRadius: BorderRadius.circular(20),
+              child: Container(
+                height: 220,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF121826),
+                  border: Border.all(
+                    color: const Color(0xFF00E5FF).withValues(alpha: 0.3),
                   ),
-                ],
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: _scannerActive
+                    ? Stack(
+                        children: [
+                          MobileScanner(
+                            controller: _scannerController,
+                            onDetect: _onBarcodeDetected,
+                          ),
+                          // Overlay hint
+                          Align(
+                            alignment: Alignment.bottomCenter,
+                            child: Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.all(8),
+                              color: Colors.black54,
+                              child: const Text(
+                                'Point at Matter QR code (MT:…)',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                    color: Colors.white70, fontSize: 12),
+                              ),
+                            ),
+                          ),
+                        ],
+                      )
+                    : Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(Icons.check_circle,
+                              size: 56, color: Color(0xFF00E5FF)),
+                          const SizedBox(height: 8),
+                          Text(
+                            'Scanned: $_scannedCode',
+                            textAlign: TextAlign.center,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                color: Colors.white70, fontSize: 12),
+                          ),
+                          const SizedBox(height: 12),
+                          TextButton.icon(
+                            onPressed: _resetScanner,
+                            icon: const Icon(Icons.refresh,
+                                color: Color(0xFF00E5FF), size: 16),
+                            label: const Text('Rescan',
+                                style: TextStyle(color: Color(0xFF00E5FF))),
+                          ),
+                        ],
+                      ),
               ),
             ),
 
-            const SizedBox(height: 32),
+            const SizedBox(height: 28),
 
             // ── Device Name Input ──────────────────────────────────
             TextField(
@@ -112,13 +192,12 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
                 ),
                 focusedBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
-                  borderSide:
-                      const BorderSide(color: Color(0xFF00E5FF)),
+                  borderSide: const BorderSide(color: Color(0xFF00E5FF)),
                 ),
               ),
             ),
 
-            const SizedBox(height: 24),
+            const SizedBox(height: 20),
 
             // ── Status Message ─────────────────────────────────────
             if (_statusMessage != null) ...[
@@ -126,23 +205,26 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
                 _statusMessage!,
                 textAlign: TextAlign.center,
                 style: TextStyle(
-                  color: _success ? const Color(0xFF00E5FF) : Colors.redAccent,
+                  color:
+                      _success ? const Color(0xFF00E5FF) : Colors.redAccent,
                   fontSize: 14,
                 ),
               ),
               const SizedBox(height: 16),
             ],
 
-            // ── Pairing Button ─────────────────────────────────────
+            // ── Commission Button ──────────────────────────────────
             ElevatedButton.icon(
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF00E5FF),
                 foregroundColor: Colors.black,
+                disabledBackgroundColor:
+                    const Color(0xFF00E5FF).withValues(alpha: 0.4),
                 padding: const EdgeInsets.symmetric(vertical: 16),
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12)),
               ),
-              onPressed: _isPairing ? null : _startPairing,
+              onPressed: (_isPairing || _scannedCode == null) ? null : _startPairing,
               icon: _isPairing
                   ? const SizedBox(
                       width: 18,
@@ -151,14 +233,20 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
                           strokeWidth: 2, color: Colors.black),
                     )
                   : const Icon(Icons.bluetooth_searching),
-              label: Text(_isPairing ? 'Commissioning...' : 'Scan & Commission Device'),
+              label: Text(
+                _isPairing
+                    ? 'Commissioning…'
+                    : _scannedCode == null
+                        ? 'Scan QR Code First'
+                        : 'Commission Device',
+              ),
             ),
 
             const Spacer(),
 
             // ── Info footer ────────────────────────────────────────
             const Text(
-              'The pairing process uses your phone\'s OS to securely\nshare Wi-Fi credentials with your Matter device via BLE.',
+              'Pairing shares Wi-Fi credentials with your Matter\ndevice securely via BLE using the OS Matter stack.',
               textAlign: TextAlign.center,
               style: TextStyle(color: Colors.white24, fontSize: 11),
             ),
