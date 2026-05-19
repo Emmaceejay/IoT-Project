@@ -2,105 +2,123 @@ import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:mqtt_client/mqtt_client.dart';
 import 'package:mqtt_client/mqtt_server_client.dart';
+import '../models/mqtt_config.dart';
 import 'device_manager.dart';
 
-/// MQTT Dual-Broker Connection States
-enum HubConnectionState { disconnected, connecting, connectedCloud, connectedLocal }
+// ── Connection State ────────────────────────────────────────────────────────
 
-/// The core MQTT Service housing the Dual-Broker Strategy.
-///
-/// Strategy:
-/// 1. Try EMQX Cloud (TLS, JWT auth).
-/// 2. If WAN is unreachable → mDNS discovery for local Mosquitto.
-/// 3. All incoming LWT messages update [DeviceManager] in real-time.
-class MqttConnectivityService {
+enum HubConnectionState { disconnected, connecting, connected }
+
+// ── Config Notifier (persists to flutter_secure_storage) ───────────────────
+
+class MqttConfigNotifier extends StateNotifier<MqttConfig> {
+  static const _storage = FlutterSecureStorage(
+    aOptions: AndroidOptions(encryptedSharedPreferences: true),
+  );
+
+  MqttConfigNotifier() : super(const MqttConfig()) {
+    _load();
+  }
+
+  Future<void> _load() async {
+    final keys = [
+      'mqtt_host', 'mqtt_port', 'mqtt_use_tls',
+      'mqtt_username', 'mqtt_password', 'mqtt_client_id',
+    ];
+    final map = <String, String?>{
+      for (final k in keys) k: await _storage.read(key: k),
+    };
+    state = MqttConfig.fromStorageMap(map);
+  }
+
+  Future<void> save(MqttConfig config) async {
+    state = config;
+    for (final entry in config.toStorageMap().entries) {
+      await _storage.write(key: entry.key, value: entry.value);
+    }
+  }
+}
+
+final mqttConfigProvider =
+    StateNotifierProvider<MqttConfigNotifier, MqttConfig>((ref) {
+  return MqttConfigNotifier();
+});
+
+// ── Connectivity Service ────────────────────────────────────────────────────
+
+/// Broker-agnostic MQTT service. Reads config from [mqttConfigProvider].
+/// Supports any broker — EMQX, Mosquitto, HiveMQ, AWS IoT Core, etc.
+/// TLS and plain connections are both supported based on user config.
+class MqttConnectivityService extends StateNotifier<HubConnectionState> {
   final Ref _ref;
-
   MqttServerClient? _client;
-  HubConnectionState _connectionState = HubConnectionState.disconnected;
+  StreamSubscription? _messageSubscription;
 
-  // TODO: Load these from flutter_secure_storage in production
-  static const String _cloudHost = 'your-emqx-endpoint.cloud'; // Replace with real endpoint
-  static const int _cloudPort = 8883; // TLS port
-  static const String _localFallbackHost = '192.168.1.100'; // Discovered via mDNS
-  static const int _localPort = 1883;
-  static const String _clientId = 'nexus_hub_flutter_client';
+  MqttConnectivityService(this._ref) : super(HubConnectionState.disconnected);
 
-  MqttConnectivityService(this._ref);
-
-  HubConnectionState get connectionState => _connectionState;
-
-  /// Main entry: attempts cloud then falls back to local.
+  /// Connect using the currently saved [MqttConfig].
   Future<void> connect() async {
+    final config = _ref.read(mqttConfigProvider);
+    if (!config.isConfigured) {
+      debugPrint('[MQTT] No broker host configured — skipping connect.');
+      return;
+    }
+    await _disconnect();
+    state = HubConnectionState.connecting;
     try {
-      await _connectToCloud();
+      await _connectWith(config);
     } catch (e) {
-      debugPrint('[MQTT] Cloud unavailable: $e — trying local fallback...');
-      try {
-        await _connectToLocal();
-      } catch (localErr) {
-        debugPrint('[MQTT] Local broker also unreachable: $localErr');
-        _connectionState = HubConnectionState.disconnected;
-      }
+      debugPrint('[MQTT] Connection failed: $e');
+      state = HubConnectionState.disconnected;
     }
   }
 
-  Future<void> _connectToCloud() async {
-    _client = MqttServerClient.withPort(_cloudHost, _clientId, _cloudPort);
-    _client!.secure = true;
-    _client!.keepAlivePeriod = 60;
-    _client!.onDisconnected = _onDisconnected;
-    _client!.autoReconnect = true;
+  Future<void> _connectWith(MqttConfig config) async {
+    _client = MqttServerClient.withPort(config.host, config.clientId, config.port)
+      ..keepAlivePeriod = 60
+      ..onDisconnected = _onDisconnected
+      ..autoReconnect = true
+      ..logging(on: false);
 
-    // TLS context — point to bundled certs in production
-    final context = SecurityContext.defaultContext;
-    _client!.securityContext = context;
+    if (config.useTls) {
+      _client!.secure = true;
+      _client!.securityContext = SecurityContext.defaultContext;
+    }
 
     final connMsg = MqttConnectMessage()
-        .withClientIdentifier(_clientId)
+        .withClientIdentifier(config.clientId)
         .withWillQos(MqttQos.atLeastOnce)
         .startClean();
+
+    if (config.hasCredentials) {
+      connMsg.authenticateAs(config.username, config.password);
+    }
+
     _client!.connectionMessage = connMsg;
 
     await _client!.connect();
-    _connectionState = HubConnectionState.connectedCloud;
-    debugPrint('[MQTT] Connected to EMQX Cloud.');
+    state = HubConnectionState.connected;
+    debugPrint(
+        '[MQTT] Connected → ${config.host}:${config.port} '
+        '| TLS: ${config.useTls} | Auth: ${config.hasCredentials}');
     _subscribeToFleet();
   }
 
-  Future<void> _connectToLocal() async {
-    _client = MqttServerClient.withPort(_localFallbackHost, _clientId, _localPort);
-    _client!.keepAlivePeriod = 60;
-    _client!.onDisconnected = _onDisconnected;
-    _client!.autoReconnect = true;
-
-    final connMsg = MqttConnectMessage()
-        .withClientIdentifier(_clientId)
-        .startClean();
-    _client!.connectionMessage = connMsg;
-
-    await _client!.connect();
-    _connectionState = HubConnectionState.connectedLocal;
-    debugPrint('[MQTT] Connected to Local Mosquitto fallback.');
-    _subscribeToFleet();
-  }
-
-  /// Subscribe to status topics and wire LWT messages to DeviceManager.
   void _subscribeToFleet() {
-    // Subscribe to wildcard status topic for all devices
     _client!.subscribe('devices/+/status', MqttQos.atLeastOnce);
     _client!.subscribe('devices/+/telemetry', MqttQos.atLeastOnce);
 
-    _client!.updates!.listen((List<MqttReceivedMessage<MqttMessage>> messages) {
-      for (final msg in messages) {
-        final topic = msg.topic;
+    _messageSubscription?.cancel();
+    _messageSubscription =
+        _client!.updates!.listen((List<MqttReceivedMessage<MqttMessage>> msgs) {
+      for (final msg in msgs) {
         final payload = MqttPublishPayload.bytesToStringAsString(
           (msg.payload as MqttPublishMessage).payload.message,
         );
-
-        _handleIncomingMessage(topic, payload);
+        _handleIncomingMessage(msg.topic, payload);
       }
     });
   }
@@ -108,32 +126,24 @@ class MqttConnectivityService {
   void _handleIncomingMessage(String topic, String payload) {
     final segments = topic.split('/');
     if (segments.length < 3) return;
-
     final deviceId = segments[1];
     final messageType = segments[2];
 
-    if (messageType == 'status') {
-      if (payload == 'offline') {
-        _ref.read(deviceManagerProvider.notifier).markDeviceOffline(deviceId);
-        debugPrint('[MQTT] Device $deviceId went offline (LWT).');
-      }
+    if (messageType == 'status' && payload == 'offline') {
+      _ref.read(deviceManagerProvider.notifier).markDeviceOffline(deviceId);
+      debugPrint('[MQTT] Device $deviceId went offline (LWT).');
     } else if (messageType == 'telemetry') {
-      // TODO: Parse telemetry JSON and call sendCommand to update Isar cache
       debugPrint('[MQTT] Telemetry from $deviceId: $payload');
     }
   }
 
-  /// Publish a command to a specific device.
+  /// Publish a command to a specific device topic.
   Future<void> publishCommand(String deviceId, String payloadJson) async {
-    if (_client == null ||
-        (_connectionState != HubConnectionState.connectedCloud &&
-         _connectionState != HubConnectionState.connectedLocal)) {
-      debugPrint('[MQTT] Not connected — command queued locally.');
+    if (_client == null || state != HubConnectionState.connected) {
+      debugPrint('[MQTT] Not connected — command dropped.');
       return;
     }
-
-    final builder = MqttClientPayloadBuilder();
-    builder.addString(payloadJson);
+    final builder = MqttClientPayloadBuilder()..addString(payloadJson);
     _client!.publishMessage(
       'devices/$deviceId/command',
       MqttQos.atLeastOnce,
@@ -142,18 +152,25 @@ class MqttConnectivityService {
   }
 
   void _onDisconnected() {
-    _connectionState = HubConnectionState.disconnected;
-    debugPrint('[MQTT] Disconnected. Will attempt reconnect...');
+    state = HubConnectionState.disconnected;
+    debugPrint('[MQTT] Disconnected.');
   }
 
-  void dispose() {
+  Future<void> _disconnect() async {
+    _messageSubscription?.cancel();
+    _messageSubscription = null;
     _client?.disconnect();
+    _client = null;
+  }
+
+  @override
+  void dispose() {
+    _disconnect();
+    super.dispose();
   }
 }
 
-/// Riverpod provider — globally accessible throughout the app
-final mqttServiceProvider = Provider<MqttConnectivityService>((ref) {
-  final service = MqttConnectivityService(ref);
-  ref.onDispose(service.dispose);
-  return service;
+final mqttServiceProvider =
+    StateNotifierProvider<MqttConnectivityService, HubConnectionState>((ref) {
+  return MqttConnectivityService(ref);
 });
