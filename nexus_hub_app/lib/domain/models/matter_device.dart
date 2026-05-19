@@ -9,6 +9,7 @@ class MatterDevice {
   final DeviceStatus status;
   final List<String> capabilities; // e.g., ['relay', 'dimmer', 'temperature']
   final Map<String, dynamic> telemetry; // Latest known state payload
+  final String? localIp; // Direct HTTP transport (Tasmota-style, same LAN)
 
   const MatterDevice({
     required this.uniqueDeviceId,
@@ -16,6 +17,7 @@ class MatterDevice {
     this.status = DeviceStatus.offline,
     this.capabilities = const [],
     this.telemetry = const {},
+    this.localIp,
   });
 
   /// Parses a capability-discovery JSON payload from a connecting device.
@@ -26,6 +28,7 @@ class MatterDevice {
       status: _parseStatus(json['status'] as String?),
       capabilities: List<String>.from(json['capabilities'] as List? ?? []),
       telemetry: json['telemetry'] as Map<String, dynamic>? ?? {},
+      localIp: json['local_ip'] as String?,
     );
   }
 
@@ -46,6 +49,7 @@ class MatterDevice {
     DeviceStatus? status,
     List<String>? capabilities,
     Map<String, dynamic>? telemetry,
+    String? localIp,
   }) {
     return MatterDevice(
       uniqueDeviceId: uniqueDeviceId,
@@ -53,6 +57,7 @@ class MatterDevice {
       status: status ?? this.status,
       capabilities: capabilities ?? this.capabilities,
       telemetry: telemetry ?? this.telemetry,
+      localIp: localIp ?? this.localIp,
     );
   }
 
@@ -62,6 +67,7 @@ class MatterDevice {
         'status': status.name,
         'capabilities': capabilities,
         'telemetry': telemetry,
+        if (localIp != null) 'local_ip': localIp,
       };
 
   @override

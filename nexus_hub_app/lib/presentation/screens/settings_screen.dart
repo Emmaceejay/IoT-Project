@@ -11,13 +11,20 @@ class SettingsScreen extends ConsumerStatefulWidget {
 }
 
 class _SettingsScreenState extends ConsumerState<SettingsScreen> {
+  // Cloud broker
   final _hostCtrl = TextEditingController();
   final _portCtrl = TextEditingController();
   final _usernameCtrl = TextEditingController();
   final _passwordCtrl = TextEditingController();
   final _clientIdCtrl = TextEditingController();
+  // Local / LAN broker
+  final _localHostCtrl = TextEditingController();
+  final _localPortCtrl = TextEditingController();
+  // Advanced
+  final _timeoutCtrl = TextEditingController();
 
   bool _useTls = false;
+  bool _enableLocalHttp = true;
   bool _showPassword = false;
   bool _saved = false;
   bool _initialized = false;
@@ -32,6 +39,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     _usernameCtrl.dispose();
     _passwordCtrl.dispose();
     _clientIdCtrl.dispose();
+    _localHostCtrl.dispose();
+    _localPortCtrl.dispose();
+    _timeoutCtrl.dispose();
     super.dispose();
   }
 
@@ -40,14 +50,19 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     _portCtrl.text = config.port.toString();
     _usernameCtrl.text = config.username;
     _clientIdCtrl.text = config.clientId;
-    // Never pre-fill password into the field for security
-    setState(() => _useTls = config.useTls);
+    _localHostCtrl.text = config.localHost;
+    _localPortCtrl.text = config.localPort.toString();
+    _timeoutCtrl.text = config.connectTimeoutSeconds.toString();
+    // Never pre-fill password for security
+    setState(() {
+      _useTls = config.useTls;
+      _enableLocalHttp = config.enableLocalHttp;
+    });
   }
 
   void _onTlsToggled(bool value) {
     setState(() {
       _useTls = value;
-      // Auto-switch port only when the user hasn't customised it
       final currentPort = int.tryParse(_portCtrl.text) ?? _defaultPlainPort;
       if (!value && currentPort == _defaultTlsPort) {
         _portCtrl.text = _defaultPlainPort.toString();
@@ -68,6 +83,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       _showError('Port must be a number between 1 and 65535.');
       return;
     }
+    final rawTimeout = int.tryParse(_timeoutCtrl.text.trim()) ?? 10;
 
     final config = MqttConfig(
       host: host,
@@ -78,6 +94,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       clientId: _clientIdCtrl.text.trim().isNotEmpty
           ? _clientIdCtrl.text.trim()
           : 'nexus_hub_client',
+      localHost: _localHostCtrl.text.trim(),
+      localPort: int.tryParse(_localPortCtrl.text.trim()) ?? 1883,
+      connectTimeoutSeconds: rawTimeout.clamp(3, 60),
+      enableLocalHttp: _enableLocalHttp,
     );
 
     await ref.read(mqttConfigProvider.notifier).save(config);
@@ -88,6 +108,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     Future.delayed(const Duration(seconds: 2), () {
       if (mounted) setState(() => _saved = false);
     });
+  }
+
+  void _stopConnection() {
+    ref.read(mqttServiceProvider.notifier).stopConnection();
   }
 
   void _showError(String msg) {
@@ -102,7 +126,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Populate form fields from storage on first load
+    // Populate form from storage on first load only
     ref.listen<MqttConfig>(mqttConfigProvider, (_, config) {
       if (!_initialized && config.isConfigured) {
         _initialized = true;
@@ -110,7 +134,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       }
     });
 
-    final connectionState = ref.watch(mqttServiceProvider);
+    final status = ref.watch(mqttServiceProvider);
+    final isConnecting = status.state == HubConnectionState.connecting;
 
     return Scaffold(
       backgroundColor: const Color(0xFF0A0E1A),
@@ -126,16 +151,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         padding: const EdgeInsets.all(20),
         children: [
           // ── Connection Status Badge ────────────────────────────────────
-          _StatusBadge(state: connectionState),
+          _StatusBadge(status: status),
           const SizedBox(height: 28),
 
-          // ── Broker Configuration ───────────────────────────────────────
-          _sectionHeader('Broker Configuration'),
+          // ── Cloud Broker ───────────────────────────────────────────────
+          _sectionHeader('Cloud Broker'),
           _field('Host / IP', _hostCtrl, Icons.dns_outlined,
               hint: 'e.g. broker.hivemq.com or 192.168.1.10'),
           const SizedBox(height: 12),
-
-          // Port + TLS toggle on same row
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -164,40 +187,107 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           _passwordField(),
           const SizedBox(height: 20),
 
+          // ── Local Broker / LAN Fallback ────────────────────────────────
+          _sectionHeader('Local Broker  (LAN fallback)'),
+          _field('Local Host / IP', _localHostCtrl, Icons.router_outlined,
+              hint: 'e.g. 192.168.1.5 — same router as devices'),
+          const SizedBox(height: 12),
+          _field('Local Port', _localPortCtrl, Icons.numbers,
+              isNumber: true, hint: '1883'),
+          const SizedBox(height: 12),
+          _LocalHttpToggleTile(
+            value: _enableLocalHttp,
+            onChanged: (v) => setState(() => _enableLocalHttp = v),
+          ),
+          const SizedBox(height: 20),
+
           // ── Advanced ───────────────────────────────────────────────────
           _sectionHeader('Advanced'),
           _field('Client ID', _clientIdCtrl, Icons.fingerprint,
               hint: 'nexus_hub_client'),
+          const SizedBox(height: 12),
+          _field('Connection Timeout (s)', _timeoutCtrl, Icons.timer_outlined,
+              isNumber: true, hint: '10'),
           const SizedBox(height: 32),
 
-          // ── Save & Connect ─────────────────────────────────────────────
-          ElevatedButton.icon(
-            style: ElevatedButton.styleFrom(
-              backgroundColor:
-                  _saved ? Colors.greenAccent : const Color(0xFF00E5FF),
-              foregroundColor: Colors.black,
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12)),
-            ),
-            onPressed:
-                connectionState == HubConnectionState.connecting ? null : _saveAndConnect,
-            icon: connectionState == HubConnectionState.connecting
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(
-                        strokeWidth: 2, color: Colors.black),
-                  )
-                : Icon(_saved ? Icons.check : Icons.wifi_tethering),
-            label: Text(
-              connectionState == HubConnectionState.connecting
-                  ? 'Connecting...'
-                  : _saved
-                      ? 'Saved & Connected!'
-                      : 'Save & Connect',
-            ),
+          // ── Action Buttons ─────────────────────────────────────────────
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor:
+                        _saved ? Colors.greenAccent : const Color(0xFF00E5FF),
+                    foregroundColor: Colors.black,
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
+                  ),
+                  onPressed: isConnecting ? null : _saveAndConnect,
+                  icon: isConnecting
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: Colors.black),
+                        )
+                      : Icon(_saved ? Icons.check : Icons.wifi_tethering),
+                  label: Text(
+                    isConnecting
+                        ? 'Connecting...'
+                        : _saved
+                            ? 'Saved!'
+                            : 'Save & Connect',
+                  ),
+                ),
+              ),
+              if (isConnecting) ...[
+                const SizedBox(width: 12),
+                ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.redAccent,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(
+                        vertical: 16, horizontal: 20),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
+                  ),
+                  onPressed: _stopConnection,
+                  icon: const Icon(Icons.stop_circle_outlined),
+                  label: const Text('Stop'),
+                ),
+              ],
+            ],
           ),
+
+          // ── Error Message ──────────────────────────────────────────────
+          if (status.errorMessage != null) ...[
+            const SizedBox(height: 12),
+            Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              decoration: BoxDecoration(
+                color: Colors.redAccent.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                    color: Colors.redAccent.withValues(alpha: 0.3)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.error_outline,
+                      color: Colors.redAccent, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      status.errorMessage!,
+                      style: const TextStyle(
+                          color: Colors.redAccent, fontSize: 13),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
 
           const SizedBox(height: 32),
 
@@ -347,19 +437,113 @@ class _TlsToggleTile extends StatelessWidget {
   }
 }
 
-// ── Status Badge ─────────────────────────────────────────────────────────────
+// ── Local HTTP Toggle Tile ───────────────────────────────────────────────────
 
-class _StatusBadge extends StatelessWidget {
-  final HubConnectionState state;
+class _LocalHttpToggleTile extends StatelessWidget {
+  final bool value;
+  final ValueChanged<bool> onChanged;
 
-  const _StatusBadge({required this.state});
+  const _LocalHttpToggleTile({required this.value, required this.onChanged});
 
   @override
   Widget build(BuildContext context) {
-    final (label, color) = switch (state) {
-      HubConnectionState.connected => ('Connected to Broker', const Color(0xFF00E5FF)),
-      HubConnectionState.connecting => ('Connecting...', Colors.orangeAccent),
-      HubConnectionState.disconnected => ('Disconnected', Colors.redAccent),
+    return GestureDetector(
+      onTap: () => onChanged(!value),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+        decoration: BoxDecoration(
+          color: const Color(0xFF121826),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: value
+                ? Colors.greenAccent.withValues(alpha: 0.5)
+                : Colors.transparent,
+          ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  value ? Icons.wifi : Icons.wifi_off,
+                  size: 18,
+                  color: value ? Colors.greenAccent : Colors.white38,
+                ),
+                const SizedBox(width: 8),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      value ? 'Local HTTP: ON' : 'Local HTTP: OFF',
+                      style: TextStyle(
+                        color: value ? Colors.greenAccent : Colors.white38,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    Text(
+                      'Direct control on same WiFi',
+                      style: TextStyle(
+                        color: value
+                            ? Colors.greenAccent.withValues(alpha: 0.6)
+                            : Colors.white24,
+                        fontSize: 10,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            Switch(
+              value: value,
+              onChanged: onChanged,
+              activeThumbColor: Colors.greenAccent,
+              activeTrackColor: Colors.greenAccent.withValues(alpha: 0.4),
+              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Status Badge ─────────────────────────────────────────────────────────────
+
+class _StatusBadge extends StatelessWidget {
+  final MqttConnectionStatus status;
+
+  const _StatusBadge({required this.status});
+
+  @override
+  Widget build(BuildContext context) {
+    final (label, color, icon) = switch (status.state) {
+      HubConnectionState.connectedCloud => (
+        'Connected · Cloud Broker',
+        const Color(0xFF00E5FF),
+        Icons.cloud_done_outlined,
+      ),
+      HubConnectionState.connectedLocal => (
+        'Connected · Local Broker',
+        Colors.greenAccent,
+        Icons.router_outlined,
+      ),
+      HubConnectionState.connectedDirect => (
+        'Connected · Direct (HTTP)',
+        Colors.lightGreenAccent,
+        Icons.wifi_tethering,
+      ),
+      HubConnectionState.connecting => (
+        'Connecting...',
+        Colors.orangeAccent,
+        Icons.sync,
+      ),
+      HubConnectionState.disconnected => (
+        'Disconnected',
+        Colors.redAccent,
+        Icons.wifi_off,
+      ),
     };
 
     return Container(
@@ -382,9 +566,15 @@ class _StatusBadge extends StatelessWidget {
               ],
             ),
           ),
-          const SizedBox(width: 12),
-          Text(label,
-              style: TextStyle(color: color, fontWeight: FontWeight.w600)),
+          const SizedBox(width: 10),
+          Icon(icon, color: color, size: 16),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              label,
+              style: TextStyle(color: color, fontWeight: FontWeight.w600),
+            ),
+          ),
         ],
       ),
     );
