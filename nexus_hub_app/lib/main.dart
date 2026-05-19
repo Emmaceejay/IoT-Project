@@ -33,12 +33,12 @@ class NexusHubApp extends StatelessWidget {
         brightness: Brightness.dark,
       ),
       scaffoldBackgroundColor: const Color(0xFF0A0E1A),
-      cardTheme: CardTheme(
-        color: const Color(0xFF121826),
+      cardTheme: const CardThemeData(
+        color: Color(0xFF121826),
         elevation: 0,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-          side: BorderSide(color: Colors.white.withOpacity(0.06)),
+          borderRadius: BorderRadius.all(Radius.circular(16)),
+          side: BorderSide(color: Color(0x0FFFFFFF)),
         ),
       ),
       fontFamily: 'Roboto',

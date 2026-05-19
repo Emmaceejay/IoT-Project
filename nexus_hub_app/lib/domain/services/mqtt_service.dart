@@ -1,12 +1,13 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mqtt_client/mqtt_client.dart';
 import 'package:mqtt_client/mqtt_server_client.dart';
 import 'device_manager.dart';
 
 /// MQTT Dual-Broker Connection States
-enum MqttConnectionState { disconnected, connecting, connectedCloud, connectedLocal }
+enum HubConnectionState { disconnected, connecting, connectedCloud, connectedLocal }
 
 /// The core MQTT Service housing the Dual-Broker Strategy.
 ///
@@ -18,7 +19,7 @@ class MqttConnectivityService {
   final Ref _ref;
 
   MqttServerClient? _client;
-  MqttConnectionState _connectionState = MqttConnectionState.disconnected;
+  HubConnectionState _connectionState = HubConnectionState.disconnected;
 
   // TODO: Load these from flutter_secure_storage in production
   static const String _cloudHost = 'your-emqx-endpoint.cloud'; // Replace with real endpoint
@@ -29,7 +30,7 @@ class MqttConnectivityService {
 
   MqttConnectivityService(this._ref);
 
-  MqttConnectionState get connectionState => _connectionState;
+  HubConnectionState get connectionState => _connectionState;
 
   /// Main entry: attempts cloud then falls back to local.
   Future<void> connect() async {
@@ -41,7 +42,7 @@ class MqttConnectivityService {
         await _connectToLocal();
       } catch (localErr) {
         debugPrint('[MQTT] Local broker also unreachable: $localErr');
-        _connectionState = MqttConnectionState.disconnected;
+        _connectionState = HubConnectionState.disconnected;
       }
     }
   }
@@ -64,7 +65,7 @@ class MqttConnectivityService {
     _client!.connectionMessage = connMsg;
 
     await _client!.connect();
-    _connectionState = MqttConnectionState.connectedCloud;
+    _connectionState = HubConnectionState.connectedCloud;
     debugPrint('[MQTT] Connected to EMQX Cloud.');
     _subscribeToFleet();
   }
@@ -81,7 +82,7 @@ class MqttConnectivityService {
     _client!.connectionMessage = connMsg;
 
     await _client!.connect();
-    _connectionState = MqttConnectionState.connectedLocal;
+    _connectionState = HubConnectionState.connectedLocal;
     debugPrint('[MQTT] Connected to Local Mosquitto fallback.');
     _subscribeToFleet();
   }
@@ -125,8 +126,8 @@ class MqttConnectivityService {
   /// Publish a command to a specific device.
   Future<void> publishCommand(String deviceId, String payloadJson) async {
     if (_client == null ||
-        _client!.connectionStatus?.state != MqttConnectionState.connectedCloud &&
-        _client!.connectionStatus?.state != MqttConnectionState.connectedLocal) {
+        (_connectionState != HubConnectionState.connectedCloud &&
+         _connectionState != HubConnectionState.connectedLocal)) {
       debugPrint('[MQTT] Not connected — command queued locally.');
       return;
     }
@@ -141,7 +142,7 @@ class MqttConnectivityService {
   }
 
   void _onDisconnected() {
-    _connectionState = MqttConnectionState.disconnected;
+    _connectionState = HubConnectionState.disconnected;
     debugPrint('[MQTT] Disconnected. Will attempt reconnect...');
   }
 

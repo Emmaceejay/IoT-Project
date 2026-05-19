@@ -116,18 +116,18 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     );
   }
 
-  Widget _statusBadge(MqttConnectionState state) {
+  Widget _statusBadge(HubConnectionState state) {
     final label = {
-      MqttConnectionState.connectedCloud: 'Connected to Cloud Broker',
-      MqttConnectionState.connectedLocal: 'Connected to Local Broker',
-      MqttConnectionState.connecting: 'Connecting...',
-      MqttConnectionState.disconnected: 'Disconnected',
+      HubConnectionState.connectedCloud: 'Connected to Cloud Broker',
+      HubConnectionState.connectedLocal: 'Connected to Local Broker',
+      HubConnectionState.connecting: 'Connecting...',
+      HubConnectionState.disconnected: 'Disconnected',
     }[state]!;
     final color = {
-      MqttConnectionState.connectedCloud: const Color(0xFF00E5FF),
-      MqttConnectionState.connectedLocal: Colors.greenAccent,
-      MqttConnectionState.connecting: Colors.orangeAccent,
-      MqttConnectionState.disconnected: Colors.redAccent,
+      HubConnectionState.connectedCloud: const Color(0xFF00E5FF),
+      HubConnectionState.connectedLocal: Colors.greenAccent,
+      HubConnectionState.connecting: Colors.orangeAccent,
+      HubConnectionState.disconnected: Colors.redAccent,
     }[state]!;
 
     return Container(
