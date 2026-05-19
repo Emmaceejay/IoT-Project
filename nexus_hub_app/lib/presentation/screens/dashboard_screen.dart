@@ -4,7 +4,6 @@ import '../../domain/models/matter_device.dart';
 import '../../domain/services/device_manager.dart';
 import '../widgets/device_card.dart';
 import 'matter_pairing_screen.dart';
-import 'device_detail_screen.dart';
 
 /// The Main Dashboard — the app's home screen.
 ///
@@ -22,9 +21,9 @@ class DashboardScreen extends ConsumerWidget {
       appBar: AppBar(
         backgroundColor: const Color(0xFF0A0E1A),
         elevation: 0,
-        title: Column(
+        title: const Column(
           crossAxisAlignment: CrossAxisAlignment.start,
-          children: const [
+          children: [
             Text(
               'Nexus Hub',
               style: TextStyle(
@@ -172,7 +171,7 @@ class _StatCard extends StatelessWidget {
         decoration: BoxDecoration(
           color: const Color(0xFF121826),
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Colors.white.withOpacity(0.06)),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
         ),
         child: Column(
           children: [

@@ -9,21 +9,21 @@ import '../repositories/device_repository.dart';
 class MockDeviceDatasource implements DeviceRepository {
   /// In-memory store — will be replaced by Isar in production.
   final List<MatterDevice> _devices = [
-    MatterDevice(
+    const MatterDevice(
       uniqueDeviceId: 'MOCK-ESP32-001',
       deviceName: 'Living Room Bulb',
       status: DeviceStatus.online,
       capabilities: ['relay', 'dimmer', 'color_temperature'],
       telemetry: {'power': true, 'brightness': 75, 'color_temp': 3000},
     ),
-    MatterDevice(
+    const MatterDevice(
       uniqueDeviceId: 'MOCK-ESP32-002',
       deviceName: 'Hall Thermostat',
       status: DeviceStatus.online,
       capabilities: ['temperature_sensor', 'hvac_control'],
       telemetry: {'current_temp': 22.5, 'target_temp': 24.0, 'mode': 'cool'},
     ),
-    MatterDevice(
+    const MatterDevice(
       uniqueDeviceId: 'MOCK-ESP32-003',
       deviceName: 'Garage Door',
       status: DeviceStatus.offline,

@@ -77,11 +77,11 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
               decoration: BoxDecoration(
                 color: const Color(0xFF121826),
                 borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: const Color(0xFF00E5FF).withOpacity(0.3)),
+                border: Border.all(color: const Color(0xFF00E5FF).withValues(alpha: 0.3)),
               ),
-              child: Column(
+              child: const Column(
                 mainAxisAlignment: MainAxisAlignment.center,
-                children: const [
+                children: [
                   Icon(Icons.qr_code_2, size: 80, color: Color(0xFF00E5FF)),
                   SizedBox(height: 12),
                   Text(

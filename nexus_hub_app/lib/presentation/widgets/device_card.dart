@@ -47,7 +47,7 @@ class _DeviceCardState extends State<DeviceCard> {
                       shape: BoxShape.circle,
                       color: statusColor,
                       boxShadow: isOnline
-                          ? [BoxShadow(color: statusColor.withOpacity(0.5), blurRadius: 8)]
+                          ? [BoxShadow(color: statusColor.withValues(alpha: 0.5), blurRadius: 8)]
                           : null,
                     ),
                   ),

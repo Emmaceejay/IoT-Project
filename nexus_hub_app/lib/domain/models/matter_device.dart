@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 enum DeviceStatus { online, offline, provisioning }
 
 /// Represents a single Matter-compliant IoT Device in the ecosystem.

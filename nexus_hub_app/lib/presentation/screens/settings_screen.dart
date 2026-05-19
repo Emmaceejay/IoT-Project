@@ -133,9 +133,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.08),
+        color: color.withValues(alpha:0.08),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withOpacity(0.3)),
+        border: Border.all(color: color.withValues(alpha:0.3)),
       ),
       child: Row(
         children: [
@@ -145,7 +145,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               color: color,
-              boxShadow: [BoxShadow(color: color.withOpacity(0.5), blurRadius: 6)],
+              boxShadow: [BoxShadow(color: color.withValues(alpha:0.5), blurRadius: 6)],
             ),
           ),
           const SizedBox(width: 12),

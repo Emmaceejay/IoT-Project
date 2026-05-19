@@ -31,7 +31,7 @@ class _AppShellState extends ConsumerState<AppShell> {
       ),
       bottomNavigationBar: NavigationBar(
         backgroundColor: const Color(0xFF0D1220),
-        indicatorColor: const Color(0xFF00E5FF).withOpacity(0.15),
+        indicatorColor: const Color(0xFF00E5FF).withValues(alpha: 0.15),
         selectedIndex: _currentIndex,
         onDestinationSelected: (i) => setState(() => _currentIndex = i),
         destinations: const [
