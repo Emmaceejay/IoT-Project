@@ -1,7 +1,7 @@
 <div align="center">
   <h1>Nexus Hub IoT Platform</h1>
   <p><strong>Full-stack IoT platform — Flutter mobile app + ESP-IDF firmware for ESP32</strong></p>
-  <p>Offline-first · Dual-broker MQTT · BLE provisioning · Schema-driven UI · OTA updates</p>
+  <p>Offline-first · Dual-broker MQTT · BLE provisioning · Schema-driven UI · OTA updates · Authenticated broker control</p>
 </div>
 
 ---
@@ -98,6 +98,7 @@ nexus_firmware/
 - **BLE provisioning** — onboards new devices over Bluetooth without touching a computer
 - **Device presets** — 11 built-in presets (1–4 gang switch, dimmer, colour temp, RGB, sensors, thermostat) configurable from the pairing screen
 - **OTA trigger** — firmware updates can be initiated from the app
+- **Broker reconfiguration** — the Settings screen lets you push a new MQTT broker to every provisioned device in one tap; a factory-revert button reconnects them to the original server without a reflash
 
 ### Firmware
 
@@ -109,6 +110,7 @@ nexus_firmware/
 - **Sensor pipeline** — SOC internal temperature sensor (C3/C6/S3) with NTC ADC fallback, PIR motion, and reed-contact inputs
 - **LAN HTTP server** — REST API for zero-latency local control when the app and device are on the same network
 - **Signed OTA** — HTTPS binary fetch with SHA-256 verification into a dual-bank partition
+- **Auth-token broker control** — every device generates a 128-bit hardware-entropy token at first boot (exchanged only over BLE, never over MQTT); broker-change commands must carry this token; a 60-second FreeRTOS rollback timer automatically reverts to the previous broker if the new one is unreachable
 
 ---
 
@@ -199,7 +201,7 @@ On first launch, go to **Settings** and enter your MQTT broker details. The app 
 4. Select the device type preset (e.g. "2-Gang Switch")
 5. Enter Wi-Fi credentials and tap **Provision**
 
-The device connects to your network, publishes an MQTT announce message, and appears in the dashboard automatically.
+The device connects to your network, publishes an MQTT announce message, and appears in the dashboard automatically. The app silently stores the per-device auth token during provisioning — this token is required later for any broker reconfiguration commands.
 
 ---
 
@@ -232,6 +234,7 @@ The app and firmware communicate over MQTT using these topic patterns:
 | `devices/{id}/command` | App → Device | Any subset of telemetry keys |
 | `devices/{id}/status` | Device → App | `"online"` / `"offline"` (LWT) |
 | `devices/{id}/ota-trigger` | App → Device | `{"url","hash"}` |
+| `devices/{id}/config` | App → Device | `{"auth_token","mqtt_host","mqtt_port","mqtt_use_tls"}` or `{"auth_token","revert_to_factory":true}` |
 
 ---
 
