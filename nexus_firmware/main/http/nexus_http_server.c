@@ -37,6 +37,7 @@ static void build_status_json(char *buf, size_t buf_size);
 // Declared in nexus_mqtt.c — call after local HTTP changes state so broker
 // view stays in sync.
 extern void nexus_mqtt_publish_telemetry(const char *json_payload);
+extern void nexus_gpio_apply_state(void);
 
 // ── Route table ──────────────────────────────────────────────────────────────
 
@@ -251,24 +252,20 @@ static void apply_capability(const char *capability, cJSON *value) {
         if (k < 1000) k = 1000;
         if (k > 10000) k = 10000;
         g_device_state.color_temp_k = k;
-    } else if (strcmp(capability, "hvac_control") == 0) {
-        if (cJSON_IsObject(value)) {
-            cJSON *target = cJSON_GetObjectItemCaseSensitive(value, "target");
-            cJSON *mode   = cJSON_GetObjectItemCaseSensitive(value, "mode");
-            if (cJSON_IsNumber(target))
-                g_device_state.target_temp = (float)target->valuedouble;
-            if (cJSON_IsString(mode))
-                strlcpy(g_device_state.hvac_mode, mode->valuestring,
-                        sizeof(g_device_state.hvac_mode));
-        }
+    } else if (strcmp(capability, "target_temp") == 0 && cJSON_IsNumber(value)) {
+        g_device_state.target_temp = (float)value->valuedouble;
+        ESP_LOGI(TAG, "HTTP target_temp: %.1f C", g_device_state.target_temp);
+    } else if (strcmp(capability, "mode") == 0 && cJSON_IsString(value)) {
+        strlcpy(g_device_state.hvac_mode, value->valuestring,
+                sizeof(g_device_state.hvac_mode));
+        ESP_LOGI(TAG, "HTTP hvac_mode: %s", g_device_state.hvac_mode);
     } else {
         ESP_LOGW(TAG, "Unknown capability: %s", capability);
     }
 
     STATE_UNLOCK();
 
-    // Drive relay for power commands
-    // nexus_gpio_apply_state(); // Uncomment when gpio module linked
+    nexus_gpio_apply_state();
 }
 
 /**
@@ -301,4 +298,5 @@ static void apply_tasmota_cmd(const char *cmnd) {
     }
 
     STATE_UNLOCK();
+    nexus_gpio_apply_state();
 }

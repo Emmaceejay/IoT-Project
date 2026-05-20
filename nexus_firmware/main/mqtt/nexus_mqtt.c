@@ -64,6 +64,9 @@ static void handle_ota(const char *payload, int len);
 // Declared in nexus_ota.c
 extern esp_err_t nexus_ota_begin(const char *json_payload);
 
+// Declared in nexus_gpio.c
+extern void nexus_gpio_apply_state(void);
+
 // ── Topic builder ─────────────────────────────────────────────────────────────
 
 static void build_topics(void) {
@@ -340,7 +343,6 @@ static void handle_command(const char *payload, int len) {
         g_device_state.power = cJSON_IsTrue(power);
         ESP_LOGI(TAG, "CMD power → %s", g_device_state.power ? "ON" : "OFF");
         state_changed = true;
-        // nexus_gpio_relay_set(g_device_state.power); // Uncomment when linked
     }
 
     // ── brightness ─────────────────────────────────────────────────────────
@@ -367,24 +369,29 @@ static void handle_command(const char *payload, int len) {
         // nexus_gpio_ct_set(k); // Uncomment when linked
     }
 
-    // ── hvac_control ───────────────────────────────────────────────────────
-    cJSON *hvac = cJSON_GetObjectItemCaseSensitive(root, "hvac_control");
-    if (cJSON_IsObject(hvac)) {
-        cJSON *target = cJSON_GetObjectItemCaseSensitive(hvac, "target");
-        cJSON *mode   = cJSON_GetObjectItemCaseSensitive(hvac, "mode");
-        if (cJSON_IsNumber(target)) {
-            g_device_state.target_temp = (float)target->valuedouble;
-            ESP_LOGI(TAG, "CMD target_temp → %.1f°C", g_device_state.target_temp);
-        }
-        if (cJSON_IsString(mode)) {
-            strlcpy(g_device_state.hvac_mode, mode->valuestring,
-                    sizeof(g_device_state.hvac_mode));
-            ESP_LOGI(TAG, "CMD hvac_mode → %s", g_device_state.hvac_mode);
-        }
+    // target_temp (HVAC setpoint) — app sends flat key {"target_temp":N}
+    cJSON *target_temp_item = cJSON_GetObjectItemCaseSensitive(root, "target_temp");
+    if (cJSON_IsNumber(target_temp_item)) {
+        g_device_state.target_temp = (float)target_temp_item->valuedouble;
+        ESP_LOGI(TAG, "CMD target_temp: %.1f C", g_device_state.target_temp);
+        state_changed = true;
+    }
+
+    // hvac mode (optional)
+    cJSON *hvac_mode_item = cJSON_GetObjectItemCaseSensitive(root, "mode");
+    if (cJSON_IsString(hvac_mode_item)) {
+        strlcpy(g_device_state.hvac_mode, hvac_mode_item->valuestring,
+                sizeof(g_device_state.hvac_mode));
+        ESP_LOGI(TAG, "CMD hvac_mode: %s", g_device_state.hvac_mode);
         state_changed = true;
     }
 
     STATE_UNLOCK();
+
+    // Drive GPIO outputs to match the new state (relay, LED)
+    if (state_changed) {
+        nexus_gpio_apply_state();
+    }
 
     // Publish updated telemetry so the App stays in sync after a command
     if (state_changed) {

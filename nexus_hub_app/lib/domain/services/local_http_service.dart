@@ -109,9 +109,9 @@ class LocalHttpService {
         final kelvin = (value as num).toDouble();
         final mired = (1000000 / kelvin).clamp(153, 500).round();
         return 'CT $mired';
-      case 'hvac_control':
-        final target = value is Map ? value['target'] ?? value : value;
-        return 'TempTarget $target';
+      case 'target_temp':
+        // App sends target_temp directly (schema_driven_ui_builder.dart)
+        return 'TempTarget $value';
       default:
         return null;
     }
