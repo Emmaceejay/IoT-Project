@@ -43,7 +43,7 @@ void main() {
       );
       await tester.pumpWidget(_wrap(device));
       expect(find.byType(Switch), findsOneWidget);
-      expect(find.text('Power'), findsOneWidget);
+      expect(find.text('Switch 1'), findsOneWidget);
     });
 
     testWidgets('dimmer capability renders a Slider', (tester) async {

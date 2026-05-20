@@ -22,7 +22,7 @@ final _entities = <obx_int.ModelEntity>[
   obx_int.ModelEntity(
       id: const obx_int.IdUid(1, 861110254133854312),
       name: 'DeviceEntity',
-      lastPropertyId: const obx_int.IdUid(7, 273300460829165690),
+      lastPropertyId: const obx_int.IdUid(8, 6710299167213865616),
       flags: 0,
       properties: <obx_int.ModelProperty>[
         obx_int.ModelProperty(
@@ -59,6 +59,11 @@ final _entities = <obx_int.ModelEntity>[
         obx_int.ModelProperty(
             id: const obx_int.IdUid(7, 273300460829165690),
             name: 'localIp',
+            type: 9,
+            flags: 0),
+        obx_int.ModelProperty(
+            id: const obx_int.IdUid(8, 6710299167213865616),
+            name: 'authToken',
             type: 9,
             flags: 0)
       ],
@@ -131,7 +136,10 @@ obx_int.ModelDefinition getObjectBoxModel() {
           final telemetryJsonOffset = fbb.writeString(object.telemetryJson);
           final localIpOffset =
               object.localIp == null ? null : fbb.writeString(object.localIp!);
-          fbb.startTable(8);
+          final authTokenOffset = object.authToken == null
+              ? null
+              : fbb.writeString(object.authToken!);
+          fbb.startTable(9);
           fbb.addInt64(0, object.id);
           fbb.addOffset(1, uniqueDeviceIdOffset);
           fbb.addOffset(2, deviceNameOffset);
@@ -139,6 +147,7 @@ obx_int.ModelDefinition getObjectBoxModel() {
           fbb.addOffset(4, capabilitiesJsonOffset);
           fbb.addOffset(5, telemetryJsonOffset);
           fbb.addOffset(6, localIpOffset);
+          fbb.addOffset(7, authTokenOffset);
           fbb.finish(fbb.endTable());
           return object.id;
         },
@@ -159,7 +168,9 @@ obx_int.ModelDefinition getObjectBoxModel() {
             ..telemetryJson = const fb.StringReader(asciiOptimization: true)
                 .vTableGet(buffer, rootOffset, 14, '')
             ..localIp = const fb.StringReader(asciiOptimization: true)
-                .vTableGetNullable(buffer, rootOffset, 16);
+                .vTableGetNullable(buffer, rootOffset, 16)
+            ..authToken = const fb.StringReader(asciiOptimization: true)
+                .vTableGetNullable(buffer, rootOffset, 18);
 
           return object;
         })
@@ -197,4 +208,8 @@ class DeviceEntity_ {
   /// See [DeviceEntity.localIp].
   static final localIp =
       obx.QueryStringProperty<DeviceEntity>(_entities[0].properties[6]);
+
+  /// See [DeviceEntity.authToken].
+  static final authToken =
+      obx.QueryStringProperty<DeviceEntity>(_entities[0].properties[7]);
 }

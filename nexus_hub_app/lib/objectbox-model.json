@@ -5,7 +5,7 @@
   "entities": [
     {
       "id": "1:861110254133854312",
-      "lastPropertyId": "7:273300460829165690",
+      "lastPropertyId": "8:6710299167213865616",
       "name": "DeviceEntity",
       "properties": [
         {
@@ -44,6 +44,11 @@
         {
           "id": "7:273300460829165690",
           "name": "localIp",
+          "type": 9
+        },
+        {
+          "id": "8:6710299167213865616",
+          "name": "authToken",
           "type": 9
         }
       ],

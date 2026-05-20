@@ -43,8 +43,14 @@
 #define MQTT_TOPIC_COMMAND       "devices/%s/command"
 #define MQTT_TOPIC_OTA           "devices/%s/ota-trigger"
 #define MQTT_TOPIC_ANNOUNCE      "devices/%s/announce"
+#define MQTT_TOPIC_CONFIG        "devices/%s/config"
 #define MQTT_LWT_PAYLOAD_OFFLINE "offline"
 #define MQTT_LWT_PAYLOAD_ONLINE  "online"
+
+// ── NVS namespaces ────────────────────────────────────────────────────────────
+// User-configured broker override (written by handle_config on broker change).
+// Device falls back to MQTT_CLOUD_HOST / MQTT_CLOUD_PORT when this is absent.
+#define MQTT_CFG_NVS_NS          "mqtt_cfg"
 
 // ── Telemetry ─────────────────────────────────────────────────────────────────
 // Interval between periodic sensor reads + MQTT telemetry publishes (ms).

@@ -21,12 +21,16 @@
 #include "nexus_device_state.h"
 #include "wifi_manager.h"
 #include "mqtt_client.h"
+#include "nvs.h"
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_netif.h"
 #include "cJSON.h"
+#include "freertos/timers.h"
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
+#include <stdbool.h>
 
 static const char *TAG = "nexus_mqtt";
 
@@ -59,6 +63,13 @@ static char s_topic_telemetry[64];
 static char s_topic_command[64];
 static char s_topic_ota[64];
 static char s_topic_announce[64];
+static char s_topic_config[64];
+
+// Broker rollback: 60-second one-shot timer started on every broker change.
+// Cancelled in MQTT_EVENT_CONNECTED when new broker connection succeeds.
+// Fires and restores the previous broker if connection never materialises.
+static TimerHandle_t s_broker_rollback_timer = NULL;
+static bool          s_broker_reverted       = false;
 
 // ── Forward declarations ──────────────────────────────────────────────────────
 static void mqtt_event_handler(void *arg, esp_event_base_t base,
@@ -68,6 +79,9 @@ static void publish_online_status(void);
 static void publish_announcement(void);
 static void handle_command(const char *payload, int len);
 static void handle_ota(const char *payload, int len);
+static void handle_config(const char *payload, int len);
+static void broker_rollback_timer_cb(TimerHandle_t timer);
+static void _schedule_broker_switch(const char *host, int port, bool tls, bool is_rollback);
 
 // Declared in nexus_ota.c
 extern esp_err_t nexus_ota_begin(const char *json_payload);
@@ -99,6 +113,8 @@ static void build_topics(void) {
              MQTT_TOPIC_OTA,       s_device_id);
     snprintf(s_topic_announce,  sizeof(s_topic_announce),
              MQTT_TOPIC_ANNOUNCE,  s_device_id);
+    snprintf(s_topic_config,    sizeof(s_topic_config),
+             MQTT_TOPIC_CONFIG,    s_device_id);
 }
 
 // ── Startup ───────────────────────────────────────────────────────────────────
@@ -181,7 +197,31 @@ esp_err_t nexus_mqtt_start(void) {
         }
     }
 
+    // Check for user-configured broker in NVS (set by app broker-change command).
+    // Fall back to compile-time MQTT_CLOUD_HOST when namespace is absent.
+    char    nvs_host[65] = {0};
+    int     nvs_port     = MQTT_CLOUD_PORT;
+    bool    nvs_tls      = true;
+    bool    has_nvs_cfg  = false;
+
+    nvs_handle_t hcfg;
+    if (nvs_open(MQTT_CFG_NVS_NS, NVS_READONLY, &hcfg) == ESP_OK) {
+        size_t hlen = sizeof(nvs_host);
+        if (nvs_get_str(hcfg, "host", nvs_host, &hlen) == ESP_OK && nvs_host[0]) {
+            int32_t p; uint8_t t;
+            if (nvs_get_i32(hcfg, "port", &p) == ESP_OK) nvs_port = (int)p;
+            if (nvs_get_u8 (hcfg, "tls",  &t) == ESP_OK) nvs_tls  = (bool)t;
+            has_nvs_cfg = true;
+        }
+        nvs_close(hcfg);
+    }
+
     s_using_local_broker = false;
+    if (has_nvs_cfg) {
+        ESP_LOGI(TAG, "Connecting to user-configured broker %s:%d (TLS=%d)",
+                 nvs_host, nvs_port, nvs_tls);
+        return connect_to_broker(nvs_host, nvs_port, nvs_tls);
+    }
     ESP_LOGI(TAG, "Connecting to cloud broker %s:%d (TLS)",
              MQTT_CLOUD_HOST, MQTT_CLOUD_PORT);
     return connect_to_broker(MQTT_CLOUD_HOST, MQTT_CLOUD_PORT, true);
@@ -199,16 +239,35 @@ static void mqtt_event_handler(void *arg, esp_event_base_t base,
             ESP_LOGI(TAG, "MQTT connected (%s). Device: %s",
                      s_using_local_broker ? "local" : "cloud", s_device_id);
 
+            // New broker confirmed reachable — cancel any pending rollback
+            if (s_broker_rollback_timer &&
+                xTimerIsTimerActive(s_broker_rollback_timer)) {
+                xTimerStop(s_broker_rollback_timer, 0);
+                ESP_LOGI(TAG, "Broker change confirmed — rollback timer cancelled");
+            }
+
+            // If a previous broker change was reverted, notify the app
+            if (s_broker_reverted) {
+                s_broker_reverted = false;
+                esp_mqtt_client_publish(s_client, s_topic_telemetry,
+                    "{\"broker_change_status\":\"reverted\"}",
+                    strlen("{\"broker_change_status\":\"reverted\"}"),
+                    MQTT_QOS_AT_LEAST_ONCE, /*retain=*/false);
+                ESP_LOGW(TAG, "Notified app: broker reverted to previous");
+            }
+
             // Announce presence + capabilities so the App can discover us
             publish_announcement();
 
             // Retained online status (LWT publishes "offline" if we drop)
             publish_online_status();
 
-            // Subscribe: command and OTA topics
+            // Subscribe: command, OTA, and broker-config topics
             esp_mqtt_client_subscribe(s_client, s_topic_command,
                                        MQTT_QOS_AT_LEAST_ONCE);
             esp_mqtt_client_subscribe(s_client, s_topic_ota,
+                                       MQTT_QOS_AT_LEAST_ONCE);
+            esp_mqtt_client_subscribe(s_client, s_topic_config,
                                        MQTT_QOS_AT_LEAST_ONCE);
             break;
 
@@ -228,6 +287,8 @@ static void mqtt_event_handler(void *arg, esp_event_base_t base,
                 handle_command(event->data, event->data_len);
             } else if (strcmp(topic, s_topic_ota) == 0) {
                 handle_ota(event->data, event->data_len);
+            } else if (strcmp(topic, s_topic_config) == 0) {
+                handle_config(event->data, event->data_len);
             } else {
                 ESP_LOGW(TAG, "Unhandled topic: %s", topic);
             }
@@ -495,4 +556,219 @@ static void handle_ota(const char *payload, int len) {
     memcpy(buf, payload, len);
     ESP_LOGI(TAG, "OTA trigger received. Handing off to nexus_ota...");
     nexus_ota_begin(buf);
+}
+
+// ── Broker reconfiguration ────────────────────────────────────────────────────
+
+typedef struct {
+    char host[65];
+    int  port;
+    bool tls;
+    bool is_rollback;
+} _broker_switch_args_t;
+
+// One-shot task: destroys the current MQTT client and reconnects to new broker.
+// Must run outside the MQTT task context — never call esp_mqtt_client_stop/destroy
+// from within an MQTT event handler.
+static void _broker_switch_task(void *arg) {
+    _broker_switch_args_t *args = (_broker_switch_args_t *)arg;
+
+    if (s_client) {
+        esp_mqtt_client_stop(s_client);
+        esp_mqtt_client_destroy(s_client);
+        s_client = NULL;
+    }
+    s_using_local_broker = false;
+    connect_to_broker(args->host, args->port, args->tls);
+
+    if (args->is_rollback) {
+        ESP_LOGW(TAG, "Broker rollback: reconnected to %s:%d", args->host, args->port);
+    }
+
+    free(args);
+    vTaskDelete(NULL);
+}
+
+static void _schedule_broker_switch(const char *host, int port, bool tls,
+                                     bool is_rollback) {
+    _broker_switch_args_t *args = malloc(sizeof(_broker_switch_args_t));
+    if (!args) {
+        ESP_LOGE(TAG, "Broker switch: malloc failed");
+        return;
+    }
+    strlcpy(args->host, host, sizeof(args->host));
+    args->port        = port;
+    args->tls         = tls;
+    args->is_rollback = is_rollback;
+    if (xTaskCreate(_broker_switch_task, "broker_sw", 4096, args, 5, NULL)
+            != pdPASS) {
+        ESP_LOGE(TAG, "Broker switch: xTaskCreate failed");
+        free(args);
+    }
+}
+
+// Called 60 s after a broker change if MQTT_EVENT_CONNECTED never fires.
+// Restores the previous broker config and reconnects.
+static void broker_rollback_timer_cb(TimerHandle_t timer) {
+    ESP_LOGW(TAG, "Broker rollback: new broker unreachable after 60 s — reverting");
+
+    char    prev_host[65] = {0};
+    int32_t prev_port_v   = MQTT_CLOUD_PORT;
+    uint8_t prev_tls_v    = 1;
+
+    nvs_handle_t hprev;
+    if (nvs_open("prev_mqtt_cfg", NVS_READONLY, &hprev) == ESP_OK) {
+        size_t hlen = sizeof(prev_host);
+        nvs_get_str(hprev, "host", prev_host, &hlen);
+        nvs_get_i32(hprev, "port", &prev_port_v);
+        nvs_get_u8 (hprev, "tls",  &prev_tls_v);
+        nvs_close(hprev);
+    }
+
+    // Restore prev_mqtt_cfg → mqtt_cfg
+    nvs_handle_t hcfg;
+    if (nvs_open(MQTT_CFG_NVS_NS, NVS_READWRITE, &hcfg) == ESP_OK) {
+        if (prev_host[0]) {
+            nvs_set_str(hcfg, "host", prev_host);
+            nvs_set_i32(hcfg, "port", prev_port_v);
+            nvs_set_u8 (hcfg, "tls",  prev_tls_v);
+        } else {
+            // Previous config was the factory default — erase user namespace
+            nvs_erase_all(hcfg);
+        }
+        nvs_commit(hcfg);
+        nvs_close(hcfg);
+    }
+
+    const char *host    = prev_host[0] ? prev_host         : MQTT_CLOUD_HOST;
+    int         port    = prev_host[0] ? (int)prev_port_v  : MQTT_CLOUD_PORT;
+    bool        use_tls = prev_host[0] ? (bool)prev_tls_v  : true;
+
+    s_broker_reverted = true;
+    _schedule_broker_switch(host, port, use_tls, /*is_rollback=*/true);
+}
+
+/**
+ * Handles authenticated broker-reconfiguration commands from the Nexus Hub App.
+ *
+ * Payload variants:
+ *   Normal change:   {"auth_token":"<32hex>","mqtt_host":"host","mqtt_port":8883,"mqtt_use_tls":true}
+ *   Factory revert:  {"auth_token":"<32hex>","revert_to_factory":true}
+ *
+ * Security: token verified by constant-time memcmp. Token never appears in MQTT
+ * traffic outbound — it arrives here via the app's MQTT publish, which already
+ * went through the broker. The real protection is 128-bit entropy making brute-force
+ * impractical, and the token being seeded only over BLE (physically local).
+ */
+static void handle_config(const char *payload, int len) {
+    char buf[384] = {0};
+    if (len >= (int)sizeof(buf)) {
+        ESP_LOGE(TAG, "Config payload too large (%d bytes)", len);
+        return;
+    }
+    memcpy(buf, payload, len);
+
+    cJSON *root = cJSON_Parse(buf);
+    if (!root) {
+        ESP_LOGW(TAG, "Config: invalid JSON — rejected");
+        return;
+    }
+
+    // ── 1. Verify auth token ──────────────────────────────────────────────────
+    const cJSON *j_tok = cJSON_GetObjectItemCaseSensitive(root, "auth_token");
+    if (!cJSON_IsString(j_tok) || j_tok->valuestring == NULL ||
+        strlen(j_tok->valuestring) != 32 ||
+        memcmp(j_tok->valuestring, g_device_config.auth_token, 32) != 0) {
+        cJSON_Delete(root);
+        ESP_LOGW(TAG, "Config: invalid auth_token — rejected");
+        return;
+    }
+
+    // ── 2. Factory revert ─────────────────────────────────────────────────────
+    const cJSON *j_revert = cJSON_GetObjectItemCaseSensitive(root, "revert_to_factory");
+    if (cJSON_IsTrue(j_revert)) {
+        cJSON_Delete(root);
+        ESP_LOGI(TAG, "Config: factory revert — erasing mqtt_cfg NVS");
+        nvs_handle_t hnvs;
+        if (nvs_open(MQTT_CFG_NVS_NS, NVS_READWRITE, &hnvs) == ESP_OK) {
+            nvs_erase_all(hnvs);
+            nvs_commit(hnvs);
+            nvs_close(hnvs);
+        }
+        _schedule_broker_switch(MQTT_CLOUD_HOST, MQTT_CLOUD_PORT, true,
+                                 /*is_rollback=*/false);
+        return;
+    }
+
+    // ── 3. Parse new broker parameters ───────────────────────────────────────
+    const cJSON *j_host = cJSON_GetObjectItemCaseSensitive(root, "mqtt_host");
+    const cJSON *j_port = cJSON_GetObjectItemCaseSensitive(root, "mqtt_port");
+    const cJSON *j_tls  = cJSON_GetObjectItemCaseSensitive(root, "mqtt_use_tls");
+
+    if (!cJSON_IsString(j_host) || !j_host->valuestring || !j_host->valuestring[0]) {
+        cJSON_Delete(root);
+        ESP_LOGW(TAG, "Config: missing or empty mqtt_host — rejected");
+        return;
+    }
+
+    char new_host[65] = {0};
+    strlcpy(new_host, j_host->valuestring, sizeof(new_host));
+
+    int  new_port = MQTT_CLOUD_PORT;
+    bool new_tls  = true;
+    if (cJSON_IsNumber(j_port)) {
+        int p = (int)j_port->valuedouble;
+        if (p >= 1 && p <= 65535) new_port = p;
+    }
+    if (cJSON_IsBool(j_tls)) new_tls = cJSON_IsTrue(j_tls);
+
+    cJSON_Delete(root);
+
+    // ── 4. Copy current broker to rollback store ──────────────────────────────
+    nvs_handle_t hprev;
+    if (nvs_open("prev_mqtt_cfg", NVS_READWRITE, &hprev) == ESP_OK) {
+        char    cur_host[65] = {0};
+        int32_t cur_port     = MQTT_CLOUD_PORT;
+        uint8_t cur_tls      = 1;
+        nvs_handle_t hcur;
+        if (nvs_open(MQTT_CFG_NVS_NS, NVS_READONLY, &hcur) == ESP_OK) {
+            size_t hlen = sizeof(cur_host);
+            nvs_get_str(hcur, "host", cur_host, &hlen);
+            nvs_get_i32(hcur, "port", &cur_port);
+            nvs_get_u8 (hcur, "tls",  &cur_tls);
+            nvs_close(hcur);
+        }
+        // If no user config exists, save factory defaults as rollback target
+        nvs_set_str(hprev, "host", cur_host[0] ? cur_host : MQTT_CLOUD_HOST);
+        nvs_set_i32(hprev, "port", cur_host[0] ? cur_port : (int32_t)MQTT_CLOUD_PORT);
+        nvs_set_u8 (hprev, "tls",  cur_host[0] ? cur_tls  : (uint8_t)1);
+        nvs_commit(hprev);
+        nvs_close(hprev);
+    }
+
+    // ── 5. Write new broker to mqtt_cfg ──────────────────────────────────────
+    nvs_handle_t hnew;
+    if (nvs_open(MQTT_CFG_NVS_NS, NVS_READWRITE, &hnew) == ESP_OK) {
+        nvs_set_str(hnew, "host", new_host);
+        nvs_set_i32(hnew, "port", (int32_t)new_port);
+        nvs_set_u8 (hnew, "tls",  (uint8_t)new_tls);
+        nvs_commit(hnew);
+        nvs_close(hnew);
+    }
+
+    // ── 6. Start 60-second rollback watchdog ─────────────────────────────────
+    if (!s_broker_rollback_timer) {
+        s_broker_rollback_timer = xTimerCreate(
+            "broker_rb", pdMS_TO_TICKS(60000), pdFALSE,
+            NULL, broker_rollback_timer_cb);
+    }
+    if (s_broker_rollback_timer) {
+        xTimerStop(s_broker_rollback_timer, 0);
+        xTimerStart(s_broker_rollback_timer, 0);
+    }
+
+    // ── 7. Graceful reconnect (one-shot task — relays stay energised) ─────────
+    ESP_LOGI(TAG, "Config: broker change accepted → %s:%d (TLS=%d). Reconnecting…",
+             new_host, new_port, new_tls);
+    _schedule_broker_switch(new_host, new_port, new_tls, /*is_rollback=*/false);
 }

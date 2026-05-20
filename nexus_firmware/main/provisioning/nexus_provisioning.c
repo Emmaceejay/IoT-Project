@@ -39,7 +39,7 @@ static const char *TAG = "nexus_prov";
 // ── Module state ─────────────────────────────────────────────────────────────
 
 static char     s_dev_name[24];   // "NexusHub_AABBCC\0"
-static char     s_status[64];     // Current status string sent to the app
+static char     s_status[80];     // Current status string sent to the app
 static uint16_t s_status_handle;  // Resolved GATT handle for status char
 static uint16_t s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
 
@@ -182,7 +182,16 @@ static int credential_write_cb(uint16_t conn_handle, uint16_t attr_handle,
         return BLE_ATT_ERR_UNLIKELY;
     }
 
-    set_status("success");
+    // Include auth token + WiFi MAC so the app can key the token against the
+    // correct device_id (WiFi MAC) without any ambiguous BT/WiFi correlation.
+    uint8_t wifi_mac[6];
+    esp_read_mac(wifi_mac, ESP_MAC_WIFI_STA);
+    char ok[80];
+    snprintf(ok, sizeof(ok), "success:%s:%02X%02X%02X%02X%02X%02X",
+             g_device_config.auth_token,
+             wifi_mac[0], wifi_mac[1], wifi_mac[2],
+             wifi_mac[3], wifi_mac[4], wifi_mac[5]);
+    set_status(ok);
     // Reboot in a separate task so this callback can return cleanly
     // and the BLE stack has time to deliver the final notification.
     xTaskCreate(reboot_task, "prov_reboot", 2048, NULL, 5, NULL);
@@ -268,8 +277,8 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg) {
             ESP_LOGI(TAG, "App disconnected (reason=%d)",
                      event->disconnect.reason);
             s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
-            // Restart advertising unless we're about to reboot
-            if (strcmp(s_status, "success") != 0) {
+            // Restart advertising unless we're about to reboot (success prefix check)
+            if (strncmp(s_status, "success", 7) != 0) {
                 do_advertise();
             }
             break;

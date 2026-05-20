@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../domain/models/mqtt_config.dart';
+import '../../domain/services/device_manager.dart';
 import '../../domain/services/mqtt_service.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
@@ -28,6 +29,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   bool _showPassword = false;
   bool _saved = false;
   bool _initialized = false;
+  bool _brokerSyncInProgress = false;
 
   static const int _defaultPlainPort = 1883;
   static const int _defaultTlsPort = 8883;
@@ -146,6 +148,205 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     );
   }
 
+  // ── Broker sync helpers ────────────────────────────────────────────────────
+
+  /// Returns how many devices in the current list have a stored auth token.
+  int _tokenDeviceCount() {
+    final devices = ref.read(deviceManagerProvider).valueOrNull ?? [];
+    return devices.where((d) => d.authToken != null).length;
+  }
+
+  /// Gate 1 of 2: warn the user about the consequences, then show Gate 2.
+  Future<void> _onPushBrokerTapped() async {
+    final count = _tokenDeviceCount();
+    if (count == 0) return;
+
+    final host = _hostCtrl.text.trim();
+    if (host.isEmpty) {
+      _showError('Save broker settings first before pushing to devices.');
+      return;
+    }
+
+    // Gate 1 — warning dialog
+    final confirmed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF121826),
+        title: const Text('Change Device Broker?',
+            style: TextStyle(color: Colors.white)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.orangeAccent.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                    color: Colors.orangeAccent.withValues(alpha: 0.4)),
+              ),
+              child: const Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.warning_amber_rounded,
+                      color: Colors.orangeAccent, size: 18),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Changing the broker will redirect your devices away '
+                      'from the manufacturer\'s server.\n\n'
+                      'Without a factory reset, they cannot be reconnected '
+                      'to the original server from this screen.',
+                      style: TextStyle(
+                          color: Colors.orangeAccent, fontSize: 13, height: 1.5),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'This will send the new broker ($host) to $count device(s). '
+              'Each device will reconnect without interrupting relay outputs.',
+              style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.5),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel', style: TextStyle(color: Colors.white54)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.redAccent,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8)),
+            ),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Change Broker'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    // Gate 2 — final confirmation
+    final finalConfirmed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF121826),
+        title: const Text('Are you sure?',
+            style: TextStyle(color: Colors.white)),
+        content: const Text(
+          'This action cannot be undone from this screen without a factory '
+          'reset on each device. Tap "Confirm Change" to proceed.',
+          style: TextStyle(color: Colors.white70, fontSize: 13, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Go Back',
+                style: TextStyle(color: Colors.white54)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.redAccent,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8)),
+            ),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Confirm Change'),
+          ),
+        ],
+      ),
+    );
+
+    if (finalConfirmed != true || !mounted) return;
+
+    setState(() => _brokerSyncInProgress = true);
+    try {
+      final sent =
+          await ref.read(deviceManagerProvider.notifier).pushBrokerConfig();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(
+            'Broker config sent to $sent device(s). They will reconnect shortly.'),
+        backgroundColor: Colors.greenAccent.shade700,
+        behavior: SnackBarBehavior.floating,
+      ));
+    } finally {
+      if (mounted) setState(() => _brokerSyncInProgress = false);
+    }
+  }
+
+  /// Prompts the user, then sends a factory-revert command to all provisioned devices.
+  Future<void> _onRevertToFactoryTapped() async {
+    final count = _tokenDeviceCount();
+    if (count == 0) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF121826),
+        title: const Text('Restore Factory Broker?',
+            style: TextStyle(color: Colors.white)),
+        content: Text(
+          'This will reconnect $count device(s) to the manufacturer\'s '
+          'original MQTT server. Use this to undo a previous broker change.',
+          style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel',
+                style: TextStyle(color: Colors.white54)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF00E5FF),
+              foregroundColor: Colors.black,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8)),
+            ),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Restore Factory'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _brokerSyncInProgress = true);
+    try {
+      final devices = ref.read(deviceManagerProvider).valueOrNull ?? [];
+      int sent = 0;
+      for (final d in devices) {
+        if (d.authToken == null) continue;
+        await ref.read(deviceManagerProvider.notifier)
+            .revertDeviceBroker(d.uniqueDeviceId, d.authToken!);
+        sent++;
+      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(
+            'Factory broker restore sent to $sent device(s).'),
+        backgroundColor: const Color(0xFF00E5FF).withValues(alpha: 0.85),
+        behavior: SnackBarBehavior.floating,
+      ));
+    } finally {
+      if (mounted) setState(() => _brokerSyncInProgress = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     // Populate form from storage on first load only
@@ -233,6 +434,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           const SizedBox(height: 12),
           _field('Connection Timeout (s)', _timeoutCtrl, Icons.timer_outlined,
               isNumber: true, hint: '10'),
+          const SizedBox(height: 28),
+
+          // ── Device Broker Sync ─────────────────────────────────────────
+          _sectionHeader('Device Broker Sync'),
+          _BrokerSyncSection(
+            tokenDeviceCount: _tokenDeviceCount(),
+            inProgress: _brokerSyncInProgress,
+            onPush: _onPushBrokerTapped,
+            onRevert: _onRevertToFactoryTapped,
+          ),
           const SizedBox(height: 32),
 
           // ── Action Buttons ─────────────────────────────────────────────
@@ -530,6 +741,117 @@ class _LocalHttpToggleTile extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+// ── Broker Sync Section ───────────────────────────────────────────────────────
+
+class _BrokerSyncSection extends StatelessWidget {
+  final int tokenDeviceCount;
+  final bool inProgress;
+  final VoidCallback onPush;
+  final VoidCallback onRevert;
+
+  const _BrokerSyncSection({
+    required this.tokenDeviceCount,
+    required this.inProgress,
+    required this.onPush,
+    required this.onRevert,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final hasDevices = tokenDeviceCount > 0;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // Warning banner — always visible
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Colors.orangeAccent.withValues(alpha: 0.07),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+                color: Colors.orangeAccent.withValues(alpha: 0.35)),
+          ),
+          child: const Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.warning_amber_rounded,
+                  color: Colors.orangeAccent, size: 16),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Changing the broker redirects devices away from the '
+                  "manufacturer's server. Without a factory reset, they "
+                  'cannot be reconnected to the original server from here.',
+                  style: TextStyle(
+                      color: Colors.orangeAccent,
+                      fontSize: 12,
+                      height: 1.5),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+
+        // Device count indicator
+        Text(
+          hasDevices
+              ? '$tokenDeviceCount provisioned device(s) can receive broker changes.'
+              : 'No provisioned devices found. Pair a device first.',
+          style: TextStyle(
+              color: hasDevices ? Colors.white54 : Colors.white24,
+              fontSize: 12),
+        ),
+        const SizedBox(height: 12),
+
+        // Push broker button
+        ElevatedButton.icon(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.redAccent,
+            foregroundColor: Colors.white,
+            disabledBackgroundColor: Colors.redAccent.withValues(alpha: 0.3),
+            padding: const EdgeInsets.symmetric(vertical: 14),
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12)),
+          ),
+          onPressed: (!hasDevices || inProgress) ? null : onPush,
+          icon: inProgress
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: Colors.white),
+                )
+              : const Icon(Icons.sync_alt, size: 18),
+          label: Text(inProgress
+              ? 'Sending…'
+              : 'Push broker to all devices ($tokenDeviceCount)'),
+        ),
+        const SizedBox(height: 10),
+
+        // Factory revert button
+        OutlinedButton.icon(
+          style: OutlinedButton.styleFrom(
+            foregroundColor:
+                hasDevices ? const Color(0xFF00E5FF) : Colors.white24,
+            side: BorderSide(
+              color: hasDevices
+                  ? const Color(0xFF00E5FF).withValues(alpha: 0.5)
+                  : Colors.white12,
+            ),
+            padding: const EdgeInsets.symmetric(vertical: 14),
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12)),
+          ),
+          onPressed: (!hasDevices || inProgress) ? null : onRevert,
+          icon: const Icon(Icons.restore, size: 18),
+          label: const Text('Restore factory broker'),
+        ),
+      ],
     );
   }
 }

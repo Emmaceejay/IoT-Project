@@ -31,10 +31,21 @@ final deviceRepositoryProvider = Provider<DeviceRepository>((ref) {
 class DeviceManager extends AsyncNotifier<List<MatterDevice>> {
   late DeviceRepository _repository;
 
+  // Holds tokens received from BLE provisioning until the device's MQTT
+  // announce message arrives and confirms the device_id (WiFi MAC).
+  final _pendingTokens = <String, String>{};
+
   @override
   Future<List<MatterDevice>> build() async {
     _repository = ref.watch(deviceRepositoryProvider);
     return _repository.getDevices();
+  }
+
+  /// Stores an auth token received over BLE for a just-provisioned device.
+  /// The token is matched to the device when its MQTT announce arrives.
+  void setPendingToken(String deviceId, String token) {
+    _pendingTokens[deviceId.toUpperCase()] = token;
+    debugPrint('[DeviceManager] Pending token stored for $deviceId');
   }
 
   /// Refreshes the full device list from the Isar cache.
@@ -138,31 +149,84 @@ class DeviceManager extends AsyncNotifier<List<MatterDevice>> {
 
   /// Handles a device announce message from MQTT.
   /// Registers unknown devices or updates [localIp] for known ones.
+  /// Attaches a pending auth token if this is a just-provisioned device.
   Future<void> handleAnnounce(MatterDevice announced) async {
     final devices = state.value ?? [];
-    final existingIndex = devices.indexWhere(
-        (d) => d.uniqueDeviceId == announced.uniqueDeviceId);
+    final normalised = announced.uniqueDeviceId.toUpperCase();
+    final pendingToken = _pendingTokens.remove(normalised);
+
+    // Merge token: prefer pending (freshly provisioned) over existing stored value
+    final resolvedToken = pendingToken ??
+        devices.where((d) => d.uniqueDeviceId == normalised)
+            .map((d) => d.authToken)
+            .firstOrNull;
+
+    final withToken = pendingToken != null
+        ? announced.copyWith(authToken: pendingToken)
+        : announced;
+
+    final existingIndex =
+        devices.indexWhere((d) => d.uniqueDeviceId == normalised);
 
     if (existingIndex == -1) {
-      await _repository.provisionDevice(announced);
-      state = AsyncValue.data([...devices, announced]);
+      await _repository.provisionDevice(withToken);
+      state = AsyncValue.data([...devices, withToken]);
     } else {
       state = AsyncValue.data(
         devices.map((d) {
-          if (d.uniqueDeviceId != announced.uniqueDeviceId) return d;
+          if (d.uniqueDeviceId != normalised) return d;
           return d.copyWith(
             status: DeviceStatus.online,
             localIp: announced.localIp ?? d.localIp,
             capabilities: announced.capabilities.isNotEmpty
                 ? announced.capabilities
                 : d.capabilities,
+            authToken: resolvedToken ?? d.authToken,
           );
         }).toList(),
       );
       await _repository.provisionDevice(
-        announced.copyWith(localIp: announced.localIp),
+        withToken.copyWith(
+          localIp: announced.localIp,
+          authToken: resolvedToken,
+        ),
       );
     }
+  }
+
+  /// Publishes the current MQTT broker config to every device that has a stored
+  /// auth token. Call this from Settings after changing the broker.
+  ///
+  /// Returns the number of devices the command was sent to.
+  Future<int> pushBrokerConfig() async {
+    final devices = state.valueOrNull ?? [];
+    final mqttConfig = ref.read(mqttConfigProvider);
+    final mqttService = ref.read(mqttServiceProvider.notifier);
+
+    int sent = 0;
+    for (final device in devices) {
+      if (device.authToken == null) continue;
+      final payload = jsonEncode({
+        'auth_token': device.authToken,
+        'mqtt_host': mqttConfig.host,
+        'mqtt_port': mqttConfig.port,
+        'mqtt_use_tls': mqttConfig.useTls,
+      });
+      await mqttService.publishConfig(device.uniqueDeviceId, payload);
+      sent++;
+      debugPrint('[DeviceManager] Broker config sent to ${device.uniqueDeviceId}');
+    }
+    return sent;
+  }
+
+  /// Sends a factory-broker revert command to a single device.
+  Future<void> revertDeviceBroker(String deviceId, String authToken) async {
+    final payload = jsonEncode({
+      'auth_token': authToken,
+      'revert_to_factory': true,
+    });
+    await ref.read(mqttServiceProvider.notifier).publishConfig(deviceId, payload);
+    debugPrint('[DeviceManager] Factory broker revert sent to $deviceId');
   }
 }
 

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import '../../domain/services/ble_provisioning_service.dart';
+import '../../domain/services/device_manager.dart';
 import '../../domain/services/matter_commissioning_service.dart';
 
 // ── Device type presets ───────────────────────────────────────────────────────
@@ -210,6 +211,14 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
         if (status.isTerminal) _inProgress = false;
       });
       if (status.step == ProvisioningStep.success) {
+        // Store the auth token so the app can send authenticated broker-change
+        // commands to this device later without needing BLE again.
+        if (status.authToken != null && status.provisionedDeviceId != null) {
+          ref.read(deviceManagerProvider.notifier).setPendingToken(
+            status.provisionedDeviceId!,
+            status.authToken!,
+          );
+        }
         await Future.delayed(const Duration(seconds: 1));
         if (mounted) Navigator.of(context).pop();
         return;

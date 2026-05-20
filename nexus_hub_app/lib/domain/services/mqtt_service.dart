@@ -306,6 +306,12 @@ class MqttConnectivityService extends StateNotifier<MqttConnectionStatus>
     await publish('devices/$deviceId/command', payloadJson);
   }
 
+  /// Publishes an authenticated broker-reconfiguration command to a device.
+  /// Payload must include the per-device auth_token — never call this without it.
+  Future<void> publishConfig(String deviceId, String payloadJson) async {
+    await publish('devices/$deviceId/config', payloadJson);
+  }
+
   /// General-purpose publish — used by OTA and other services that need
   /// arbitrary topic routing (e.g. devices/{id}/ota-trigger).
   Future<void> publish(String topic, String payloadJson) async {

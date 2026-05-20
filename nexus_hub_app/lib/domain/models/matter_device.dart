@@ -11,6 +11,10 @@ class MatterDevice {
   final Map<String, dynamic> telemetry; // Latest known state payload
   final String? localIp; // Direct HTTP transport (Tasmota-style, same LAN)
 
+  // 32-char hex token exchanged over BLE at first provisioning.
+  // Never transmitted over MQTT. Used to authenticate broker-change commands.
+  final String? authToken;
+
   const MatterDevice({
     required this.uniqueDeviceId,
     required this.deviceName,
@@ -18,6 +22,7 @@ class MatterDevice {
     this.capabilities = const [],
     this.telemetry = const {},
     this.localIp,
+    this.authToken,
   });
 
   /// Parses a capability-discovery JSON payload from a connecting device.
@@ -50,6 +55,7 @@ class MatterDevice {
     List<String>? capabilities,
     Map<String, dynamic>? telemetry,
     String? localIp,
+    String? authToken,
   }) {
     return MatterDevice(
       uniqueDeviceId: uniqueDeviceId,
@@ -58,6 +64,7 @@ class MatterDevice {
       capabilities: capabilities ?? this.capabilities,
       telemetry: telemetry ?? this.telemetry,
       localIp: localIp ?? this.localIp,
+      authToken: authToken ?? this.authToken,
     );
   }
 

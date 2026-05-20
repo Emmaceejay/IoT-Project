@@ -45,6 +45,12 @@ typedef struct {
     gpio_num_t red_pin;
     gpio_num_t green_pin;
     gpio_num_t blue_pin;
+
+    // 32-char hex auth token (128-bit entropy) generated at first boot and
+    // stored in NVS. Exchanged over BLE during provisioning and stored in the
+    // app. Any MQTT broker-change command must carry this token.
+    // Never transmitted over MQTT — BLE only, at provisioning time.
+    char auth_token[33];
 } nexus_device_config_t;
 
 // Global instance — populated by nexus_device_config_load().

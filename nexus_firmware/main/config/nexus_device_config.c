@@ -15,12 +15,22 @@
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "esp_log.h"
+#include "esp_random.h"
 #include <string.h>
+#include <stdio.h>
 
 static const char *TAG    = "nexus_cfg";
 static const char *NVS_NS = "nexus_cfg";
 
 nexus_device_config_t g_device_config;
+
+// Generates a 32-char uppercase hex token from 16 bytes of hardware entropy.
+static void _gen_token(char out[33]) {
+    for (int i = 0; i < 4; i++) {
+        uint32_t r = esp_random();
+        snprintf(out + i * 8, 9, "%08X", r);
+    }
+}
 
 esp_err_t nexus_device_config_load(void) {
     // ── Step 1: seed with compile-time defaults ───────────────────────────────
@@ -37,14 +47,16 @@ esp_err_t nexus_device_config_load(void) {
         g_device_config.relay_pins[i] = default_relay_pins[i];
     }
 
-    g_device_config.dimmer_pin = GPIO_DIMMER_PIN;
-    g_device_config.warm_pin   = GPIO_WARM_PIN;
-    g_device_config.cool_pin   = GPIO_COOL_PIN;
-    g_device_config.red_pin    = GPIO_RED_PIN;
-    g_device_config.green_pin  = GPIO_GREEN_PIN;
-    g_device_config.blue_pin   = GPIO_BLUE_PIN;
+    g_device_config.dimmer_pin    = GPIO_DIMMER_PIN;
+    g_device_config.warm_pin      = GPIO_WARM_PIN;
+    g_device_config.cool_pin      = GPIO_COOL_PIN;
+    g_device_config.red_pin       = GPIO_RED_PIN;
+    g_device_config.green_pin     = GPIO_GREEN_PIN;
+    g_device_config.blue_pin      = GPIO_BLUE_PIN;
+    g_device_config.auth_token[0] = '\0';
 
     // ── Step 2: overlay with NVS values (if any) ──────────────────────────────
+    bool need_new_token = false;
     nvs_handle_t nvs;
     esp_err_t ret = nvs_open(NVS_NS, NVS_READONLY, &nvs);
     if (ret != ESP_OK) {
@@ -53,65 +65,84 @@ esp_err_t nexus_device_config_load(void) {
                  g_device_config.device_type,
                  g_device_config.capabilities,
                  g_device_config.relay_count);
-        return ESP_OK;
-    }
+        need_new_token = true;
+    } else {
+        size_t len;
 
-    size_t len;
+        len = sizeof(g_device_config.device_type);
+        nvs_get_str(nvs, "dev_type", g_device_config.device_type, &len);
 
-    len = sizeof(g_device_config.device_type);
-    nvs_get_str(nvs, "dev_type", g_device_config.device_type, &len);
+        len = sizeof(g_device_config.capabilities);
+        nvs_get_str(nvs, "caps", g_device_config.capabilities, &len);
 
-    len = sizeof(g_device_config.capabilities);
-    nvs_get_str(nvs, "caps", g_device_config.capabilities, &len);
-
-    uint8_t relay_count = 0;
-    if (nvs_get_u8(nvs, "relay_cnt", &relay_count) == ESP_OK) {
-        if (relay_count <= NEXUS_MAX_RELAY_COUNT) {
-            g_device_config.relay_count = relay_count;
+        uint8_t relay_count = 0;
+        if (nvs_get_u8(nvs, "relay_cnt", &relay_count) == ESP_OK) {
+            if (relay_count <= NEXUS_MAX_RELAY_COUNT) {
+                g_device_config.relay_count = relay_count;
+            }
         }
-    }
 
-    size_t pins_len = sizeof(g_device_config.relay_pins);
-    nvs_get_blob(nvs, "relay_pins", g_device_config.relay_pins, &pins_len);
+        size_t pins_len = sizeof(g_device_config.relay_pins);
+        nvs_get_blob(nvs, "relay_pins", g_device_config.relay_pins, &pins_len);
 
-    int32_t pin;
-    if (nvs_get_i32(nvs, "dim_pin",   &pin) == ESP_OK) g_device_config.dimmer_pin = (gpio_num_t)pin;
-    if (nvs_get_i32(nvs, "warm_pin",  &pin) == ESP_OK) g_device_config.warm_pin   = (gpio_num_t)pin;
-    if (nvs_get_i32(nvs, "cool_pin",  &pin) == ESP_OK) g_device_config.cool_pin   = (gpio_num_t)pin;
-    if (nvs_get_i32(nvs, "red_pin",   &pin) == ESP_OK) g_device_config.red_pin    = (gpio_num_t)pin;
-    if (nvs_get_i32(nvs, "green_pin", &pin) == ESP_OK) g_device_config.green_pin  = (gpio_num_t)pin;
-    if (nvs_get_i32(nvs, "blue_pin",  &pin) == ESP_OK) g_device_config.blue_pin   = (gpio_num_t)pin;
+        int32_t pin;
+        if (nvs_get_i32(nvs, "dim_pin",   &pin) == ESP_OK) g_device_config.dimmer_pin = (gpio_num_t)pin;
+        if (nvs_get_i32(nvs, "warm_pin",  &pin) == ESP_OK) g_device_config.warm_pin   = (gpio_num_t)pin;
+        if (nvs_get_i32(nvs, "cool_pin",  &pin) == ESP_OK) g_device_config.cool_pin   = (gpio_num_t)pin;
+        if (nvs_get_i32(nvs, "red_pin",   &pin) == ESP_OK) g_device_config.red_pin    = (gpio_num_t)pin;
+        if (nvs_get_i32(nvs, "green_pin", &pin) == ESP_OK) g_device_config.green_pin  = (gpio_num_t)pin;
+        if (nvs_get_i32(nvs, "blue_pin",  &pin) == ESP_OK) g_device_config.blue_pin   = (gpio_num_t)pin;
 
-    nvs_close(nvs);
-
-    // Guard against corrupt NVS blobs delivering out-of-range pin numbers.
-    // gpio_config() and ledc_channel_config() will hard-fault on invalid GPIOs.
-    for (int i = 0; i < (int)g_device_config.relay_count; i++) {
-        if ((int)g_device_config.relay_pins[i] < 0 ||
-            (int)g_device_config.relay_pins[i] >= GPIO_NUM_MAX) {
-            ESP_LOGW(TAG, "relay_pins[%d]=%d invalid — using compile-time default",
-                     i, (int)g_device_config.relay_pins[i]);
-            g_device_config.relay_pins[i] = default_relay_pins[i];
+        len = sizeof(g_device_config.auth_token);
+        if (nvs_get_str(nvs, "auth_tok", g_device_config.auth_token, &len) != ESP_OK) {
+            need_new_token = true;
         }
-    }
+
+        nvs_close(nvs);
+
+        // Guard against corrupt NVS blobs delivering out-of-range pin numbers.
+        // gpio_config() and ledc_channel_config() will hard-fault on invalid GPIOs.
+        for (int i = 0; i < (int)g_device_config.relay_count; i++) {
+            if ((int)g_device_config.relay_pins[i] < 0 ||
+                (int)g_device_config.relay_pins[i] >= GPIO_NUM_MAX) {
+                ESP_LOGW(TAG, "relay_pins[%d]=%d invalid — using compile-time default",
+                         i, (int)g_device_config.relay_pins[i]);
+                g_device_config.relay_pins[i] = default_relay_pins[i];
+            }
+        }
 #define _GUARD_PIN(pin, def) do { \
     if ((int)(pin) < 0 || (int)(pin) >= GPIO_NUM_MAX) { \
         ESP_LOGW(TAG, #pin "=%d invalid — using compile-time default", (int)(pin)); \
         (pin) = (def); \
     } \
 } while (0)
-    _GUARD_PIN(g_device_config.dimmer_pin, GPIO_DIMMER_PIN);
-    _GUARD_PIN(g_device_config.warm_pin,   GPIO_WARM_PIN);
-    _GUARD_PIN(g_device_config.cool_pin,   GPIO_COOL_PIN);
-    _GUARD_PIN(g_device_config.red_pin,    GPIO_RED_PIN);
-    _GUARD_PIN(g_device_config.green_pin,  GPIO_GREEN_PIN);
-    _GUARD_PIN(g_device_config.blue_pin,   GPIO_BLUE_PIN);
+        _GUARD_PIN(g_device_config.dimmer_pin, GPIO_DIMMER_PIN);
+        _GUARD_PIN(g_device_config.warm_pin,   GPIO_WARM_PIN);
+        _GUARD_PIN(g_device_config.cool_pin,   GPIO_COOL_PIN);
+        _GUARD_PIN(g_device_config.red_pin,    GPIO_RED_PIN);
+        _GUARD_PIN(g_device_config.green_pin,  GPIO_GREEN_PIN);
+        _GUARD_PIN(g_device_config.blue_pin,   GPIO_BLUE_PIN);
 #undef _GUARD_PIN
 
-    ESP_LOGI(TAG, "NVS config loaded: type=%s caps=%s relay_cnt=%u",
-             g_device_config.device_type,
-             g_device_config.capabilities,
-             g_device_config.relay_count);
+        ESP_LOGI(TAG, "NVS config loaded: type=%s caps=%s relay_cnt=%u",
+                 g_device_config.device_type,
+                 g_device_config.capabilities,
+                 g_device_config.relay_count);
+    }
+
+    // ── Step 3: Generate auth token if not already in NVS ─────────────────────
+    // Happens on first boot after a fresh flash or factory reset.
+    if (need_new_token) {
+        _gen_token(g_device_config.auth_token);
+        nvs_handle_t nvs_rw;
+        if (nvs_open(NVS_NS, NVS_READWRITE, &nvs_rw) == ESP_OK) {
+            nvs_set_str(nvs_rw, "auth_tok", g_device_config.auth_token);
+            nvs_commit(nvs_rw);
+            nvs_close(nvs_rw);
+        }
+        ESP_LOGI(TAG, "Auth token generated and persisted to NVS (first boot)");
+    }
+
     return ESP_OK;
 }
 
@@ -133,6 +164,10 @@ esp_err_t nexus_device_config_save(const nexus_device_config_t *cfg) {
     nvs_set_i32(nvs, "red_pin",   (int32_t)cfg->red_pin);
     nvs_set_i32(nvs, "green_pin", (int32_t)cfg->green_pin);
     nvs_set_i32(nvs, "blue_pin",  (int32_t)cfg->blue_pin);
+    // Preserve the auth_token already in NVS — do not overwrite with empty string
+    if (cfg->auth_token[0] != '\0') {
+        nvs_set_str(nvs, "auth_tok", cfg->auth_token);
+    }
 
     ret = nvs_commit(nvs);
     nvs_close(nvs);

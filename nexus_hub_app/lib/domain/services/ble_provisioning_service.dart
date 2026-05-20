@@ -32,7 +32,13 @@ class ProvisioningStatus {
   final ProvisioningStep step;
   final String? message;
 
-  const ProvisioningStatus(this.step, [this.message]);
+  // Populated only on success — the 32-char hex auth token and device's WiFi MAC
+  // (= MQTT device_id). Both extracted from the firmware's BLE status response.
+  final String? authToken;
+  final String? provisionedDeviceId;
+
+  const ProvisioningStatus(this.step, [this.message,
+      this.authToken, this.provisionedDeviceId]);
 
   bool get isTerminal =>
       step == ProvisioningStep.success || step == ProvisioningStep.failed;
@@ -174,12 +180,18 @@ class BleProvisioningService {
 
       final deviceStatus = await statusUpdates
           .timeout(const Duration(seconds: 15))
-          .firstWhere((s) => s == 'success' || s.startsWith('failed:'));
+          .firstWhere((s) => s.startsWith('success:') || s.startsWith('failed:'));
 
-      if (deviceStatus == 'success') {
-        yield const ProvisioningStatus(
+      if (deviceStatus.startsWith('success:')) {
+        // Format: "success:<32-hex-token>:<12-hex-wifi-mac>"
+        final parts = deviceStatus.split(':');
+        final authToken       = parts.length >= 2 ? parts[1] : null;
+        final provisionedId   = parts.length >= 3 ? parts[2] : null;
+        yield ProvisioningStatus(
           ProvisioningStep.success,
           'Device provisioned! It will reboot and join your network.',
+          authToken,
+          provisionedId,
         );
       } else {
         final reason = deviceStatus.replaceFirst('failed:', '');

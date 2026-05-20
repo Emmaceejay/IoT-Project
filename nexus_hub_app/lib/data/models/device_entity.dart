@@ -27,6 +27,10 @@ class DeviceEntity {
   /// Optional LAN IP for direct HTTP transport (Tasmota-style).
   String? localIp;
 
+  /// 32-char hex auth token received over BLE at first provisioning.
+  /// Stored locally only — never transmitted over MQTT.
+  String? authToken;
+
   // ── Conversions ───────────────────────────────────────────────────────────
 
   MatterDevice toDomain() => MatterDevice(
@@ -42,6 +46,7 @@ class DeviceEntity {
             ? Map<String, dynamic>.from(jsonDecode(telemetryJson) as Map)
             : {},
         localIp: localIp,
+        authToken: authToken,
       );
 
   static DeviceEntity fromDomain(MatterDevice d) => DeviceEntity()
@@ -51,5 +56,6 @@ class DeviceEntity {
     ..capabilitiesJson = jsonEncode(d.capabilities)
     ..telemetryJson =
         d.telemetry.isNotEmpty ? jsonEncode(d.telemetry) : '{}'
-    ..localIp = d.localIp;
+    ..localIp = d.localIp
+    ..authToken = d.authToken;
 }
