@@ -17,6 +17,7 @@
  */
 
 #include "nexus_config.h"
+#include "nexus_device_config.h"
 #include "nexus_device_state.h"
 #include "wifi_manager.h"
 #include "mqtt_client.h"
@@ -31,13 +32,19 @@ static const char *TAG = "nexus_mqtt";
 
 // ── Global shared state (also used by nexus_http_server.c) ───────────────────
 nexus_device_state_t g_device_state = {
-    .power        = false,
-    .brightness   = 0,
-    .color_temp_k = 4000,
-    .current_temp = 0.0f,
-    .target_temp  = 22.0f,
-    .hvac_mode    = "auto",
-    .local_ip     = "",
+    .relay_states    = {false, false, false, false},
+    .brightness      = 0,
+    .color_temp_k    = 4000,
+    .rgb_r           = 255,
+    .rgb_g           = 255,
+    .rgb_b           = 255,
+    .humidity        = 0.0f,
+    .motion_detected = false,
+    .contact_closed  = false,
+    .current_temp    = 0.0f,
+    .target_temp     = 22.0f,
+    .hvac_mode       = "auto",
+    .local_ip        = "",
 };
 SemaphoreHandle_t g_state_mutex = NULL;
 
@@ -46,6 +53,7 @@ static esp_mqtt_client_handle_t s_client = NULL;
 static bool s_using_local_broker = false;
 
 static char s_device_id[18];           // "AABBCCDDEEFF"
+static char s_device_name[32];         // auto-generated: "Switch_DDEEFF"
 static char s_topic_status[64];
 static char s_topic_telemetry[64];
 static char s_topic_command[64];
@@ -75,6 +83,11 @@ static void build_topics(void) {
     snprintf(s_device_id, sizeof(s_device_id),
              "%02X%02X%02X%02X%02X%02X",
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
+    // Auto-generated human-readable name: "{TYPE}_{last3MacBytes}"
+    // e.g. "Switch_A1B2C3" — unique per unit, no per-device config needed.
+    snprintf(s_device_name, sizeof(s_device_name),
+             "%s_%.6s", g_device_config.device_type, s_device_id + 6);
 
     snprintf(s_topic_status,    sizeof(s_topic_status),
              MQTT_TOPIC_STATUS,    s_device_id);
@@ -267,7 +280,7 @@ static void publish_announcement(void) {
     strlcpy(ip_copy, g_device_state.local_ip, sizeof(ip_copy));
     STATE_UNLOCK();
 
-    char payload[256];
+    char payload[384];
     snprintf(payload, sizeof(payload),
         "{"
         "\"device_id\":\"%s\","
@@ -278,8 +291,8 @@ static void publish_announcement(void) {
         "\"status\":\"online\""
         "}",
         s_device_id,
-        NEXUS_DEVICE_NAME,
-        NEXUS_DEVICE_CAPABILITIES,
+        s_device_name,
+        g_device_config.capabilities,
         ip_copy,
         NEXUS_FIRMWARE_VERSION
     );
@@ -320,7 +333,7 @@ void nexus_mqtt_publish_telemetry(const char *json_payload) {
  * process whichever capability keys are present.
  */
 static void handle_command(const char *payload, int len) {
-    char buf[256] = {0};
+    char buf[384] = {0};
     if (len >= (int)sizeof(buf)) {
         ESP_LOGE(TAG, "Command payload too large (%d bytes)", len);
         return;
@@ -333,60 +346,105 @@ static void handle_command(const char *payload, int len) {
         return;
     }
 
+    // ── Parse all values to locals OUTSIDE the lock ───────────────────────────
+    // cJSON reads are lock-free; ESP_LOGI inside a mutex bloats hold-time and
+    // can cause priority inversion on IDF's vsnprintf + logging semaphore.
+    int8_t v_power = -1, v_power_2 = -1, v_power_3 = -1, v_power_4 = -1;
+    int    v_brightness = -1, v_ct = -1;
+    float  v_target = 0.0f; bool v_has_target = false;
+    char   v_mode[16] = ""; bool v_has_mode = false;
+    int    v_red = -1, v_green = -1, v_blue = -1;
+
+    cJSON *j;
+
+    j = cJSON_GetObjectItemCaseSensitive(root, "power");
+    if (cJSON_IsBool(j)) v_power = cJSON_IsTrue(j) ? 1 : 0;
+
+    if (g_device_config.relay_count >= 2) {
+        j = cJSON_GetObjectItemCaseSensitive(root, "power_2");
+        if (cJSON_IsBool(j)) v_power_2 = cJSON_IsTrue(j) ? 1 : 0;
+    }
+    if (g_device_config.relay_count >= 3) {
+        j = cJSON_GetObjectItemCaseSensitive(root, "power_3");
+        if (cJSON_IsBool(j)) v_power_3 = cJSON_IsTrue(j) ? 1 : 0;
+    }
+    if (g_device_config.relay_count >= 4) {
+        j = cJSON_GetObjectItemCaseSensitive(root, "power_4");
+        if (cJSON_IsBool(j)) v_power_4 = cJSON_IsTrue(j) ? 1 : 0;
+    }
+
+    j = cJSON_GetObjectItemCaseSensitive(root, "brightness");
+    if (cJSON_IsNumber(j)) {
+        v_brightness = (int)j->valuedouble;
+        if (v_brightness < 0) v_brightness = 0;
+        if (v_brightness > 100) v_brightness = 100;
+    }
+
+    j = cJSON_GetObjectItemCaseSensitive(root, "color_temp");
+    if (cJSON_IsNumber(j)) {
+        v_ct = (int)j->valuedouble;
+        if (v_ct < 1000) v_ct = 1000;
+        if (v_ct > 10000) v_ct = 10000;
+    }
+
+    j = cJSON_GetObjectItemCaseSensitive(root, "target_temp");
+    if (cJSON_IsNumber(j)) { v_target = (float)j->valuedouble; v_has_target = true; }
+
+    j = cJSON_GetObjectItemCaseSensitive(root, "mode");
+    if (cJSON_IsString(j) && j->valuestring) {
+        strlcpy(v_mode, j->valuestring, sizeof(v_mode));
+        v_has_mode = true;
+    }
+
+    j = cJSON_GetObjectItemCaseSensitive(root, "red");
+    if (cJSON_IsNumber(j)) {
+        v_red = (int)j->valuedouble;
+        if (v_red < 0) v_red = 0; if (v_red > 255) v_red = 255;
+    }
+    j = cJSON_GetObjectItemCaseSensitive(root, "green");
+    if (cJSON_IsNumber(j)) {
+        v_green = (int)j->valuedouble;
+        if (v_green < 0) v_green = 0; if (v_green > 255) v_green = 255;
+    }
+    j = cJSON_GetObjectItemCaseSensitive(root, "blue");
+    if (cJSON_IsNumber(j)) {
+        v_blue = (int)j->valuedouble;
+        if (v_blue < 0) v_blue = 0; if (v_blue > 255) v_blue = 255;
+    }
+
+    cJSON_Delete(root);  // free before entering the lock
+
+    // ── Brief STATE_LOCK: only state-struct writes ────────────────────────────
     bool state_changed = false;
-
     STATE_LOCK();
-
-    // ── power ──────────────────────────────────────────────────────────────
-    cJSON *power = cJSON_GetObjectItemCaseSensitive(root, "power");
-    if (cJSON_IsBool(power)) {
-        g_device_state.power = cJSON_IsTrue(power);
-        ESP_LOGI(TAG, "CMD power → %s", g_device_state.power ? "ON" : "OFF");
+    if (v_power   >= 0) { g_device_state.relay_states[0] = (bool)v_power;   state_changed = true; }
+    if (v_power_2 >= 0) { g_device_state.relay_states[1] = (bool)v_power_2; state_changed = true; }
+    if (v_power_3 >= 0) { g_device_state.relay_states[2] = (bool)v_power_3; state_changed = true; }
+    if (v_power_4 >= 0) { g_device_state.relay_states[3] = (bool)v_power_4; state_changed = true; }
+    if (v_brightness >= 0) { g_device_state.brightness    = v_brightness; state_changed = true; }
+    if (v_ct >= 0)         { g_device_state.color_temp_k  = v_ct;         state_changed = true; }
+    if (v_has_target)      { g_device_state.target_temp   = v_target;     state_changed = true; }
+    if (v_has_mode) {
+        strlcpy(g_device_state.hvac_mode, v_mode, sizeof(g_device_state.hvac_mode));
         state_changed = true;
     }
-
-    // ── brightness ─────────────────────────────────────────────────────────
-    cJSON *brightness = cJSON_GetObjectItemCaseSensitive(root, "brightness");
-    if (cJSON_IsNumber(brightness)) {
-        int pct = (int)brightness->valuedouble;
-        if (pct < 0) pct = 0;
-        if (pct > 100) pct = 100;
-        g_device_state.brightness = pct;
-        ESP_LOGI(TAG, "CMD brightness → %d%%", pct);
-        state_changed = true;
-        // nexus_gpio_dimmer_set(pct); // Uncomment when linked
-    }
-
-    // ── color_temp (Kelvin) ────────────────────────────────────────────────
-    cJSON *ct = cJSON_GetObjectItemCaseSensitive(root, "color_temp");
-    if (cJSON_IsNumber(ct)) {
-        int k = (int)ct->valuedouble;
-        if (k < 1000) k = 1000;
-        if (k > 10000) k = 10000;
-        g_device_state.color_temp_k = k;
-        ESP_LOGI(TAG, "CMD color_temp → %dK", k);
-        state_changed = true;
-        // nexus_gpio_ct_set(k); // Uncomment when linked
-    }
-
-    // target_temp (HVAC setpoint) — app sends flat key {"target_temp":N}
-    cJSON *target_temp_item = cJSON_GetObjectItemCaseSensitive(root, "target_temp");
-    if (cJSON_IsNumber(target_temp_item)) {
-        g_device_state.target_temp = (float)target_temp_item->valuedouble;
-        ESP_LOGI(TAG, "CMD target_temp: %.1f C", g_device_state.target_temp);
-        state_changed = true;
-    }
-
-    // hvac mode (optional)
-    cJSON *hvac_mode_item = cJSON_GetObjectItemCaseSensitive(root, "mode");
-    if (cJSON_IsString(hvac_mode_item)) {
-        strlcpy(g_device_state.hvac_mode, hvac_mode_item->valuestring,
-                sizeof(g_device_state.hvac_mode));
-        ESP_LOGI(TAG, "CMD hvac_mode: %s", g_device_state.hvac_mode);
-        state_changed = true;
-    }
-
+    if (v_red   >= 0) { g_device_state.rgb_r = (uint8_t)v_red;   state_changed = true; }
+    if (v_green >= 0) { g_device_state.rgb_g = (uint8_t)v_green; state_changed = true; }
+    if (v_blue  >= 0) { g_device_state.rgb_b = (uint8_t)v_blue;  state_changed = true; }
     STATE_UNLOCK();
+
+    // ── Log after unlock ──────────────────────────────────────────────────────
+    if (v_power   >= 0) ESP_LOGI(TAG, "CMD power   → %s", v_power   ? "ON" : "OFF");
+    if (v_power_2 >= 0) ESP_LOGI(TAG, "CMD power_2 → %s", v_power_2 ? "ON" : "OFF");
+    if (v_power_3 >= 0) ESP_LOGI(TAG, "CMD power_3 → %s", v_power_3 ? "ON" : "OFF");
+    if (v_power_4 >= 0) ESP_LOGI(TAG, "CMD power_4 → %s", v_power_4 ? "ON" : "OFF");
+    if (v_brightness >= 0) ESP_LOGI(TAG, "CMD brightness → %d%%", v_brightness);
+    if (v_ct >= 0)         ESP_LOGI(TAG, "CMD color_temp → %dK",  v_ct);
+    if (v_has_target)      ESP_LOGI(TAG, "CMD target_temp → %.1fC", v_target);
+    if (v_has_mode)        ESP_LOGI(TAG, "CMD mode → %s", v_mode);
+    if (v_red   >= 0) ESP_LOGI(TAG, "CMD red   → %d", v_red);
+    if (v_green >= 0) ESP_LOGI(TAG, "CMD green → %d", v_green);
+    if (v_blue  >= 0) ESP_LOGI(TAG, "CMD blue  → %d", v_blue);
 
     // Drive GPIO outputs to match the new state (relay, LED)
     if (state_changed) {
@@ -395,24 +453,33 @@ static void handle_command(const char *payload, int len) {
 
     // Publish updated telemetry so the App stays in sync after a command
     if (state_changed) {
-        char telemetry[256];
+        char telemetry[512];
         STATE_LOCK();
         nexus_device_state_t snap = g_device_state;
         STATE_UNLOCK();
         snprintf(telemetry, sizeof(telemetry),
-            "{\"power\":%s,\"brightness\":%d,\"color_temp\":%d,"
-            "\"current_temp\":%.1f,\"target_temp\":%.1f,\"mode\":\"%s\"}",
-            snap.power ? "true" : "false",
+            "{\"power\":%s,\"power_2\":%s,\"power_3\":%s,\"power_4\":%s,"
+            "\"brightness\":%d,\"color_temp\":%d,"
+            "\"red\":%u,\"green\":%u,\"blue\":%u,"
+            "\"current_temp\":%.1f,\"humidity\":%.1f,"
+            "\"motion\":%s,\"contact\":%s,"
+            "\"target_temp\":%.1f,\"mode\":\"%s\"}",
+            snap.relay_states[0] ? "true"  : "false",
+            snap.relay_states[1] ? "true"  : "false",
+            snap.relay_states[2] ? "true"  : "false",
+            snap.relay_states[3] ? "true"  : "false",
             snap.brightness,
             snap.color_temp_k,
+            (unsigned)snap.rgb_r, (unsigned)snap.rgb_g, (unsigned)snap.rgb_b,
             snap.current_temp,
+            snap.humidity,
+            snap.motion_detected ? "true"  : "false",
+            snap.contact_closed  ? "true"  : "false",
             snap.target_temp,
             snap.hvac_mode
         );
         nexus_mqtt_publish_telemetry(telemetry);
     }
-
-    cJSON_Delete(root);
 }
 
 /**

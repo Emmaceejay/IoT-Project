@@ -1,0 +1,60 @@
+#pragma once
+
+/**
+ * nexus_device_config.h — Runtime device configuration
+ *
+ * Stores device type, capability list, relay count, and all GPIO/LEDC pin
+ * assignments in NVS so the same firmware binary can be used for any product
+ * SKU. The app sends a config JSON during BLE provisioning; the firmware saves
+ * it here. On every subsequent boot this config is loaded before GPIO init.
+ *
+ * Falls back transparently to compile-time defaults from nexus_config.h when
+ * no NVS config exists (fresh flash or after factory reset).
+ */
+
+#include <stdint.h>
+#include "esp_err.h"
+#include "driver/gpio.h"
+#include "nexus_config.h"
+
+#define NEXUS_MAX_RELAY_COUNT  4
+#define NEXUS_CAPS_BUF_LEN     192
+#define NEXUS_TYPE_BUF_LEN     24
+
+typedef struct {
+    // Human-readable type prefix used in auto-generated device name.
+    // e.g. "Switch" → name "Switch_A1B2C3"
+    char device_type[NEXUS_TYPE_BUF_LEN];
+
+    // JSON array string of capabilities sent in MQTT announce.
+    // e.g. "[\"relay\",\"dimmer\"]"
+    char capabilities[NEXUS_CAPS_BUF_LEN];
+
+    // How many physical relay outputs this unit has (1-4).
+    uint8_t relay_count;
+
+    // GPIO pin for each relay gang. relay_pins[0] is gang 1 ("power"),
+    // relay_pins[1] is gang 2 ("power_2"), and so on.
+    // Unused entries (index >= relay_count) are ignored.
+    gpio_num_t relay_pins[NEXUS_MAX_RELAY_COUNT];
+
+    // LEDC PWM output pins (used only when the matching capability is set)
+    gpio_num_t dimmer_pin;
+    gpio_num_t warm_pin;
+    gpio_num_t cool_pin;
+    gpio_num_t red_pin;
+    gpio_num_t green_pin;
+    gpio_num_t blue_pin;
+} nexus_device_config_t;
+
+// Global instance — populated by nexus_device_config_load().
+// All modules read from this instead of the compile-time macros directly.
+extern nexus_device_config_t g_device_config;
+
+// Populate g_device_config from NVS, falling back to nexus_config.h defaults.
+// Must be called after nvs_flash_init() and before nexus_gpio_init().
+esp_err_t nexus_device_config_load(void);
+
+// Persist a config struct to NVS so it survives reboot.
+// Called by nexus_provisioning.c when the app sends a config payload.
+esp_err_t nexus_device_config_save(const nexus_device_config_t *cfg);

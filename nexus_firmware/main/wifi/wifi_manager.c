@@ -40,6 +40,12 @@ esp_err_t wifi_manager_connect(void) {
     nvs_get_str(nvs, "password", password, &pass_len);
     nvs_close(nvs);
 
+    // Initialise the Wi-Fi driver. Must be called once before any esp_wifi_*
+    // function. WIFI_INIT_CONFIG_DEFAULT() sets conservative stack/buffer sizes
+    // suitable for production; adjust via menuconfig if needed.
+    wifi_init_config_t wifi_init_cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_wifi_init(&wifi_init_cfg));
+
     // Register event handlers
     esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler, NULL);
     esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event_handler, NULL);

@@ -34,6 +34,12 @@ dependencies:
   # QR Code Scanning (used for Matter device pairing flow)
   mobile_scanner: ^5.2.1
 
+  # BLE provisioning (push Wi-Fi credentials to un-provisioned ESP32 devices)
+  flutter_blue_plus: ^1.35.5
+
+  # Runtime permission requests (BLE scan/connect, location)
+  permission_handler: ^11.3.0
+
   # Connectivity (for mDNS / network state detection)
   connectivity_plus: ^6.0.5
 

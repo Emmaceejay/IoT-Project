@@ -215,17 +215,33 @@ static void build_status_json(char *buf, size_t buf_size) {
     snprintf(buf, buf_size,
         "{"
         "\"power\":%s,"
+        "\"power_2\":%s,"
+        "\"power_3\":%s,"
+        "\"power_4\":%s,"
         "\"brightness\":%d,"
         "\"color_temp\":%d,"
+        "\"red\":%u,"
+        "\"green\":%u,"
+        "\"blue\":%u,"
         "\"current_temp\":%.1f,"
+        "\"humidity\":%.1f,"
+        "\"motion\":%s,"
+        "\"contact\":%s,"
         "\"target_temp\":%.1f,"
         "\"mode\":\"%s\","
         "\"local_ip\":\"%s\""
         "}",
-        snap.power ? "true" : "false",
+        snap.relay_states[0] ? "true"  : "false",
+        snap.relay_states[1] ? "true"  : "false",
+        snap.relay_states[2] ? "true"  : "false",
+        snap.relay_states[3] ? "true"  : "false",
         snap.brightness,
         snap.color_temp_k,
+        (unsigned)snap.rgb_r, (unsigned)snap.rgb_g, (unsigned)snap.rgb_b,
         snap.current_temp,
+        snap.humidity,
+        snap.motion_detected ? "true"  : "false",
+        snap.contact_closed  ? "true"  : "false",
         snap.target_temp,
         snap.hvac_mode,
         snap.local_ip
@@ -240,7 +256,13 @@ static void apply_capability(const char *capability, cJSON *value) {
     STATE_LOCK();
 
     if (strcmp(capability, "power") == 0 && cJSON_IsBool(value)) {
-        g_device_state.power = cJSON_IsTrue(value);
+        g_device_state.relay_states[0] = cJSON_IsTrue(value);
+    } else if (strcmp(capability, "power_2") == 0 && cJSON_IsBool(value)) {
+        g_device_state.relay_states[1] = cJSON_IsTrue(value);
+    } else if (strcmp(capability, "power_3") == 0 && cJSON_IsBool(value)) {
+        g_device_state.relay_states[2] = cJSON_IsTrue(value);
+    } else if (strcmp(capability, "power_4") == 0 && cJSON_IsBool(value)) {
+        g_device_state.relay_states[3] = cJSON_IsTrue(value);
     } else if (strcmp(capability, "brightness") == 0 && cJSON_IsNumber(value)) {
         int pct = (int)value->valuedouble;
         if (pct < 0) pct = 0;
@@ -259,6 +281,18 @@ static void apply_capability(const char *capability, cJSON *value) {
         strlcpy(g_device_state.hvac_mode, value->valuestring,
                 sizeof(g_device_state.hvac_mode));
         ESP_LOGI(TAG, "HTTP hvac_mode: %s", g_device_state.hvac_mode);
+    } else if (strcmp(capability, "red") == 0 && cJSON_IsNumber(value)) {
+        int v = (int)value->valuedouble;
+        if (v < 0) v = 0; if (v > 255) v = 255;
+        g_device_state.rgb_r = (uint8_t)v;
+    } else if (strcmp(capability, "green") == 0 && cJSON_IsNumber(value)) {
+        int v = (int)value->valuedouble;
+        if (v < 0) v = 0; if (v > 255) v = 255;
+        g_device_state.rgb_g = (uint8_t)v;
+    } else if (strcmp(capability, "blue") == 0 && cJSON_IsNumber(value)) {
+        int v = (int)value->valuedouble;
+        if (v < 0) v = 0; if (v > 255) v = 255;
+        g_device_state.rgb_b = (uint8_t)v;
     } else {
         ESP_LOGW(TAG, "Unknown capability: %s", capability);
     }
@@ -278,9 +312,9 @@ static void apply_tasmota_cmd(const char *cmnd) {
     STATE_LOCK();
 
     if (strncasecmp(cmnd, "Power ON", 8) == 0) {
-        g_device_state.power = true;
+        g_device_state.relay_states[0] = true;
     } else if (strncasecmp(cmnd, "Power OFF", 9) == 0) {
-        g_device_state.power = false;
+        g_device_state.relay_states[0] = false;
     } else if (strncasecmp(cmnd, "Dimmer ", 7) == 0) {
         int pct = atoi(cmnd + 7);
         if (pct < 0) pct = 0;

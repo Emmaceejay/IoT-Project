@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
-import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:mqtt_client/mqtt_client.dart';
@@ -74,14 +74,25 @@ final mqttConfigProvider =
 /// Broker-agnostic MQTT service with dual-broker fallback strategy.
 /// Strategy: cloud broker → local LAN broker → show error.
 /// Supports any broker: EMQX, Mosquitto, HiveMQ, AWS IoT Core, etc.
-class MqttConnectivityService extends StateNotifier<MqttConnectionStatus> {
+class MqttConnectivityService extends StateNotifier<MqttConnectionStatus>
+    with WidgetsBindingObserver {
   final Ref _ref;
   MqttServerClient? _client;
   StreamSubscription? _messageSubscription;
   bool _cancelled = false;
 
   MqttConnectivityService(this._ref)
-      : super(const MqttConnectionStatus(HubConnectionState.disconnected));
+      : super(const MqttConnectionStatus(HubConnectionState.disconnected)) {
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && !this.state.isConnected) {
+      debugPrint('[MQTT] App resumed — reconnecting.');
+      connect();
+    }
+  }
 
   /// Connect using the currently saved [MqttConfig].
   /// Tries cloud broker first, falls back to local broker if configured.
@@ -325,6 +336,7 @@ class MqttConnectivityService extends StateNotifier<MqttConnectionStatus> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _disconnect();
     super.dispose();
   }

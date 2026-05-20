@@ -5,9 +5,11 @@ include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 
 project(nexus_firmware)
 
-# Target: ESP32-C3 (Matter-capable, BLE + Wi-Fi, small form factor)
-# Change to esp32 or esp32s3 depending on your hardware
-set(IDF_TARGET esp32c3)
+# IDF_TARGET is NOT set here — pass it on the command line or in CMakePresets:
+#   idf.py -DIDF_TARGET=esp32c3 build   (ESP32-C3 / C6)
+#   idf.py -DIDF_TARGET=esp32s3 build   (ESP32-S3)
+#   idf.py -DIDF_TARGET=esp32   build   (ESP32 classic)
+# nexus_config.h selects the correct GPIO pin map automatically.
 
 # ── Source files ───────────────────────────────────────────────────────────────
 idf_component_register(
@@ -18,6 +20,8 @@ idf_component_register(
         "main/ota/nexus_ota.c"
         "main/gpio/nexus_gpio.c"
         "main/http/nexus_http_server.c"
+        "main/provisioning/nexus_provisioning.c"
+        "main/config/nexus_device_config.c"
     INCLUDE_DIRS
         "include"
     REQUIRES
@@ -30,5 +34,8 @@ idf_component_register(
         esp_http_client
         esp_http_server
         driver
+        esp_adc
         json
+        bt
+        esp_system
 )

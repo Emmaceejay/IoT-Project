@@ -25,8 +25,10 @@
 
 #include "nexus_config.h"
 #include "nexus_device_state.h"
+#include "nexus_device_config.h"
 #include "wifi_manager.h"
 #include "nexus_http_server.h"
+#include "nexus_provisioning.h"
 
 // Forward declarations for modules not yet fully integrated via headers
 esp_err_t nexus_mqtt_start(void);
@@ -47,6 +49,9 @@ void app_main(void) {
     }
     ESP_ERROR_CHECK(ret);
 
+    // Load per-SKU device config from NVS (falls back to nexus_config.h defaults)
+    ESP_ERROR_CHECK(nexus_device_config_load());
+
     // ── Step 2: TCP/IP stack + Event Loop ────────────────────────────────────
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
@@ -59,10 +64,15 @@ void app_main(void) {
     esp_err_t wifi_err = wifi_manager_connect();
 
     if (wifi_err == ESP_ERR_NOT_FOUND) {
-        ESP_LOGW(TAG, "No Wi-Fi credentials. Waiting for Matter commissioning...");
-        // Device sits in Matter discoverable mode (BLE) until App pairs it.
-        // matter_endpoint_start();
-        return;
+        ESP_LOGW(TAG, "No Wi-Fi credentials — entering BLE provisioning mode.");
+        // Start NimBLE GATT server so the Nexus Hub App can push Wi-Fi
+        // credentials via Bluetooth. The device reboots automatically once
+        // credentials are received and saved to NVS.
+        ESP_ERROR_CHECK(nexus_provisioning_start());
+        // Provisioning runs in a background FreeRTOS task.
+        // Suspend this task — there is nothing else to do until reboot.
+        vTaskSuspend(NULL);
+        return; // unreachable, keeps compiler happy
     }
 
     // Wait for DHCP address (Wi-Fi needs a moment to associate + get IP)

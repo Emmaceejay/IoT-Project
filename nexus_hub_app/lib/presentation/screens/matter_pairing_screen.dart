@@ -1,13 +1,79 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+import '../../domain/services/ble_provisioning_service.dart';
 import '../../domain/services/matter_commissioning_service.dart';
 
-/// Matter QR Pairing Screen
-///
-/// Guides the user through commissioning a new Matter device.
-/// Scans a Matter QR code (MT: prefix) with the phone camera,
-/// then triggers the OS-native Matter commissioning flow.
+// ── Device type presets ───────────────────────────────────────────────────────
+
+class _DevicePreset {
+  final String label;
+  final String deviceType;
+  final List<String> capabilities;
+  final int relayCount;
+
+  const _DevicePreset({
+    required this.label,
+    required this.deviceType,
+    required this.capabilities,
+    required this.relayCount,
+  });
+}
+
+const _kDevicePresets = [
+  _DevicePreset(label: '1-Gang Switch',  deviceType: 'Switch',     capabilities: ['relay'],                                              relayCount: 1),
+  _DevicePreset(label: '2-Gang Switch',  deviceType: 'Switch',     capabilities: ['relay', 'relay_2'],                                   relayCount: 2),
+  _DevicePreset(label: '3-Gang Switch',  deviceType: 'Switch',     capabilities: ['relay', 'relay_2', 'relay_3'],                        relayCount: 3),
+  _DevicePreset(label: '4-Gang Switch',  deviceType: 'Switch',     capabilities: ['relay', 'relay_2', 'relay_3', 'relay_4'],             relayCount: 4),
+  _DevicePreset(label: 'Dimmer',         deviceType: 'Dimmer',     capabilities: ['relay', 'dimmer'],                                    relayCount: 1),
+  _DevicePreset(label: 'Color Temp',     deviceType: 'Dimmer',     capabilities: ['relay', 'color_temperature'],                         relayCount: 1),
+  _DevicePreset(label: 'RGB Light',      deviceType: 'RGB',        capabilities: ['relay', 'rgb_light'],                                 relayCount: 1),
+  _DevicePreset(label: 'Temp Sensor',    deviceType: 'Sensor',     capabilities: ['temperature_sensor'],                                 relayCount: 0),
+  _DevicePreset(label: 'Motion Sensor',  deviceType: 'Sensor',     capabilities: ['motion_sensor'],                                      relayCount: 0),
+  _DevicePreset(label: 'Contact Sensor', deviceType: 'Sensor',     capabilities: ['contact_sensor'],                                     relayCount: 0),
+  _DevicePreset(label: 'Thermostat',     deviceType: 'Thermostat', capabilities: ['temperature_sensor', 'hvac_control'],                 relayCount: 1),
+];
+
+// ── QR code type ──────────────────────────────────────────────────────────────
+
+enum _QrType { nexusProvision, matter }
+
+class _ParsedQr {
+  final _QrType type;
+  final String raw;
+
+  /// For nexusProvision: the BLE device name (e.g. "NexusHub_A1B2C3")
+  final String? nexusDeviceName;
+
+  const _ParsedQr.nexus(this.raw, this.nexusDeviceName)
+      : type = _QrType.nexusProvision;
+
+  const _ParsedQr.matter(this.raw)
+      : type = _QrType.matter,
+        nexusDeviceName = null;
+
+  /// Parses a raw QR string and returns a typed result, or null if unknown.
+  static _ParsedQr? tryParse(String raw) {
+    // nexus://provision?name=NexusHub_XXXXXX
+    if (raw.startsWith('nexus://provision')) {
+      final uri = Uri.tryParse(raw);
+      final name = uri?.queryParameters['name'];
+      if (name != null && name.isNotEmpty) {
+        return _ParsedQr.nexus(raw, name);
+      }
+      return null;
+    }
+    // MT:XXXXXX — Matter setup payload
+    if (raw.startsWith('MT:')) {
+      return _ParsedQr.matter(raw);
+    }
+    return null;
+  }
+}
+
+// ── Screen ────────────────────────────────────────────────────────────────────
+
 class MatterPairingScreen extends ConsumerStatefulWidget {
   const MatterPairingScreen({super.key});
 
@@ -17,74 +83,158 @@ class MatterPairingScreen extends ConsumerStatefulWidget {
 }
 
 class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
-  final _nameController = TextEditingController();
-  final _scannerController = MobileScannerController(
+  // Controllers
+  final _nameCtrl     = TextEditingController();
+  final _ssidCtrl     = TextEditingController();
+  final _passwordCtrl = TextEditingController();
+  final _scannerCtrl  = MobileScannerController(
     detectionSpeed: DetectionSpeed.noDuplicates,
     facing: CameraFacing.back,
   );
 
-  bool _isPairing = false;
+  // State
+  _ParsedQr? _parsedQr;
   bool _scannerActive = true;
-  String? _scannedCode;
+  bool _obscurePassword = true;
+  _DevicePreset _selectedPreset = _kDevicePresets.first;
+
+  // Provisioning/commissioning progress
+  bool _inProgress = false;
   String? _statusMessage;
-  bool _success = false;
+  bool _isSuccess = false;
+  ProvisioningStep? _provStep;
+
+  // ── Lifecycle ─────────────────────────────────────────────────────────────
 
   @override
   void dispose() {
-    _nameController.dispose();
-    _scannerController.dispose();
+    _nameCtrl.dispose();
+    _ssidCtrl.dispose();
+    _passwordCtrl.dispose();
+    _scannerCtrl.dispose();
     super.dispose();
   }
 
-  void _onBarcodeDetected(BarcodeCapture capture) {
-    final barcode = capture.barcodes.firstOrNull;
-    final raw = barcode?.rawValue;
-    if (raw == null || !raw.startsWith('MT:')) return;
+  // ── Scanner callbacks ─────────────────────────────────────────────────────
 
+  void _onBarcodeDetected(BarcodeCapture capture) {
+    final raw = capture.barcodes.firstOrNull?.rawValue;
+    if (raw == null) return;
+
+    final parsed = _ParsedQr.tryParse(raw);
+    if (parsed == null) {
+      // Scanned something unrecognised — show a brief hint
+      setState(() {
+        _statusMessage =
+            'Unrecognised QR code. Scan a Nexus provisioning or Matter QR code.';
+      });
+      return;
+    }
+
+    _scannerCtrl.stop();
     setState(() {
-      _scannedCode = raw;
+      _parsedQr = parsed;
       _scannerActive = false;
-      _statusMessage = 'QR code captured. Enter a name and tap Commission.';
+      _statusMessage = parsed.type == _QrType.nexusProvision
+          ? 'Nexus device found: ${parsed.nexusDeviceName}.\n'
+            'Enter a name and your Wi-Fi credentials, then tap Provision.'
+          : 'Matter QR captured. Enter a name and tap Commission.';
     });
-    _scannerController.stop();
   }
 
   void _resetScanner() {
     setState(() {
-      _scannedCode = null;
+      _parsedQr = null;
       _scannerActive = true;
       _statusMessage = null;
-      _success = false;
+      _isSuccess = false;
+      _inProgress = false;
+      _provStep = null;
+      _selectedPreset = _kDevicePresets.first;
     });
-    _scannerController.start();
+    _scannerCtrl.start();
   }
 
-  Future<void> _startPairing() async {
-    if (_nameController.text.trim().isEmpty) {
+  // ── Action handlers ───────────────────────────────────────────────────────
+
+  Future<void> _startAction() async {
+    if (_nameCtrl.text.trim().isEmpty) {
       setState(() => _statusMessage = 'Please enter a device name.');
       return;
     }
-    if (_scannedCode == null) {
+    if (_parsedQr == null) {
       setState(() => _statusMessage = 'Please scan the device QR code first.');
       return;
     }
 
+    if (_parsedQr!.type == _QrType.nexusProvision) {
+      await _runBleProvisioning();
+    } else {
+      await _runMatterCommissioning();
+    }
+  }
+
+  Future<void> _runBleProvisioning() async {
+    if (_ssidCtrl.text.trim().isEmpty) {
+      setState(() => _statusMessage = 'Please enter your Wi-Fi network name (SSID).');
+      return;
+    }
+    if (_passwordCtrl.text.isEmpty) {
+      setState(() => _statusMessage = 'Please enter your Wi-Fi password.');
+      return;
+    }
+
     setState(() {
-      _isPairing = true;
+      _inProgress = true;
+      _statusMessage = null;
+      _isSuccess = false;
+    });
+
+    final service = ref.read(matterCommissioningProvider);
+    final stream = service.provisionViaBle(
+      deviceName: _parsedQr!.nexusDeviceName!,
+      ssid: _ssidCtrl.text.trim(),
+      password: _passwordCtrl.text,
+      assignedName: _nameCtrl.text.trim(),
+      deviceType:   _selectedPreset.deviceType,
+      capabilities: _selectedPreset.capabilities,
+      relayCount:   _selectedPreset.relayCount,
+    );
+
+    await for (final status in stream) {
+      if (!mounted) return;
+      setState(() {
+        _provStep = status.step;
+        _statusMessage = status.message ?? _stepLabel(status.step);
+        _isSuccess = status.step == ProvisioningStep.success;
+        if (status.isTerminal) _inProgress = false;
+      });
+      if (status.step == ProvisioningStep.success) {
+        await Future.delayed(const Duration(seconds: 1));
+        if (mounted) Navigator.of(context).pop();
+        return;
+      }
+    }
+  }
+
+  Future<void> _runMatterCommissioning() async {
+    setState(() {
+      _inProgress = true;
       _statusMessage = 'Commissioning Matter device…';
-      _success = false;
+      _isSuccess = false;
     });
 
     final service = ref.read(matterCommissioningProvider);
     final result = await service.commissionDevice(
-      qrCodeString: _scannedCode,
-      assignedName: _nameController.text.trim(),
+      qrCodeString: _parsedQr!.raw,
+      assignedName: _nameCtrl.text.trim(),
     );
 
+    if (!mounted) return;
     setState(() {
-      _isPairing = false;
+      _inProgress = false;
       _statusMessage = result.message;
-      _success = result.success;
+      _isSuccess = result.success;
     });
 
     if (result.success) {
@@ -92,6 +242,44 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
       if (mounted) Navigator.of(context).pop();
     }
   }
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+
+  String _stepLabel(ProvisioningStep step) => switch (step) {
+        ProvisioningStep.requestingPermissions => 'Requesting Bluetooth permissions…',
+        ProvisioningStep.scanningForDevice     => 'Scanning for device via BLE…',
+        ProvisioningStep.connecting            => 'Connecting to device…',
+        ProvisioningStep.discoveringServices   => 'Discovering BLE services…',
+        ProvisioningStep.sendingCredentials    => 'Sending Wi-Fi credentials…',
+        ProvisioningStep.waitingForDevice      => 'Waiting for device to connect…',
+        ProvisioningStep.success               => 'Provisioned successfully!',
+        ProvisioningStep.failed                => 'Provisioning failed.',
+      };
+
+  bool get _canAct {
+    if (_inProgress || _parsedQr == null) return false;
+    if (_nameCtrl.text.trim().isEmpty) return false;
+    // For BLE provisioning the SSID is also mandatory
+    if (_parsedQr!.type == _QrType.nexusProvision &&
+        _ssidCtrl.text.trim().isEmpty) {
+      return false;
+    }
+    return true;
+  }
+
+  String get _actionLabel {
+    if (_parsedQr == null) return 'Scan QR Code First';
+    if (_inProgress) {
+      return _parsedQr!.type == _QrType.nexusProvision
+          ? 'Provisioning…'
+          : 'Commissioning…';
+    }
+    return _parsedQr!.type == _QrType.nexusProvision
+        ? 'Provision Device'
+        : 'Commission Device';
+  }
+
+  // ── Build ─────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -105,115 +293,86 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
           style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
         ),
       ),
-      body: Padding(
+      body: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // ── QR Scanner / Preview ────────────────────────────────
-            ClipRRect(
-              borderRadius: BorderRadius.circular(20),
-              child: Container(
-                height: 220,
-                decoration: BoxDecoration(
-                  color: const Color(0xFF121826),
-                  border: Border.all(
-                    color: const Color(0xFF00E5FF).withValues(alpha: 0.3),
-                  ),
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: _scannerActive
-                    ? Stack(
-                        children: [
-                          MobileScanner(
-                            controller: _scannerController,
-                            onDetect: _onBarcodeDetected,
-                          ),
-                          // Overlay hint
-                          Align(
-                            alignment: Alignment.bottomCenter,
-                            child: Container(
-                              width: double.infinity,
-                              padding: const EdgeInsets.all(8),
-                              color: Colors.black54,
-                              child: const Text(
-                                'Point at Matter QR code (MT:…)',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                    color: Colors.white70, fontSize: 12),
-                              ),
-                            ),
-                          ),
-                        ],
-                      )
-                    : Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          const Icon(Icons.check_circle,
-                              size: 56, color: Color(0xFF00E5FF)),
-                          const SizedBox(height: 8),
-                          Text(
-                            'Scanned: $_scannedCode',
-                            textAlign: TextAlign.center,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                                color: Colors.white70, fontSize: 12),
-                          ),
-                          const SizedBox(height: 12),
-                          TextButton.icon(
-                            onPressed: _resetScanner,
-                            icon: const Icon(Icons.refresh,
-                                color: Color(0xFF00E5FF), size: 16),
-                            label: const Text('Rescan',
-                                style: TextStyle(color: Color(0xFF00E5FF))),
-                          ),
-                        ],
-                      ),
-              ),
-            ),
+            // ── QR Scanner / Preview ─────────────────────────────────────
+            _buildScannerSection(),
 
             const SizedBox(height: 28),
 
-            // ── Device Name Input ──────────────────────────────────
-            TextField(
-              controller: _nameController,
-              style: const TextStyle(color: Colors.white),
-              decoration: InputDecoration(
-                labelText: 'Device Name (e.g., Kitchen Light)',
-                labelStyle: const TextStyle(color: Colors.white38),
-                prefixIcon:
-                    const Icon(Icons.label_outline, color: Color(0xFF00E5FF)),
-                filled: true,
-                fillColor: const Color(0xFF121826),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: BorderSide.none,
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: const BorderSide(color: Color(0xFF00E5FF)),
+            // ── Device Name ───────────────────────────────────────────────
+            _buildTextField(
+              controller: _nameCtrl,
+              label: 'Device Name (e.g., Kitchen Switch)',
+              icon: Icons.label_outline,
+              onChanged: (_) => setState(() {}),
+            ),
+
+            // ── Device type preset (Nexus BLE provisioning only) ─────────
+            if (_parsedQr?.type == _QrType.nexusProvision) ...[
+              const SizedBox(height: 16),
+              _buildPresetDropdown(),
+            ],
+
+            // ── Wi-Fi credentials (Nexus BLE provisioning only) ───────────
+            if (_parsedQr?.type == _QrType.nexusProvision) ...[
+              const SizedBox(height: 16),
+              _buildTextField(
+                controller: _ssidCtrl,
+                label: 'Wi-Fi Network Name (SSID)',
+                icon: Icons.wifi,
+                onChanged: (_) => setState(() {}),
+              ),
+              const SizedBox(height: 12),
+              _buildTextField(
+                controller: _passwordCtrl,
+                label: 'Wi-Fi Password',
+                icon: Icons.lock_outline,
+                obscureText: _obscurePassword,
+                suffix: IconButton(
+                  icon: Icon(
+                    _obscurePassword ? Icons.visibility_off : Icons.visibility,
+                    color: Colors.white38,
+                    size: 20,
+                  ),
+                  onPressed: () =>
+                      setState(() => _obscurePassword = !_obscurePassword),
                 ),
               ),
-            ),
+            ],
 
             const SizedBox(height: 20),
 
-            // ── Status Message ─────────────────────────────────────
+            // ── Progress indicator (BLE provisioning) ─────────────────────
+            if (_inProgress &&
+                _parsedQr?.type == _QrType.nexusProvision &&
+                _provStep != null) ...[
+              _buildProvisioningProgress(_provStep!),
+              const SizedBox(height: 12),
+            ],
+
+            // ── Status message ────────────────────────────────────────────
             if (_statusMessage != null) ...[
               Text(
                 _statusMessage!,
                 textAlign: TextAlign.center,
                 style: TextStyle(
-                  color:
-                      _success ? const Color(0xFF00E5FF) : Colors.redAccent,
-                  fontSize: 14,
+                  color: _isSuccess
+                      ? const Color(0xFF00E5FF)
+                      : _inProgress
+                          ? Colors.white70
+                          : Colors.redAccent,
+                  fontSize: 13,
+                  height: 1.5,
                 ),
               ),
               const SizedBox(height: 16),
             ],
 
-            // ── Commission Button ──────────────────────────────────
+            // ── Action button ─────────────────────────────────────────────
             ElevatedButton.icon(
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF00E5FF),
@@ -224,35 +383,202 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12)),
               ),
-              onPressed: (_isPairing || _scannedCode == null) ? null : _startPairing,
-              icon: _isPairing
+              onPressed: _canAct ? _startAction : null,
+              icon: _inProgress
                   ? const SizedBox(
                       width: 18,
                       height: 18,
                       child: CircularProgressIndicator(
                           strokeWidth: 2, color: Colors.black),
                     )
-                  : const Icon(Icons.bluetooth_searching),
-              label: Text(
-                _isPairing
-                    ? 'Commissioning…'
-                    : _scannedCode == null
-                        ? 'Scan QR Code First'
-                        : 'Commission Device',
-              ),
+                  : Icon(_parsedQr?.type == _QrType.nexusProvision
+                      ? Icons.bluetooth_searching
+                      : Icons.devices),
+              label: Text(_actionLabel),
             ),
 
-            const Spacer(),
+            const SizedBox(height: 32),
 
-            // ── Info footer ────────────────────────────────────────
-            const Text(
-              'Pairing shares Wi-Fi credentials with your Matter\ndevice securely via BLE using the OS Matter stack.',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.white24, fontSize: 11),
-            ),
+            // ── Info footer ───────────────────────────────────────────────
+            _buildFooter(),
           ],
         ),
       ),
+    );
+  }
+
+  // ── Widget helpers ─────────────────────────────────────────────────────────
+
+  Widget _buildScannerSection() {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(20),
+      child: Container(
+        height: 220,
+        decoration: BoxDecoration(
+          color: const Color(0xFF121826),
+          border: Border.all(
+            color: const Color(0xFF00E5FF).withValues(alpha: 0.3),
+          ),
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: _scannerActive
+            ? Stack(children: [
+                MobileScanner(
+                  controller: _scannerCtrl,
+                  onDetect: _onBarcodeDetected,
+                ),
+                Align(
+                  alignment: Alignment.bottomCenter,
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(8),
+                    color: Colors.black54,
+                    child: const Text(
+                      'Scan a Nexus provisioning QR (nexus://…) or Matter QR (MT:…)',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Colors.white70, fontSize: 11),
+                    ),
+                  ),
+                ),
+              ])
+            : Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    _parsedQr?.type == _QrType.nexusProvision
+                        ? Icons.bluetooth_searching
+                        : Icons.check_circle,
+                    size: 48,
+                    color: const Color(0xFF00E5FF),
+                  ),
+                  const SizedBox(height: 8),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Text(
+                      _parsedQr?.type == _QrType.nexusProvision
+                          ? 'Nexus: ${_parsedQr!.nexusDeviceName}'
+                          : 'Matter: ${_parsedQr?.raw}',
+                      textAlign: TextAlign.center,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          color: Colors.white70, fontSize: 12),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextButton.icon(
+                    onPressed: _resetScanner,
+                    icon: const Icon(Icons.refresh,
+                        color: Color(0xFF00E5FF), size: 16),
+                    label: const Text('Rescan',
+                        style: TextStyle(color: Color(0xFF00E5FF))),
+                  ),
+                ],
+              ),
+      ),
+    );
+  }
+
+  Widget _buildTextField({
+    required TextEditingController controller,
+    required String label,
+    required IconData icon,
+    bool obscureText = false,
+    Widget? suffix,
+    void Function(String)? onChanged,
+  }) {
+    return TextField(
+      controller: controller,
+      obscureText: obscureText,
+      style: const TextStyle(color: Colors.white),
+      onChanged: onChanged,
+      decoration: InputDecoration(
+        labelText: label,
+        labelStyle: const TextStyle(color: Colors.white38),
+        prefixIcon: Icon(icon, color: const Color(0xFF00E5FF)),
+        suffixIcon: suffix,
+        filled: true,
+        fillColor: const Color(0xFF121826),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide.none,
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: Color(0xFF00E5FF)),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPresetDropdown() {
+    return DropdownButtonFormField<_DevicePreset>(
+      initialValue: _selectedPreset,
+      dropdownColor: const Color(0xFF121826),
+      style: const TextStyle(color: Colors.white, fontSize: 14),
+      decoration: InputDecoration(
+        labelText: 'Device Type',
+        labelStyle: const TextStyle(color: Colors.white38),
+        prefixIcon: const Icon(Icons.devices_other, color: Color(0xFF00E5FF)),
+        filled: true,
+        fillColor: const Color(0xFF121826),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide.none,
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: Color(0xFF00E5FF)),
+        ),
+      ),
+      items: _kDevicePresets
+          .map((p) => DropdownMenuItem(
+                value: p,
+                child: Text(p.label),
+              ))
+          .toList(),
+      onChanged: _inProgress
+          ? null
+          : (p) => setState(() => _selectedPreset = p ?? _selectedPreset),
+    );
+  }
+
+  Widget _buildProvisioningProgress(ProvisioningStep step) {
+    const steps = [
+      ProvisioningStep.requestingPermissions,
+      ProvisioningStep.scanningForDevice,
+      ProvisioningStep.connecting,
+      ProvisioningStep.discoveringServices,
+      ProvisioningStep.sendingCredentials,
+      ProvisioningStep.waitingForDevice,
+    ];
+    final currentIndex = steps.indexOf(step);
+    return Column(
+      children: [
+        LinearProgressIndicator(
+          value: currentIndex < 0
+              ? null
+              : (currentIndex + 1) / steps.length,
+          backgroundColor: const Color(0xFF1E2736),
+          color: const Color(0xFF00E5FF),
+          borderRadius: BorderRadius.circular(4),
+          minHeight: 4,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildFooter() {
+    final isNexus = _parsedQr?.type == _QrType.nexusProvision;
+    return Text(
+      isNexus
+          ? 'Wi-Fi credentials are sent directly to your device\n'
+            'over an encrypted BLE channel. They are never uploaded\n'
+            'to any server.'
+          : 'Matter pairing uses the OS-native BLE commissioning\n'
+            'stack to securely onboard your device.',
+      textAlign: TextAlign.center,
+      style: const TextStyle(color: Colors.white24, fontSize: 11, height: 1.6),
     );
   }
 }

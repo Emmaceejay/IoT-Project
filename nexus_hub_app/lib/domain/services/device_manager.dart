@@ -52,7 +52,7 @@ class DeviceManager extends AsyncNotifier<List<MatterDevice>> {
   Future<void> sendCommand(String deviceId, Map<String, dynamic> command) async {
     // Optimistic update — UI reacts instantly before any network round-trip
     state = AsyncValue.data(
-      state.value!.map((d) {
+      (state.valueOrNull ?? []).map((d) {
         if (d.uniqueDeviceId != deviceId) return d;
         return d.copyWith(telemetry: {...d.telemetry, ...command});
       }).toList(),
@@ -64,13 +64,14 @@ class DeviceManager extends AsyncNotifier<List<MatterDevice>> {
     );
 
     // 1. Local HTTP — preferred transport when on same LAN
-    if (device?.localIp != null) {
+    final localIp = device?.localIp;
+    if (localIp != null && localIp.isNotEmpty) {
       final httpService = ref.read(localHttpServiceProvider);
       if (await httpService.isOnWifi()) {
         bool allDelivered = true;
         for (final entry in command.entries) {
           final ok = await httpService.sendCommand(
-              device!.localIp!, entry.key, entry.value);
+              localIp, entry.key, entry.value);
           if (!ok) {
             allDelivered = false;
             break;
@@ -111,7 +112,7 @@ class DeviceManager extends AsyncNotifier<List<MatterDevice>> {
   /// Marks a device as offline — triggered by MQTT LWT messages.
   Future<void> markDeviceOffline(String deviceId) async {
     state = AsyncValue.data(
-      state.value!.map((d) {
+      (state.valueOrNull ?? []).map((d) {
         if (d.uniqueDeviceId != deviceId) return d;
         return d.copyWith(status: DeviceStatus.offline);
       }).toList(),
