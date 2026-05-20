@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -94,6 +95,8 @@ class MqttConnectivityService extends StateNotifier<MqttConnectionStatus> {
     await _disconnect();
     state = const MqttConnectionStatus(HubConnectionState.connecting);
 
+    var cloudError = 'Could not reach any broker. Check host and network.';
+
     // 1. Try cloud / primary broker
     try {
       await _connectWith(
@@ -105,6 +108,7 @@ class MqttConnectivityService extends StateNotifier<MqttConnectionStatus> {
       );
       return;
     } catch (e) {
+      cloudError = _friendlyError(e, config.host, config.port, config.useTls);
       debugPrint('[MQTT] Cloud broker failed: $e');
       if (_cancelled) return;
     }
@@ -126,10 +130,29 @@ class MqttConnectivityService extends StateNotifier<MqttConnectionStatus> {
       }
     }
 
-    state = const MqttConnectionStatus(
-      HubConnectionState.disconnected,
-      'Could not reach any broker. Check host and network.',
-    );
+    state = MqttConnectionStatus(HubConnectionState.disconnected, cloudError);
+  }
+
+  /// Maps a raw exception to a human-readable message shown in the UI.
+  String _friendlyError(dynamic e, String host, int port, bool tls) {
+    if (e is SocketException) {
+      return 'Cannot reach $host:$port — verify the host address and network connection.';
+    }
+    if (e is TimeoutException) {
+      return 'Connection to $host:$port timed out — broker may be unreachable or overloaded.';
+    }
+    final msg = e.toString().toLowerCase();
+    if (msg.contains('handshake') || msg.contains('certificate') ||
+        msg.contains('tls') || msg.contains('ssl')) {
+      return tls
+          ? 'TLS handshake failed for $host:$port — confirm the broker supports TLS on port $port.'
+          : 'Unexpected TLS error on $host:$port — try enabling TLS in settings.';
+    }
+    if (msg.contains('connack') || msg.contains('refused') ||
+        msg.contains('not authorized') || msg.contains('unauthorized')) {
+      return 'Broker at $host rejected the connection — check credentials or client ID.';
+    }
+    return 'Failed to connect to $host:$port — ${e.toString()}';
   }
 
   Future<void> _connectWith(
@@ -139,7 +162,14 @@ class MqttConnectivityService extends StateNotifier<MqttConnectionStatus> {
     required bool useTls,
     required bool isLocal,
   }) async {
-    _client = MqttServerClient.withPort(host, config.clientId, port)
+    // Append a random 6-char suffix so each connection attempt gets a unique
+    // client ID. Prevents conflicts on public brokers (e.g. broker.hivemq.com)
+    // where a duplicate ID causes both sessions to be forcibly disconnected.
+    final suffix = List.generate(
+        6, (_) => Random().nextInt(36).toRadixString(36)).join();
+    final effectiveClientId = '${config.clientId}_$suffix';
+
+    _client = MqttServerClient.withPort(host, effectiveClientId, port)
       ..keepAlivePeriod = 60
       ..onDisconnected = _onDisconnected
       ..autoReconnect = !isLocal
@@ -148,11 +178,19 @@ class MqttConnectivityService extends StateNotifier<MqttConnectionStatus> {
     if (useTls) {
       _client!.secure = true;
       _client!.securityContext = SecurityContext.defaultContext;
+      // Log bad-cert events instead of silently swallowing TLS errors.
+      _client!.onBadCertificate = (cert) {
+        debugPrint('[MQTT] TLS: certificate rejected — ${cert.subject}');
+        return false; // never accept invalid certs in production
+      };
     }
 
+    // Build CONNECT packet.
+    // NOTE: do NOT call withWillQos without withWillTopic — the MQTT spec
+    // (§3.1.2.6) forbids non-zero Will QoS when the Will Flag is 0. Strict
+    // brokers (HiveMQ, EMQX) reject such packets with a protocol error.
     final connMsg = MqttConnectMessage()
-        .withClientIdentifier(config.clientId)
-        .withWillQos(MqttQos.atLeastOnce)
+        .withClientIdentifier(effectiveClientId)
         .startClean();
 
     if (config.hasCredentials) {
@@ -163,6 +201,13 @@ class MqttConnectivityService extends StateNotifier<MqttConnectionStatus> {
     await _client!
         .connect()
         .timeout(Duration(seconds: config.connectTimeoutSeconds));
+
+    // Verify the broker accepted the connection (non-zero CONNACK return
+    // codes indicate authentication failure, identifier rejected, etc.)
+    if (_client!.connectionStatus?.state != MqttConnectionState.connected) {
+      final rc = _client!.connectionStatus?.returnCode?.name ?? 'unknown';
+      throw Exception('Broker refused connection (CONNACK: $rc)');
+    }
 
     if (_cancelled) {
       _client?.disconnect();
@@ -177,7 +222,8 @@ class MqttConnectivityService extends StateNotifier<MqttConnectionStatus> {
     );
     debugPrint(
       '[MQTT] Connected → $host:$port | TLS: $useTls | '
-      'Local: $isLocal | Auth: ${config.hasCredentials}',
+      'Local: $isLocal | Auth: ${config.hasCredentials} | '
+      'ClientId: $effectiveClientId',
     );
     _subscribeToFleet();
   }

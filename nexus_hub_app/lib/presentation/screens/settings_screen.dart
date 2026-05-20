@@ -33,6 +33,28 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   static const int _defaultTlsPort = 8883;
 
   @override
+  void initState() {
+    super.initState();
+    // Pre-fill defaults immediately so the form is never blank on first open.
+    // ref.listen (below) will override these once the async secure-storage
+    // load completes, or on the post-frame callback if it already finished.
+    _portCtrl.text = _defaultPlainPort.toString();
+    _clientIdCtrl.text = 'nexus_hub_client';
+    _localPortCtrl.text = _defaultPlainPort.toString();
+    _timeoutCtrl.text = '10';
+
+    // Handle the race where _load() completes before ref.listen is registered.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _initialized) return;
+      final config = ref.read(mqttConfigProvider);
+      if (config.isConfigured) {
+        _initialized = true;
+        _populateFromConfig(config);
+      }
+    });
+  }
+
+  @override
   void dispose() {
     _hostCtrl.dispose();
     _portCtrl.dispose();
@@ -127,8 +149,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   @override
   Widget build(BuildContext context) {
     // Populate form from storage on first load only
+    // Populate once when the async secure-storage load resolves.
+    // No isConfigured guard — even a freshly-installed app should show
+    // sensible defaults (port 1883, clientId, timeout) rather than blank fields.
     ref.listen<MqttConfig>(mqttConfigProvider, (_, config) {
-      if (!_initialized && config.isConfigured) {
+      if (!_initialized) {
         _initialized = true;
         _populateFromConfig(config);
       }
