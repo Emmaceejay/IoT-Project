@@ -1,33 +1,33 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../core/isar_provider.dart';
-import '../../data/datasources/isar_device_datasource.dart';
+import '../../core/objectbox_store_provider.dart';
+import '../../data/datasources/objectbox_device_datasource.dart';
 import '../../data/repositories/device_repository.dart';
 import '../models/matter_device.dart';
 import 'local_http_service.dart';
 import 'mqtt_service.dart';
 import 'telemetry_service.dart';
 
-/// Production device repository — Isar-backed, offline-first.
+/// Production device repository — ObjectBox-backed, offline-first.
 ///
 /// Architecture whitepaper §4: "The user interface interacts exclusively with
-/// a local Isar database cache. Pressing a UI switch instantly mutates Isar,
+/// a local database cache. Pressing a UI switch instantly mutates the cache,
 /// making the app feel zero-latency."
 ///
 /// Swap this provider to [MockDeviceDatasource] for isolated UI development
 /// without a running broker or real hardware.
 final deviceRepositoryProvider = Provider<DeviceRepository>((ref) {
-  final isar = ref.watch(isarProvider);
-  return IsarDeviceDatasource(isar);
+  final store = ref.watch(objectboxStoreProvider);
+  return ObjectBoxDeviceDatasource(store);
 });
 
 /// The reactive state engine for all IoT devices.
 ///
 /// Command routing priority (architecture whitepaper §3 — Hybrid Dual-Broker):
-///   1. Local HTTP  — if device has [localIp] and phone is on WiFi
-///   2. MQTT        — cloud or local broker
-///   3. Isar cache  — optimistic update always applied first
+///   1. Local HTTP    — if device has [localIp] and phone is on WiFi
+///   2. MQTT          — cloud or local broker
+///   3. ObjectBox DB  — optimistic update always applied first
 class DeviceManager extends AsyncNotifier<List<MatterDevice>> {
   late DeviceRepository _repository;
 
@@ -96,7 +96,7 @@ class DeviceManager extends AsyncNotifier<List<MatterDevice>> {
           deviceId, 'no_transport_available');
     }
 
-    // 3. Persist to Isar cache
+    // 3. Persist to ObjectBox cache
     await _repository.updateDeviceState(deviceId, command);
   }
 

@@ -7,7 +7,7 @@ import '../repositories/device_repository.dart';
 /// Matter hardware will broadcast on first connection. Simulates a
 /// 400ms network round-trip to make the UI feel real during development.
 class MockDeviceDatasource implements DeviceRepository {
-  /// In-memory store — will be replaced by Isar in production.
+  /// In-memory store — replaced by ObjectBox in production.
   final List<MatterDevice> _devices = [
     const MatterDevice(
       uniqueDeviceId: 'MOCK-ESP32-001',
