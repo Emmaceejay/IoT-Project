@@ -1,8 +1,8 @@
-# Nexus Hub Firmware — Flashing & Device Configuration Guide
+﻿# DSGV Hub Firmware — Flashing & Device Configuration Guide
 
-> Reference for configuring, building, and flashing Nexus Hub firmware to ESP32 devices.
-> Config file: `nexus_firmware/include/nexus_config.h`
-> Runtime config: `nexus_firmware/include/nexus_device_config.h`
+> Reference for configuring, building, and flashing DSGV Hub firmware to ESP32 devices.
+> Config file: `dsgv_firmware/include/dsgv_config.h`
+> Runtime config: `dsgv_firmware/include/dsgv_device_config.h`
 
 ---
 
@@ -52,22 +52,22 @@ ls /dev/ttyUSB*      # look for /dev/ttyUSB0
 ## Part 2 — Navigate to the Project
 
 ```bash
-cd path/to/IoT-Project/nexus_firmware
-# Windows example: cd C:\Users\YourName\Documents\IoT-Project\nexus_firmware
+cd path/to/IoT-Project/dsgv_firmware
+# Windows example: cd C:\Users\YourName\Documents\IoT-Project\dsgv_firmware
 ```
 
 ---
 
 ## Part 3 — Configure Device Type
 
-Open `nexus_firmware/include/nexus_config.h` and edit the top two lines.
+Open `dsgv_firmware/include/dsgv_config.h` and edit the top two lines.
 Optionally update relay count and pins in the chip section below.
 
 ### The two lines you always edit
 
 ```c
-#define NEXUS_DEVICE_TYPE        "Switch"
-#define NEXUS_DEVICE_CAPABILITIES "[\"relay\"]"
+#define dsgv_DEVICE_TYPE        "Switch"
+#define dsgv_DEVICE_CAPABILITIES "[\"relay\"]"
 ```
 
 ---
@@ -76,12 +76,12 @@ Optionally update relay count and pins in the chip section below.
 
 #### A — 1-Gang Light Switch
 ```c
-#define NEXUS_DEVICE_TYPE        "Switch"
-#define NEXUS_DEVICE_CAPABILITIES "[\"relay\"]"
+#define dsgv_DEVICE_TYPE        "Switch"
+#define dsgv_DEVICE_CAPABILITIES "[\"relay\"]"
 
 // In chip section:
-#  define NEXUS_RELAY_COUNT        1
-#  define NEXUS_RELAY_PINS         { GPIO_NUM_2 }   // C3/C6 example
+#  define dsgv_RELAY_COUNT        1
+#  define dsgv_RELAY_PINS         { GPIO_NUM_2 }   // C3/C6 example
 ```
 **Wiring (ESP32-C3):**
 ```
@@ -94,12 +94,12 @@ GND    ──► GND
 
 #### B — 2-Gang Light Switch
 ```c
-#define NEXUS_DEVICE_TYPE        "Switch"
-#define NEXUS_DEVICE_CAPABILITIES "[\"relay\",\"relay_2\"]"
+#define dsgv_DEVICE_TYPE        "Switch"
+#define dsgv_DEVICE_CAPABILITIES "[\"relay\",\"relay_2\"]"
 
 // In chip section:
-#  define NEXUS_RELAY_COUNT        2
-#  define NEXUS_RELAY_PINS         { GPIO_NUM_2, GPIO_NUM_3 }
+#  define dsgv_RELAY_COUNT        2
+#  define dsgv_RELAY_PINS         { GPIO_NUM_2, GPIO_NUM_3 }
 ```
 **Wiring (ESP32-C3):**
 ```
@@ -114,33 +114,33 @@ GND    ──► GND
 
 #### C — 3-Gang Light Switch
 ```c
-#define NEXUS_DEVICE_TYPE        "Switch"
-#define NEXUS_DEVICE_CAPABILITIES "[\"relay\",\"relay_2\",\"relay_3\"]"
+#define dsgv_DEVICE_TYPE        "Switch"
+#define dsgv_DEVICE_CAPABILITIES "[\"relay\",\"relay_2\",\"relay_3\"]"
 
-#  define NEXUS_RELAY_COUNT        3
-#  define NEXUS_RELAY_PINS         { GPIO_NUM_2, GPIO_NUM_3, GPIO_NUM_4 }
+#  define dsgv_RELAY_COUNT        3
+#  define dsgv_RELAY_PINS         { GPIO_NUM_2, GPIO_NUM_3, GPIO_NUM_4 }
 ```
 
 ---
 
 #### D — 4-Gang Light Switch
 ```c
-#define NEXUS_DEVICE_TYPE        "Switch"
-#define NEXUS_DEVICE_CAPABILITIES "[\"relay\",\"relay_2\",\"relay_3\",\"relay_4\"]"
+#define dsgv_DEVICE_TYPE        "Switch"
+#define dsgv_DEVICE_CAPABILITIES "[\"relay\",\"relay_2\",\"relay_3\",\"relay_4\"]"
 
-#  define NEXUS_RELAY_COUNT        4
-#  define NEXUS_RELAY_PINS         { GPIO_NUM_2, GPIO_NUM_3, GPIO_NUM_4, GPIO_NUM_5 }
+#  define dsgv_RELAY_COUNT        4
+#  define dsgv_RELAY_PINS         { GPIO_NUM_2, GPIO_NUM_3, GPIO_NUM_4, GPIO_NUM_5 }
 ```
 
 ---
 
 #### E — Dimmer (PWM brightness)
 ```c
-#define NEXUS_DEVICE_TYPE        "Dimmer"
-#define NEXUS_DEVICE_CAPABILITIES "[\"relay\",\"dimmer\"]"
+#define dsgv_DEVICE_TYPE        "Dimmer"
+#define dsgv_DEVICE_CAPABILITIES "[\"relay\",\"dimmer\"]"
 
-#  define NEXUS_RELAY_COUNT        1
-#  define NEXUS_RELAY_PINS         { GPIO_NUM_2 }
+#  define dsgv_RELAY_COUNT        1
+#  define dsgv_RELAY_PINS         { GPIO_NUM_2 }
 ```
 **Wiring (ESP32-C3) — use AC TRIAC dimmer module (e.g. RobotDyn):**
 ```
@@ -155,11 +155,11 @@ GND    ──► GND
 
 #### F — Colour Temperature Light (warm + cool white)
 ```c
-#define NEXUS_DEVICE_TYPE        "Dimmer"
-#define NEXUS_DEVICE_CAPABILITIES "[\"relay\",\"color_temperature\"]"
+#define dsgv_DEVICE_TYPE        "Dimmer"
+#define dsgv_DEVICE_CAPABILITIES "[\"relay\",\"color_temperature\"]"
 
-#  define NEXUS_RELAY_COUNT        1
-#  define NEXUS_RELAY_PINS         { GPIO_NUM_2 }
+#  define dsgv_RELAY_COUNT        1
+#  define dsgv_RELAY_PINS         { GPIO_NUM_2 }
 ```
 **Wiring (ESP32-C3):**
 ```
@@ -173,11 +173,11 @@ GND    ──► GND
 
 #### G — RGB Light
 ```c
-#define NEXUS_DEVICE_TYPE        "RGB"
-#define NEXUS_DEVICE_CAPABILITIES "[\"relay\",\"rgb_light\"]"
+#define dsgv_DEVICE_TYPE        "RGB"
+#define dsgv_DEVICE_CAPABILITIES "[\"relay\",\"rgb_light\"]"
 
-#  define NEXUS_RELAY_COUNT        1
-#  define NEXUS_RELAY_PINS         { GPIO_NUM_2 }
+#  define dsgv_RELAY_COUNT        1
+#  define dsgv_RELAY_PINS         { GPIO_NUM_2 }
 ```
 **Wiring (ESP32-C3) — three MOSFET channels or RGB LED driver:**
 ```
@@ -192,11 +192,11 @@ GND     ──► GND
 
 #### H — Temperature Sensor Node
 ```c
-#define NEXUS_DEVICE_TYPE        "Sensor"
-#define NEXUS_DEVICE_CAPABILITIES "[\"temperature_sensor\"]"
+#define dsgv_DEVICE_TYPE        "Sensor"
+#define dsgv_DEVICE_CAPABILITIES "[\"temperature_sensor\"]"
 
-#  define NEXUS_RELAY_COUNT        0
-#  define NEXUS_RELAY_PINS         { GPIO_NUM_NC }
+#  define dsgv_RELAY_COUNT        0
+#  define dsgv_RELAY_PINS         { GPIO_NUM_NC }
 ```
 No extra wiring needed — the ESP32-C3/C6/S3 has a built-in SOC temperature sensor.
 
@@ -210,11 +210,11 @@ No extra wiring needed — the ESP32-C3/C6/S3 has a built-in SOC temperature sen
 
 #### I — Motion Sensor (PIR)
 ```c
-#define NEXUS_DEVICE_TYPE        "Sensor"
-#define NEXUS_DEVICE_CAPABILITIES "[\"motion_sensor\"]"
+#define dsgv_DEVICE_TYPE        "Sensor"
+#define dsgv_DEVICE_CAPABILITIES "[\"motion_sensor\"]"
 
-#  define NEXUS_RELAY_COUNT        0
-#  define NEXUS_RELAY_PINS         { GPIO_NUM_NC }
+#  define dsgv_RELAY_COUNT        0
+#  define dsgv_RELAY_PINS         { GPIO_NUM_NC }
 ```
 **Wiring (ESP32-C3) — HC-SR501 PIR module:**
 ```
@@ -227,11 +227,11 @@ GPIO11 ──► OUT (HIGH = motion)
 
 #### J — Contact Sensor (door/window reed switch)
 ```c
-#define NEXUS_DEVICE_TYPE        "Sensor"
-#define NEXUS_DEVICE_CAPABILITIES "[\"contact_sensor\"]"
+#define dsgv_DEVICE_TYPE        "Sensor"
+#define dsgv_DEVICE_CAPABILITIES "[\"contact_sensor\"]"
 
-#  define NEXUS_RELAY_COUNT        0
-#  define NEXUS_RELAY_PINS         { GPIO_NUM_NC }
+#  define dsgv_RELAY_COUNT        0
+#  define dsgv_RELAY_PINS         { GPIO_NUM_NC }
 ```
 **Wiring (ESP32-C3):**
 ```
@@ -244,11 +244,11 @@ LOW = closed (contact made), HIGH = open.
 
 #### K — Thermostat (temperature sensor + HVAC relay)
 ```c
-#define NEXUS_DEVICE_TYPE        "Thermostat"
-#define NEXUS_DEVICE_CAPABILITIES "[\"temperature_sensor\",\"hvac_control\"]"
+#define dsgv_DEVICE_TYPE        "Thermostat"
+#define dsgv_DEVICE_CAPABILITIES "[\"temperature_sensor\",\"hvac_control\"]"
 
-#  define NEXUS_RELAY_COUNT        1
-#  define NEXUS_RELAY_PINS         { GPIO_NUM_2 }
+#  define dsgv_RELAY_COUNT        1
+#  define dsgv_RELAY_PINS         { GPIO_NUM_2 }
 ```
 The app shows current temp (read-only), target setpoint (+/− buttons), and mode chips (Cool / Heat / Auto / Off).
 GPIO2 relay drives the HVAC unit's control input.
@@ -323,15 +323,15 @@ idf.py -p /dev/ttyUSB0 monitor
 
 Press **RESET** on the board. Expected output (2-gang switch example):
 ```
-I nexus_cfg:  No NVS device config — using compile-time defaults (type=Switch caps=["relay","relay_2"] relays=2)
-I nexus_gpio: GPIO ready (relay[0]=2 cnt=2 LED=8 ...)
-I nexus_mqtt: Connected. Device ID: AABBCCDDEEFF
-I nexus_mqtt: Published announce → devices/AABBCCDDEEFF/announce
+I dsgv_cfg:  No NVS device config — using compile-time defaults (type=Switch caps=["relay","relay_2"] relays=2)
+I dsgv_gpio: GPIO ready (relay[0]=2 cnt=2 LED=8 ...)
+I dsgv_mqtt: Connected. Device ID: AABBCCDDEEFF
+I dsgv_mqtt: Published announce → devices/AABBCCDDEEFF/announce
 ```
 
 Exit monitor: **Ctrl + ]**
 
-**Reboot loop (watchdog / guru meditation):** Usually a wrong GPIO number. Check `NEXUS_RELAY_COUNT` matches `NEXUS_RELAY_PINS`, and no two features share a pin.
+**Reboot loop (watchdog / guru meditation):** Usually a wrong GPIO number. Check `dsgv_RELAY_COUNT` matches `dsgv_RELAY_PINS`, and no two features share a pin.
 
 ---
 
@@ -347,11 +347,11 @@ idf.py -p COM5 flash monitor
 
 After flashing, the device type can be set from the app during BLE provisioning:
 
-1. Scan QR on device label: `nexus://provision?name=NexusHub_XXXXXX`
+1. Scan QR on device label: `DSGV://provision?name=DSGVHub_XXXXXX`
 2. Select **Device Type** preset in the pairing screen (1-Gang Switch, Dimmer, RGB Light, etc.)
 3. Enter Wi-Fi credentials → tap **Provision**
 
-The app sends device type, capabilities, and relay count over BLE. The firmware saves to NVS and reboots. From then on, NVS config overrides `nexus_config.h` defaults. This means **one firmware binary works for all SKUs** — configure each device through the app.
+The app sends device type, capabilities, and relay count over BLE. The firmware saves to NVS and reboots. From then on, NVS config overrides `dsgv_config.h` defaults. This means **one firmware binary works for all SKUs** — configure each device through the app.
 
 To factory reset a device back to defaults: hold the **BOOT/GPIO0** button for 5 seconds.
 

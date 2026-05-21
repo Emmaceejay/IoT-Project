@@ -1,4 +1,4 @@
-# The "Idiot-Proof" Quickstart Guide 🚀
+﻿# The "Idiot-Proof" Quickstart Guide 🚀
 
 Welcome to your new IoT Platform! Because we used professional architecture (Flutter + ESP-IDF), the setup takes a few specific steps. Follow this exactly, and you'll be up and running.
 
@@ -21,7 +21,7 @@ You can run this on your Linux/Windows machine connected to an Android Phone (or
 **Step 3: Run the App**
 Open your terminal (command prompt), and type exactly this:
 ```bash
-cd ~/antigravityWorks/IoT_Project_APP/nexus_hub_app
+cd ~/antigravityWorks/IoT_Project_APP/dsgv_hub_app
 flutter pub get
 flutter run
 ```
@@ -41,7 +41,7 @@ We are using **ESP-IDF** (Espressif's official tool) inside **VS Code** because 
 
 **Step 2: Open the Firmware Project**
 1. In VS Code, go to **File > Open Folder**.
-2. Select EXACTLY this folder: `~/antigravityWorks/IoT_Project_APP/nexus_firmware`
+2. Select EXACTLY this folder: `~/antigravityWorks/IoT_Project_APP/dsgv_firmware`
 
 **Step 3: Select Your Chip**
 1. Look at the very bottom blue bar in VS Code.

@@ -1,5 +1,5 @@
-<div align="center">
-  <h1>Nexus Hub IoT Platform</h1>
+﻿<div align="center">
+  <h1>DSGV Hub IoT Platform</h1>
   <p><strong>Full-stack IoT platform — Flutter mobile app + ESP-IDF firmware for ESP32</strong></p>
   <p>Offline-first · Dual-broker MQTT · BLE provisioning · Schema-driven UI · OTA updates · Authenticated broker control</p>
 </div>
@@ -8,7 +8,7 @@
 
 ## Overview
 
-Nexus Hub is a production-ready IoT platform that pairs a Flutter mobile application with custom ESP-IDF firmware running on ESP32 devices. The platform is designed around three principles:
+DSGV Hub is a production-ready IoT platform that pairs a Flutter mobile application with custom ESP-IDF firmware running on ESP32 devices. The platform is designed around three principles:
 
 - **Zero vendor lock-in** — works with any MQTT broker (EMQX, HiveMQ, Mosquitto, AWS IoT Core)
 - **One firmware binary, any device type** — runtime SKU configuration via BLE provisioning means the same `.bin` file powers a 1-gang switch, a 4-gang switch, an RGB light, a thermostat, or a sensor node
@@ -65,24 +65,24 @@ lib/
 ### Firmware Layer — ESP-IDF 5.x / C
 
 ```
-nexus_firmware/
+dsgv_firmware/
 ├── include/
-│   ├── nexus_config.h           # Per-chip GPIO maps, MQTT endpoints, compile-time defaults
-│   └── nexus_device_config.h    # Runtime config struct (NVS-backed)
+│   ├── dsgv_config.h           # Per-chip GPIO maps, MQTT endpoints, compile-time defaults
+│   └── dsgv_device_config.h    # Runtime config struct (NVS-backed)
 └── main/
     ├── main.c                   # Boot sequence: NVS → config load → GPIO → MQTT → HTTP
     ├── config/
-    │   └── nexus_device_config.c # NVS load/save with GPIO bounds validation
+    │   └── dsgv_device_config.c # NVS load/save with GPIO bounds validation
     ├── gpio/
-    │   └── nexus_gpio.c         # LEDC PWM (6 ch, 5 kHz, 10-bit), relay, ISR sensors
+    │   └── dsgv_gpio.c         # LEDC PWM (6 ch, 5 kHz, 10-bit), relay, ISR sensors
     ├── mqtt/
-    │   └── nexus_mqtt.c         # Dual-broker connect, announce, telemetry, command handler
+    │   └── dsgv_mqtt.c         # Dual-broker connect, announce, telemetry, command handler
     ├── http/
-    │   └── nexus_http_server.c  # LAN REST API (/status, /command, /ota)
+    │   └── dsgv_http_server.c  # LAN REST API (/status, /command, /ota)
     ├── provisioning/
-    │   └── nexus_provisioning.c # NimBLE GATT Wi-Fi + device config provisioning
+    │   └── dsgv_provisioning.c # NimBLE GATT Wi-Fi + device config provisioning
     └── ota/
-        └── nexus_ota.c          # HTTPS OTA into dual-bank partition
+        └── dsgv_ota.c          # HTTPS OTA into dual-bank partition
 ```
 
 ---
@@ -147,8 +147,8 @@ nexus_firmware/
 
 ```
 IoT-Project/
-├── nexus_hub_app/          # Flutter mobile application (Dart)
-├── nexus_firmware/         # ESP32 firmware (C / ESP-IDF 5.x)
+├── dsgv_hub_app/          # Flutter mobile application (Dart)
+├── dsgv_firmware/         # ESP32 firmware (C / ESP-IDF 5.x)
 ├── FLASHING_GUIDE.md       # Step-by-step: configure, build, flash, and wire every device type
 └── README.md
 ```
@@ -170,14 +170,14 @@ See **[FLASHING_GUIDE.md](./FLASHING_GUIDE.md)** for full step-by-step instructi
 
 - Tool installation (Windows, Mac, Linux)
 - Wiring diagrams for every device type
-- Editing `nexus_config.h` for each device SKU
+- Editing `dsgv_config.h` for each device SKU
 - `idf.py set-target / build / flash / monitor` commands
 - Using the app's BLE provisioning to configure device type without reflashing
 
 Quick path for an ESP32-C3 with a 1-gang switch:
 
 ```bash
-cd IoT-Project/nexus_firmware
+cd IoT-Project/dsgv_firmware
 idf.py set-target esp32c3
 idf.py build
 idf.py -p COM5 flash monitor     # replace COM5 with your port
@@ -186,7 +186,7 @@ idf.py -p COM5 flash monitor     # replace COM5 with your port
 ### Run the mobile app
 
 ```bash
-cd IoT-Project/nexus_hub_app
+cd IoT-Project/dsgv_hub_app
 flutter pub get
 flutter run
 ```
@@ -197,7 +197,7 @@ On first launch, go to **Settings** and enter your MQTT broker details. The app 
 
 1. Flash the firmware to the ESP32
 2. In the app, go to **Add Device** and tap **Scan QR Code**
-3. Scan the label on the device (`nexus://provision?name=NexusHub_XXXXXX`)
+3. Scan the label on the device (`DSGV://provision?name=DSGVHub_XXXXXX`)
 4. Select the device type preset (e.g. "2-Gang Switch")
 5. Enter Wi-Fi credentials and tap **Provision**
 
@@ -207,17 +207,17 @@ The device connects to your network, publishes an MQTT announce message, and app
 
 ## Configuration Reference
 
-### `nexus_firmware/include/nexus_config.h`
+### `dsgv_firmware/include/dsgv_config.h`
 
 | Define | Purpose | Example |
 |---|---|---|
-| `NEXUS_DEVICE_TYPE` | Type prefix in auto-generated device name | `"Switch"` |
-| `NEXUS_DEVICE_CAPABILITIES` | JSON array sent in MQTT announce | `"[\"relay\",\"dimmer\"]"` |
-| `NEXUS_RELAY_COUNT` | Number of relay outputs (1–4) | `2` |
-| `NEXUS_RELAY_PINS` | GPIO array for active relays | `{ GPIO_NUM_2, GPIO_NUM_3 }` |
+| `dsgv_DEVICE_TYPE` | Type prefix in auto-generated device name | `"Switch"` |
+| `dsgv_DEVICE_CAPABILITIES` | JSON array sent in MQTT announce | `"[\"relay\",\"dimmer\"]"` |
+| `dsgv_RELAY_COUNT` | Number of relay outputs (1–4) | `2` |
+| `dsgv_RELAY_PINS` | GPIO array for active relays | `{ GPIO_NUM_2, GPIO_NUM_3 }` |
 | `MQTT_CLOUD_HOST` | Primary MQTT broker hostname | `"broker.emqx.io"` |
 | `MQTT_LOCAL_HOST` | Fallback local broker IP | `"192.168.1.100"` |
-| `NEXUS_TELEMETRY_INTERVAL_MS` | Sensor publish interval | `30000` |
+| `dsgv_TELEMETRY_INTERVAL_MS` | Sensor publish interval | `30000` |
 
 > **Note:** These compile-time defaults are only used on a fresh flash. Once the device is provisioned via the app, the NVS runtime config takes precedence and persists across reboots. To return to defaults, hold the BOOT button for 5 seconds (factory reset).
 
