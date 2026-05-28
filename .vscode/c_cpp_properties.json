@@ -1,0 +1,32 @@
+{
+    "configurations": [
+        {
+            "name": "ESP-IDF",
+            "compilerPath": "/home/ceejay/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/bin/xtensa-esp-elf-gcc",
+            "compilerArgs": [],
+            "cStandard": "c11",
+            "cppStandard": "c++17",
+            "includePath": [
+                "${workspaceFolder}/dsgv_firmware/**",
+                "/home/ceejay/.espressif/v6.0.1/esp-idf/components/**",
+                "/home/ceejay/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/xtensa-esp-elf/include"
+            ],
+            "browse": {
+                "path": [
+                    "${workspaceFolder}/dsgv_firmware",
+                    "/home/ceejay/.espressif/v6.0.1/esp-idf/components"
+                ],
+                "limitSymbolsToIncludedHeaders": false
+            },
+            "defines": [
+                "ESP_PLATFORM",
+                "__XTENSA__",
+                "IDF_VER=\"v6.0.1\"",
+                "configENABLE_FREERTOS_DEBUG_OCDAWARE=1"
+            ],
+            "intelliSenseMode": "gcc-x64",
+            "forcedInclude": []
+        }
+    ],
+    "version": 4
+}

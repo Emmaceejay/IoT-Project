@@ -1,0 +1,8 @@
+{
+    "cmake.sourceDirectory": "/home/ceejay/antigravityWorks/IoT_Project_APP/dsgv_firmware",
+    "idf.espIdfPath": "/home/ceejay/.espressif/v6.0.1/esp-idf",
+    "idf.toolsPath": "/home/ceejay/.espressif",
+    "idf.customExtraPaths": "/home/ceejay/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/bin",
+    "idf.adapterTargetName": "esp32",
+    "C_Cpp.intelliSenseEngine": "default"
+}
