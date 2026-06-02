@@ -1,0 +1,35 @@
+menu "DSGV Device Profile"
+
+    config DSGV_DEVICE_TYPE
+        string "Device type"
+        default "Switch"
+        help
+            String reported in MQTT announce and HTTP /status.
+            Examples: Switch, Dimmer, Light, Sensor, Thermostat
+
+    config DSGV_DEVICE_CAPABILITIES
+        string "Capabilities JSON array"
+        default "[\"relay\"]"
+        help
+            JSON array of capability strings sent to the DSGV Hub App.
+            Must be valid JSON. Examples:
+              "[\"relay\"]"
+              "[\"relay\",\"brightness\"]"
+              "[\"relay\",\"brightness\",\"color_temp\"]"
+              "[\"relay\",\"brightness\",\"rgb\"]"
+              "[\"temperature\",\"humidity\"]"
+              "[\"motion\"]"
+              "[\"contact\"]"
+              "[\"temperature\",\"hvac_mode\"]"
+
+    config DSGV_RELAY_COUNT
+        int "Active relay count (0-4)"
+        range 0 4
+        default 1
+        help
+            Number of relay GPIO pins activated at boot.
+            Set 0 for sensor-only devices (temp, motion, contact).
+            The chip-specific relay pin list in dsgv_config.h provides
+            the actual GPIO numbers; this value picks how many to use.
+
+endmenu

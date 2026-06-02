@@ -1,0 +1,13 @@
+# ── DSGV Device Profile ───────────────────────────────────────────────────────
+# Edit ONLY this file to change this device's identity and behaviour.
+# GPIO pin map is determined automatically by the chip target passed at build:
+#   idf.py -DIDF_TARGET=esp32c3 build   (ESP32-C3 / C6)
+#   idf.py -DIDF_TARGET=esp32s3 build   (ESP32-S3)
+#   idf.py -DIDF_TARGET=esp32   build   (ESP32 classic)
+# ─────────────────────────────────────────────────────────────────────────────
+CONFIG_DSGV_DEVICE_TYPE="Switch"
+CONFIG_DSGV_DEVICE_CAPABILITIES="[\"relay\",\"relay_2\",\"relay_3\"]"
+CONFIG_DSGV_RELAY_COUNT=3
+
+# ── Partition table ───────────────────────────────────────────────────────────
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="../../partitions_4mb.csv"

@@ -94,7 +94,7 @@ class SchemaDrivenUiBuilder extends ConsumerWidget {
         );
 
       // ── Brightness dimmer ────────────────────────────────────────────
-      case 'dimmer':
+      case 'brightness':
         final brightness = (device.telemetry['brightness'] as num?)?.toDouble() ?? 100.0;
         return _CapabilityTile(
           icon: Icons.brightness_medium,
@@ -111,7 +111,7 @@ class SchemaDrivenUiBuilder extends ConsumerWidget {
         );
 
       // ── Color temperature ────────────────────────────────────────────
-      case 'color_temperature':
+      case 'color_temp':
         final kelvin = (device.telemetry['color_temp'] as num?)?.toDouble() ?? 4000;
         return _CapabilityTile(
           icon: Icons.wb_sunny_outlined,
@@ -128,7 +128,7 @@ class SchemaDrivenUiBuilder extends ConsumerWidget {
         );
 
       // ── Temperature sensor (read-only) ───────────────────────────────
-      case 'temperature_sensor':
+      case 'temperature':
         final temp = device.telemetry['current_temp'] ?? '—';
         return _CapabilityTile(
           icon: Icons.thermostat,
@@ -140,7 +140,7 @@ class SchemaDrivenUiBuilder extends ConsumerWidget {
         );
 
       // ── HVAC control ─────────────────────────────────────────────────
-      case 'hvac_control':
+      case 'hvac_mode':
         final target = (device.telemetry['target_temp'] as num?)?.toDouble() ?? 22.0;
         final modeRaw = device.telemetry['mode'];
         final mode = modeRaw is String ? modeRaw : 'auto';
@@ -181,7 +181,7 @@ class SchemaDrivenUiBuilder extends ConsumerWidget {
         );
 
       // ── RGB light ────────────────────────────────────────────────────────
-      case 'rgb_light':
+      case 'rgb':
         final r = (device.telemetry['red']   as num?)?.round() ?? 255;
         final g = (device.telemetry['green'] as num?)?.round() ?? 255;
         final b = (device.telemetry['blue']  as num?)?.round() ?? 0;
@@ -229,7 +229,7 @@ class SchemaDrivenUiBuilder extends ConsumerWidget {
         );
 
       // ── Humidity sensor (read-only) ──────────────────────────────────────
-      case 'humidity_sensor':
+      case 'humidity':
         final humidity = (device.telemetry['humidity'] as num?)?.toStringAsFixed(1) ?? '—';
         return _CapabilityTile(
           icon: Icons.water_drop_outlined,
@@ -242,7 +242,7 @@ class SchemaDrivenUiBuilder extends ConsumerWidget {
         );
 
       // ── Motion sensor ────────────────────────────────────────────────────
-      case 'motion_sensor':
+      case 'motion':
         final motion = device.telemetry['motion'] as bool? ?? false;
         return _CapabilityTile(
           icon: motion ? Icons.directions_run : Icons.accessibility_new,
@@ -267,7 +267,7 @@ class SchemaDrivenUiBuilder extends ConsumerWidget {
         );
 
       // ── Contact sensor ───────────────────────────────────────────────────
-      case 'contact_sensor':
+      case 'contact':
         final closed = device.telemetry['contact'] as bool? ?? false;
         return _CapabilityTile(
           icon: closed ? Icons.lock : Icons.lock_open,

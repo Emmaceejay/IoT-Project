@@ -1,0 +1,33 @@
+idf_component_register(
+    SRCS
+        "dsgv_app_main.c"
+        "config/dsgv_device_config.c"
+        "gpio/dsgv_gpio.c"
+        "http/dsgv_http_server.c"
+        "mqtt/dsgv_mqtt.c"
+        "ota/dsgv_ota.c"
+        "provisioning/dsgv_provisioning.c"
+        "wifi/wifi_manager.c"
+    INCLUDE_DIRS "include"
+    REQUIRES
+        nvs_flash
+        esp_wifi
+        esp_netif
+        esp_event
+        mqtt
+        esp_https_ota
+        esp_http_client
+        esp_http_server
+        esp_driver_gpio
+        esp_driver_ledc
+        esp_driver_uart
+        esp_adc
+        bt
+        esp_system
+        esp_partition
+        esp_timer
+        wpa_supplicant
+        lwip
+        mbedtls
+        esp_app_format
+)

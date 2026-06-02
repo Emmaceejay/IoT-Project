@@ -13,7 +13,7 @@ class MockDeviceDatasource implements DeviceRepository {
       uniqueDeviceId: 'MOCK-ESP32-001',
       deviceName: 'Living Room Bulb',
       status: DeviceStatus.online,
-      capabilities: ['relay', 'dimmer', 'color_temperature'],
+      capabilities: ['relay', 'brightness', 'color_temp'],
       telemetry: {'power': true, 'brightness': 75, 'color_temp': 3000},
       localIp: '192.168.1.101', // Simulate device on local LAN
     ),
@@ -21,7 +21,7 @@ class MockDeviceDatasource implements DeviceRepository {
       uniqueDeviceId: 'MOCK-ESP32-002',
       deviceName: 'Hall Thermostat',
       status: DeviceStatus.online,
-      capabilities: ['temperature_sensor', 'hvac_control'],
+      capabilities: ['temperature', 'hvac_mode'],
       telemetry: {'current_temp': 22.5, 'target_temp': 24.0, 'mode': 'cool'},
       localIp: '192.168.1.102',
     ),

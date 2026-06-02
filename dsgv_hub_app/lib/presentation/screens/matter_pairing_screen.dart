@@ -23,17 +23,17 @@ class _DevicePreset {
 }
 
 const _kDevicePresets = [
-  _DevicePreset(label: '1-Gang Switch',  deviceType: 'Switch',     capabilities: ['relay'],                                              relayCount: 1),
-  _DevicePreset(label: '2-Gang Switch',  deviceType: 'Switch',     capabilities: ['relay', 'relay_2'],                                   relayCount: 2),
-  _DevicePreset(label: '3-Gang Switch',  deviceType: 'Switch',     capabilities: ['relay', 'relay_2', 'relay_3'],                        relayCount: 3),
-  _DevicePreset(label: '4-Gang Switch',  deviceType: 'Switch',     capabilities: ['relay', 'relay_2', 'relay_3', 'relay_4'],             relayCount: 4),
-  _DevicePreset(label: 'Dimmer',         deviceType: 'Dimmer',     capabilities: ['relay', 'dimmer'],                                    relayCount: 1),
-  _DevicePreset(label: 'Color Temp',     deviceType: 'Dimmer',     capabilities: ['relay', 'color_temperature'],                         relayCount: 1),
-  _DevicePreset(label: 'RGB Light',      deviceType: 'RGB',        capabilities: ['relay', 'rgb_light'],                                 relayCount: 1),
-  _DevicePreset(label: 'Temp Sensor',    deviceType: 'Sensor',     capabilities: ['temperature_sensor'],                                 relayCount: 0),
-  _DevicePreset(label: 'Motion Sensor',  deviceType: 'Sensor',     capabilities: ['motion_sensor'],                                      relayCount: 0),
-  _DevicePreset(label: 'Contact Sensor', deviceType: 'Sensor',     capabilities: ['contact_sensor'],                                     relayCount: 0),
-  _DevicePreset(label: 'Thermostat',     deviceType: 'Thermostat', capabilities: ['temperature_sensor', 'hvac_control'],                 relayCount: 1),
+  _DevicePreset(label: '1-Gang Switch',  deviceType: 'Switch',     capabilities: ['relay'],                                                   relayCount: 1),
+  _DevicePreset(label: '2-Gang Switch',  deviceType: 'Switch',     capabilities: ['relay', 'relay_2'],                                        relayCount: 2),
+  _DevicePreset(label: '3-Gang Switch',  deviceType: 'Switch',     capabilities: ['relay', 'relay_2', 'relay_3'],                             relayCount: 3),
+  _DevicePreset(label: '4-Gang Switch',  deviceType: 'Switch',     capabilities: ['relay', 'relay_2', 'relay_3', 'relay_4'],                  relayCount: 4),
+  _DevicePreset(label: 'Dimmer',         deviceType: 'Dimmer',     capabilities: ['relay', 'brightness'],                                     relayCount: 1),
+  _DevicePreset(label: 'Color Temp',     deviceType: 'Light',      capabilities: ['relay', 'brightness', 'color_temp'],                       relayCount: 1),
+  _DevicePreset(label: 'RGB Light',      deviceType: 'Light',      capabilities: ['relay', 'brightness', 'rgb'],                              relayCount: 1),
+  _DevicePreset(label: 'Temp Sensor',    deviceType: 'Sensor',     capabilities: ['temperature', 'humidity'],                                 relayCount: 0),
+  _DevicePreset(label: 'Motion Sensor',  deviceType: 'Sensor',     capabilities: ['motion'],                                                  relayCount: 0),
+  _DevicePreset(label: 'Contact Sensor', deviceType: 'Sensor',     capabilities: ['contact'],                                                 relayCount: 0),
+  _DevicePreset(label: 'Thermostat',     deviceType: 'Thermostat', capabilities: ['temperature', 'hvac_mode'],                                relayCount: 1),
 ];
 
 // ── QR code type ──────────────────────────────────────────────────────────────

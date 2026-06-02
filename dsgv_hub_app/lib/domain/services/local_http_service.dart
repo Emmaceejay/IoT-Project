@@ -96,11 +96,20 @@ class LocalHttpService {
     return null;
   }
 
-  /// Maps DSGV capabilities to Tasmota cmnd syntax.
+  /// Maps DSGV command field names to Tasmota cmnd syntax.
+  /// Only needed as a fallback for off-the-shelf Tasmota devices.
+  /// DSGV firmware is always served by the REST path above; null here
+  /// means Tasmota has no equivalent (HTTP fails, MQTT picks up instead).
   String? _toTasmotaCommand(String capability, dynamic value) {
     switch (capability) {
       case 'power':
         return value == true ? 'Power ON' : 'Power OFF';
+      case 'power_2':
+        return value == true ? 'Power2 ON' : 'Power2 OFF';
+      case 'power_3':
+        return value == true ? 'Power3 ON' : 'Power3 OFF';
+      case 'power_4':
+        return value == true ? 'Power4 ON' : 'Power4 OFF';
       case 'brightness':
         final pct = (value as num).clamp(0, 100).toInt();
         return 'Dimmer $pct';
@@ -110,8 +119,8 @@ class LocalHttpService {
         final mired = (1000000 / kelvin).clamp(153, 500).round();
         return 'CT $mired';
       case 'target_temp':
-        // App sends target_temp directly (schema_driven_ui_builder.dart)
         return 'TempTarget $value';
+      // RGB and HVAC mode have no Tasmota equivalent — DSGV REST only.
       default:
         return null;
     }
