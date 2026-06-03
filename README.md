@@ -4,6 +4,8 @@
   <p>
     Offline-first &nbsp;·&nbsp;
     BLE provisioning &nbsp;·&nbsp;
+    Google Home &amp; Alexa C2C &nbsp;·&nbsp;
+    mDNS local discovery &nbsp;·&nbsp;
     Firebase-secured config &nbsp;·&nbsp;
     Schema-driven UI &nbsp;·&nbsp;
     OTA updates &nbsp;·&nbsp;
@@ -27,11 +29,12 @@
 10. [Supported Device Types](#10-supported-device-types)
 11. [Protocol Reference — MQTT Topics](#11-protocol-reference--mqtt-topics)
 12. [Firebase Data Structure](#12-firebase-data-structure)
-13. [Security Model](#13-security-model)
-14. [Configuration Reference](#14-configuration-reference)
-15. [Adding a New Device Type](#15-adding-a-new-device-type)
-16. [Debugging and Monitoring](#16-debugging-and-monitoring)
-17. [Project Files at a Glance](#17-project-files-at-a-glance)
+13. [Voice Control Setup (Google Home & Alexa)](#13-voice-control-setup-google-home--alexa)
+14. [Security Model](#14-security-model)
+15. [Configuration Reference](#15-configuration-reference)
+16. [Adding a New Device Type](#16-adding-a-new-device-type)
+17. [Debugging and Monitoring](#17-debugging-and-monitoring)
+18. [Project Files at a Glance](#18-project-files-at-a-glance)
 
 ---
 
@@ -43,7 +46,7 @@ DSGV Hub is a **production-ready, end-to-end IoT platform** built by De Socko Gl
 |------|-----------|---------|
 | **Mobile App** | Flutter / Dart | Control devices, provision new ones, manage broker settings |
 | **Firmware** | C / ESP-IDF 5.x | Runs on ESP32 devices — handles WiFi, MQTT, sensors, relays, OTA |
-| **Cloud Gateway** | Firebase (Node.js Cloud Functions + Realtime Database) | Securely stores and delivers broker configuration to each device |
+| **Cloud Gateway** | Firebase (Node.js Cloud Functions + Realtime Database) | Broker config delivery, OAuth 2.0 account linking, Google Home / Alexa C2C fulfillment, device state mirror |
 
 **The core idea is simple:**
 - Flash the same firmware binary to any ESP32 device
@@ -55,36 +58,47 @@ DSGV Hub is a **production-ready, end-to-end IoT platform** built by De Socko Gl
 
 ## 2. How It Works — Architecture
 
-### The Three Communication Channels
+### The Four Communication Channels
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                          MOBILE APP (Flutter)                           │
-└───────────────┬─────────────────────────┬───────────────────────────────┘
-                │                         │
-   BLE (once,   │                         │  HTTPS (Cloud Functions)
-   provisioning)│                         │  Register device
-                │                         │  Push broker config
-                │                         │  Restore factory broker
-                ▼                         ▼
-┌──────────────────────┐    ┌────────────────────────────┐
-│   ESP32 Device       │    │   Firebase                 │
-│                      │    │   ┌──────────────────────┐ │
-│  On boot:            │    │   │ device_registry      │ │
-│  1. WiFi connect     │    │   │  auth_token (private)│ │
-│  2. HTTPS fetch ─────┼────┼──►│ device_configs       │ │
-│     broker config    │◄───┼───│  broker settings     │ │
-│  3. MQTT connect     │    │   └──────────────────────┘ │
-│                      │    └────────────────────────────┘
-└──────────┬───────────┘
-           │  MQTT (ongoing)
-           │  telemetry, commands, status
-           ▼
-┌──────────────────────┐
-│   MQTT Broker        │
-│  (your server or     │
-│   cloud broker)      │
-└──────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│  Voice Ecosystems (C2C)                                                  │
+│  Google Home (SYNC/QUERY/EXECUTE)  ·  Amazon Alexa (Discovery/Directive) │
+└───────────────────────────┬──────────────────────────────────────────────┘
+                            │ OAuth 2.0 account linking
+                            │ HTTPS fulfillment webhooks
+                            ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│                          MOBILE APP (Flutter)                            │
+└──────┬──────────────────────────┬──────────────────────────┬─────────────┘
+       │                          │                          │
+  BLE (once,                HTTPS Cloud Functions       mDNS + HTTP
+  provisioning)             Register device             (local LAN only,
+                            Link device to account      no internet needed)
+                            Push broker config
+                            ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│   Firebase                                                             │
+│   Cloud Functions: registerDevice · getDeviceConfig · updateDeviceConfig│
+│                    linkDeviceToUser · updateDeviceState                 │
+│                    oauthAuthorize · oauthToken                          │
+│                    googleSmartHome · alexaSmartHome                    │
+│   Realtime DB:  device_registry · device_configs · device_states       │
+│                 user_devices · oauth_codes · oauth_tokens               │
+└───────────────────────────┬────────────────────────────────────────────┘
+                            │ MQTT state bridge
+                            │ (EMQX Rule Engine webhook OR bridge.js VPS process)
+                            ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│   MQTT Broker (EMQX / Mosquitto)                                       │
+│   topics: devices/+/announce · telemetry · command · status            │
+└───────────────────────────┬────────────────────────────────────────────┘
+                            │ MQTT (ongoing telemetry, commands, status)
+                            ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│   ESP32 Devices (firmware)                                             │
+│   WiFi · MQTT · HTTP REST · mDNS (_dsgv._tcp) · BLE · OTA             │
+└────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### MQTT is for Control. Firebase is for Configuration.
@@ -94,6 +108,8 @@ DSGV Hub is a **production-ready, end-to-end IoT platform** built by De Socko Gl
 | **MQTT** | Live telemetry, relay commands, device status | Auth token in every config command |
 | **Firebase HTTPS** | Broker hostname, port, TLS flag, credentials | auth_token validated by Cloud Function |
 | **BLE** | First-time WiFi credentials, device type, auth token exchange | Physical proximity required |
+| **Voice / C2C** | Google Home EXECUTE, Alexa Directive | OAuth access token validated by Cloud Function |
+| **mDNS + HTTP** | Local LAN device discovery and direct commands | LAN-only, no internet, device reachability check |
 
 Credentials (broker username/password) **never travel over MQTT**. They live in Firebase and are fetched by the device directly over HTTPS.
 
@@ -135,13 +151,14 @@ IoT-Project/
 │   │   │   ├── models/              # DeviceEntity (database schema)
 │   │   │   └── repositories/        # DeviceRepository interface
 │   │   ├── domain/
-│   │   │   ├── models/              # MatterDevice, MqttConfig
+│   │   │   ├── models/              # IoTDevice, MqttConfig
 │   │   │   └── services/
 │   │   │       ├── device_manager.dart          # Central state engine (AsyncNotifier)
 │   │   │       ├── mqtt_service.dart            # MQTT client + factory/custom mode
 │   │   │       ├── firebase_config_service.dart # Firebase Cloud Function client
 │   │   │       ├── ble_provisioning_service.dart
 │   │   │       ├── local_http_service.dart
+│   │   │       ├── mdns_discovery_service.dart
 │   │   │       ├── ota_service.dart
 │   │   │       └── telemetry_service.dart
 │   │   └── presentation/
@@ -151,8 +168,16 @@ IoT-Project/
 │   │           ├── device_card.dart            # Expandable device card
 │   │           └── schema_driven_ui_builder.dart # Renders controls from capabilities
 │   ├── functions/                   ← Firebase Cloud Functions (Node.js)
-│   │   ├── index.js                 # registerDevice, getDeviceConfig, updateDeviceConfig, revertDeviceToFactory
-│   │   └── package.json
+│   │   ├── index.js                 # 11 exported functions (see Section 12)
+│   │   ├── package.json
+│   │   ├── lib/
+│   │   │   ├── oauth.js             # OAuth 2.0 Authorization Code server
+│   │   │   ├── state_helpers.js     # Firebase state reads, Google/Alexa trait mapping
+│   │   │   ├── smarthome_google.js  # Google Home SYNC/QUERY/EXECUTE/DISCONNECT
+│   │   │   └── smarthome_alexa.js   # Alexa Discovery/ReportState/Directive
+│   │   └── mqtt_bridge/
+│   │       ├── bridge.js            # Standalone MQTT→Firebase bridge (VPS alternative)
+│   │       └── package.json
 │   ├── firebase.json                # Firebase project config
 │   ├── .firebaserc                  # Firebase project ID binding
 │   ├── database.rules.json          # Realtime Database security rules
@@ -292,8 +317,35 @@ Expected output:
 ✔  functions[getDeviceConfig]:       Deployed
 ✔  functions[updateDeviceConfig]:    Deployed
 ✔  functions[revertDeviceToFactory]: Deployed
+✔  functions[updateDeviceState]:     Deployed
+✔  functions[linkDeviceToUser]:      Deployed
+✔  functions[oauthLoginPage]:        Deployed
+✔  functions[oauthAuthorize]:        Deployed
+✔  functions[oauthToken]:            Deployed
+✔  functions[googleSmartHome]:       Deployed
+✔  functions[alexaSmartHome]:        Deployed
 ✔  database: Rules deployed
 ```
+
+### Step 6 — Set OAuth and Bridge Configuration
+
+```bash
+firebase functions:config:set \
+  oauth.google_client_id="YOUR_GOOGLE_CLIENT_ID" \
+  oauth.google_client_secret="YOUR_GOOGLE_CLIENT_SECRET" \
+  oauth.alexa_client_id="YOUR_ALEXA_CLIENT_ID" \
+  oauth.alexa_client_secret="YOUR_ALEXA_CLIENT_SECRET" \
+  oauth.firebase_api_key="YOUR_FIREBASE_WEB_API_KEY" \
+  oauth.session_secret="$(openssl rand -hex 32)" \
+  bridge.secret="$(openssl rand -hex 32)"
+firebase deploy --only functions
+```
+
+Where to get each value:
+- `google_client_id` / `google_client_secret`: Google Cloud Console → Actions on Google project → Account Linking → OAuth Client
+- `alexa_client_id` / `alexa_client_secret`: Alexa Developer Console → Smart Home Skill → Account Linking
+- `firebase_api_key`: Firebase Console → Project Settings → General → Web API Key
+- `session_secret` and `bridge.secret`: generate randomly (command shown above)
 
 For the full Firebase walkthrough including verification steps and troubleshooting,
 see **[dsgv_hub_app/FIREBASE_SETUP_GUIDE.md](./dsgv_hub_app/FIREBASE_SETUP_GUIDE.md)**.
@@ -559,6 +611,34 @@ all reads and writes go through Cloud Functions.
 }
 ```
 
+### C2C State Mirror (Phases 3–6)
+
+```json
+{
+  "device_states": {
+    "AABBCCDDEEFF": {
+      "power":        true,
+      "brightness":   75,
+      "color_temp":   4000,
+      "current_temp": 22.5,
+      "humidity":     55,
+      "motion":       false,
+      "contact":      true,
+      "online":       true,
+      "last_updated": 1717516800000
+    }
+  },
+  "user_devices": {
+    "{firebase_uid}": {
+      "AABBCCDDEEFF": true,
+      "112233445566": true
+    }
+  },
+  "oauth_codes":  { "{sha256_of_code}":  { "uid", "client_id", "issued_at", "used" } },
+  "oauth_tokens": { "{sha256_of_token}": { "uid", "client_id", "type", "expires_at" } }
+}
+```
+
 ### Cloud Functions
 
 | Function | Called by | Purpose |
@@ -567,10 +647,56 @@ all reads and writes go through Cloud Functions.
 | `getDeviceConfig` | Firmware (every boot) | Returns broker config after validating auth_token |
 | `updateDeviceConfig` | App (Settings → Push broker) | Updates device's config in Firebase |
 | `revertDeviceToFactory` | App (Settings → Restore factory) | Resets config to factory broker |
+| `updateDeviceState` | MQTT bridge (on telemetry) | Writes latest device state to `device_states` for C2C reads |
+| `linkDeviceToUser` | App (after provisioning) | Creates ownership mapping in `user_devices` |
+| `oauthLoginPage` | Google Home / Alexa (account linking) | Serves the login page for OAuth account linking flow |
+| `oauthAuthorize` | Google Home / Alexa (account linking) | Issues auth code after user authenticates |
+| `oauthToken` | Google Home / Alexa (account linking) | Exchanges auth code for access + refresh tokens |
+| `googleSmartHome` | Google Home (SYNC/QUERY/EXECUTE) | Fulfillment webhook for all Google Home intents |
+| `alexaSmartHome` | Alexa (Discovery/ReportState/Directive) | Fulfillment handler for all Alexa Smart Home directives |
 
 ---
 
-## 13. Security Model
+## 13. Voice Control Setup (Google Home & Alexa)
+
+Both Google Home and Alexa connect to DSGV Hub through a **Cloud-to-Cloud (C2C)** integration backed by an OAuth 2.0 server hosted as Firebase Cloud Functions.
+
+### Google Home Setup
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com) → Create a Smart Home project (Actions on Google)
+2. Set fulfillment URL: `https://us-central1-YOUR_PROJECT_ID.cloudfunctions.net/googleSmartHome`
+3. Set account linking:
+   - Authorization URL: `https://us-central1-YOUR_PROJECT_ID.cloudfunctions.net/oauthLoginPage`
+   - Token URL: `https://us-central1-YOUR_PROJECT_ID.cloudfunctions.net/oauthToken`
+   - Client ID: value of `oauth.google_client_id` (from Step 6)
+   - Scopes: `dsgv.devices.control`
+4. In the Google Home app → Settings → Works with Google → link your DSGV account
+5. Say "Hey Google, sync my devices"
+
+### Alexa Setup
+
+1. Go to [Alexa Developer Console](https://developer.amazon.com/alexa/console/ask) → Create Smart Home Skill
+2. Set Default Endpoint: `https://us-central1-YOUR_PROJECT_ID.cloudfunctions.net/alexaSmartHome`
+3. Set account linking (same OAuth server, but use `alexa_client_id`):
+   - Authorization URI: `https://us-central1-YOUR_PROJECT_ID.cloudfunctions.net/oauthLoginPage`
+   - Access Token URI: `https://us-central1-YOUR_PROJECT_ID.cloudfunctions.net/oauthToken`
+4. In the Alexa app → Skills & Games → Your Skills → enable DSGV
+5. Tap "Discover Devices"
+
+### MQTT State Bridge (how Google/Alexa know the device state)
+
+Both Google Home and Alexa read device state from `device_states/{mac}` in Firebase RTDB. This node is kept current by one of:
+
+- **EMQX Rule Engine** (recommended): configure a rule matching `devices/+/telemetry` to POST to the `updateDeviceState` Cloud Function. No extra server needed.
+- **Standalone bridge process** (any MQTT broker): run `node functions/mqtt_bridge/bridge.js` on any always-on server. Set `MQTT_BROKER_URL`, `MQTT_USERNAME`, `MQTT_PASSWORD`, `GOOGLE_APPLICATION_CREDENTIALS` env vars.
+
+### Linking a device to your account
+
+After provisioning, the Flutter app must call `linkDeviceToUser` to create the ownership mapping in `user_devices`. This is what authorizes Google and Alexa to see and control the device.
+
+---
+
+## 14. Security Model
 
 Understanding the security design is important before deploying to customers.
 
@@ -602,6 +728,15 @@ Understanding the security design is important before deploying to customers.
 - The provisioning payload (WiFi credentials + auth_token) is encrypted by the BLE LE pairing layer
 - No credentials are stored in the QR code — the QR code only contains the BLE device name
 
+### OAuth 2.0 (C2C Account Linking)
+
+- Authorization codes are stored as `sha256(code)` — the raw code is never persisted
+- Access tokens (1 hour TTL) and refresh tokens (6 months TTL) are stored as `sha256(token)`
+- `client_secret` verified with `crypto.timingSafeEqual()` — prevents timing attacks
+- Auth codes are single-use (marked `used: true` on redemption) — prevents replay attacks
+- `redirect_uri` is validated against a per-`client_id` whitelist — prevents open redirect attacks
+- The OAuth server authenticates users through Firebase Auth — no separate user database
+
 ### Recommendations for Production
 
 - Enable **Firebase App Check** to prevent unauthorised callers hitting your Cloud Functions
@@ -610,7 +745,7 @@ Understanding the security design is important before deploying to customers.
 
 ---
 
-## 14. Configuration Reference
+## 15. Configuration Reference
 
 ### `dsgv_config.h` — Firmware Constants
 
@@ -650,7 +785,7 @@ Located at `dsgv_hub_app/lib/domain/services/firebase_config_service.dart`.
 
 ---
 
-## 15. Adding a New Device Type
+## 16. Adding a New Device Type
 
 The platform is designed to support new hardware with minimal code changes.
 
@@ -675,7 +810,7 @@ controls the first time they see that device — no app store update needed.
 
 ---
 
-## 16. Debugging and Monitoring
+## 17. Debugging and Monitoring
 
 ### Firmware Serial Monitor
 
@@ -729,7 +864,7 @@ Use [MQTT Explorer](https://mqtt-explorer.com) (free desktop app) to:
 
 ---
 
-## 17. Project Files at a Glance
+## 18. Project Files at a Glance
 
 | File | Purpose | Edit when |
 |------|---------|----------|
@@ -737,12 +872,18 @@ Use [MQTT Explorer](https://mqtt-explorer.com) (free desktop app) to:
 | `mqtt_config.dart` | App's factory broker constant | Changing manufacturer broker |
 | `firebase_config_service.dart` | Cloud Function base URL | After creating Firebase project |
 | `.firebaserc` | Firebase project ID | After creating Firebase project |
-| `functions/index.js` | Cloud Function logic + `FACTORY_CONFIG` constant | Changing broker, adding new functions |
-| `database.rules.json` | Realtime Database security rules | Never — rules are intentionally fully locked |
+| `functions/index.js` | 11 exported functions (registerDevice, getDeviceConfig, updateDeviceConfig, revertDeviceToFactory, updateDeviceState, linkDeviceToUser, oauthLoginPage, oauthAuthorize, oauthToken, googleSmartHome, alexaSmartHome) | Changing broker, adding new functions |
+| `database.rules.json` | RTDB security rules (all 6 node types) | When adding new RTDB nodes (device_states, user_devices, oauth nodes already present) |
 | `schema_driven_ui_builder.dart` | Maps capability strings to UI controls | Adding new device types |
 | `dsgv_mqtt.c` | MQTT connection, topic handling, telemetry, commands | Adding new MQTT features |
 | `dsgv_firebase.c` | HTTPS fetch from Firebase Cloud Function | Extending config fields (e.g. adding auth credentials) |
 | `dsgv_provisioning.c` | BLE GATT provisioning protocol | Changing provisioning payload fields |
+| `functions/lib/oauth.js` | OAuth 2.0 server implementation | Changing token TTLs or adding new OAuth clients |
+| `functions/lib/smarthome_google.js` | Google Home SYNC/QUERY/EXECUTE handler | Adding new Google capabilities |
+| `functions/lib/smarthome_alexa.js` | Alexa Discovery/ReportState/Directive handler | Adding new Alexa interfaces |
+| `functions/lib/state_helpers.js` | Shared capability→trait mapping and state utilities | Adding new device capabilities to C2C |
+| `functions/mqtt_bridge/bridge.js` | Standalone MQTT→Firebase state bridge (VPS) | Deploying on non-EMQX broker |
+| `mdns_discovery_service.dart` | mDNS device discovery on local LAN | Changing mDNS service type or TXT record fields |
 | `FIREBASE_SETUP_GUIDE.md` | Step-by-step Firebase setup with verification | Reference only |
 | `FLASHING_GUIDE.md` | Wiring + flash commands per device type | Reference only |
 | `PRE_PRODUCTION_GUIDE.md` | Production readiness checklist | Before shipping hardware |
