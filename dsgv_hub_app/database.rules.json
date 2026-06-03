@@ -1,6 +1,42 @@
 {
   "rules": {
-    ".read": false,
-    ".write": false
+
+    ".read":  false,
+    ".write": false,
+
+    "device_registry": {
+      ".read":  false,
+      ".write": false
+    },
+
+    "device_configs": {
+      ".read":  false,
+      ".write": false
+    },
+
+    "device_states": {
+      "$mac": {
+        ".read":  "auth != null && root.child('user_devices').child(auth.uid).child($mac).exists()",
+        ".write": false
+      }
+    },
+
+    "user_devices": {
+      "$uid": {
+        ".read":  "auth != null && auth.uid === $uid",
+        ".write": false
+      }
+    },
+
+    "oauth_codes": {
+      ".read":  false,
+      ".write": false
+    },
+
+    "oauth_tokens": {
+      ".read":  false,
+      ".write": false
+    }
+
   }
 }

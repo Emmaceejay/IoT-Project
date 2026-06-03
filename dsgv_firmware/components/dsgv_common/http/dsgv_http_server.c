@@ -208,7 +208,7 @@ static esp_err_t handle_tasmota_get(httpd_req_t *req) {
 
 /**
  * Builds the current device state as a JSON string.
- * Format matches MatterDevice.telemetry schema in the Flutter app.
+ * Format matches IoTDevice.telemetry schema in the Flutter app.
  */
 static void build_status_json(char *buf, size_t buf_size) {
     STATE_LOCK();

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../domain/services/device_manager.dart';
 import '../../domain/services/mqtt_service.dart';
 import '../screens/dashboard_screen.dart';
 import '../screens/device_pairing_screen.dart';
@@ -20,9 +21,20 @@ class _AppShellState extends ConsumerState<AppShell> {
   @override
   void initState() {
     super.initState();
-    // Auto-connect to the factory or previously saved broker on startup
+
+    // Run startup network tasks after the first frame is rendered so the
+    // widget tree is fully built before any async state changes arrive.
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      // 1. Connect to the MQTT broker (cloud remote control + telemetry).
+      //    This is the primary discovery path — devices announce themselves
+      //    via the "devices/+/announce" topic when they connect.
       ref.read(mqttServiceProvider.notifier).connect();
+
+      // 2. Scan the local LAN for devices via mDNS (_dsgv._tcp.local).
+      //    This fills in localIp for devices on the same Wi-Fi, enabling
+      //    direct HTTP commands (<10 ms) before their MQTT announce arrives.
+      //    Runs concurrently with MQTT — both paths feed into handleAnnounce.
+      ref.read(deviceManagerProvider.notifier).discoverLocalDevices();
     });
   }
 

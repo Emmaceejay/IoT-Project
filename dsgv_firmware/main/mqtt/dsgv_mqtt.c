@@ -325,7 +325,7 @@ static void publish_online_status(void) {
  * Publishes a discovery/announce payload so the DSGV Hub App can populate
  * the real device list with correct capabilities and local IP.
  *
- * Payload schema matches MatterDevice.fromJson() in the Flutter app:
+ * Payload schema matches IoTDevice.fromJson() in the Flutter app:
  * {
  *   "device_id":    "AABBCCDDEEFF",
  *   "name":         "DSGV Switch v1",
@@ -370,7 +370,7 @@ static void publish_announcement(void) {
  * Called by GPIO layer after physical button press, by HTTP server after
  * REST commands, and periodically.
  *
- * Payload schema matches MatterDevice.telemetry in the Flutter app:
+ * Payload schema matches IoTDevice.telemetry in the Flutter app:
  * {"power":false,"brightness":0,"color_temp":4000,
  *  "current_temp":22.5,"target_temp":22.0,"mode":"auto"}
  */

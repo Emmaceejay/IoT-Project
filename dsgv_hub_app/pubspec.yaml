@@ -1,5 +1,5 @@
 ﻿name: dsgv_hub_app
-description: Professional Universal Matter / MQTT IoT Platform Application.
+description: DSGV Hub — C2C + WiFi/MQTT IoT Platform (Google Home, Alexa, SmartThings).
 
 publish_to: 'none'
 
@@ -31,8 +31,13 @@ dependencies:
   # Secure Credential Storage (MQTT creds, tokens)
   flutter_secure_storage: ^9.2.2
 
-  # QR Code Scanning (used for Matter device pairing flow)
+  # QR Code Scanning (DSGV provisioning QR codes)
   mobile_scanner: ^5.2.1
+
+  # mDNS (Multicast DNS) — discovers DSGV devices on the local network
+  # without needing the device to publish its IP over MQTT first.
+  # Queries _dsgv._tcp.local and returns hostname, IP, and capability TXT records.
+  multicast_dns: ^0.3.2+4
 
   # BLE provisioning (push Wi-Fi credentials to un-provisioned ESP32 devices)
   flutter_blue_plus: ^1.35.5

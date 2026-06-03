@@ -1,9 +1,9 @@
 ﻿import 'package:flutter_test/flutter_test.dart';
-import 'package:dsgv_hub_app/domain/models/matter_device.dart';
+import 'package:dsgv_hub_app/domain/models/iot_device.dart';
 
 void main() {
-  group('MatterDevice', () {
-    const baseDevice = MatterDevice(
+  group('IoTDevice', () {
+    const baseDevice = IoTDevice(
       uniqueDeviceId: 'TEST-001',
       deviceName: 'Test Bulb',
       status: DeviceStatus.online,
@@ -13,12 +13,12 @@ void main() {
     );
 
     test('default status is offline', () {
-      const d = MatterDevice(uniqueDeviceId: 'X', deviceName: 'X');
+      const d = IoTDevice(uniqueDeviceId: 'X', deviceName: 'X');
       expect(d.status, DeviceStatus.offline);
     });
 
     test('default capabilities and telemetry are empty', () {
-      const d = MatterDevice(uniqueDeviceId: 'X', deviceName: 'X');
+      const d = IoTDevice(uniqueDeviceId: 'X', deviceName: 'X');
       expect(d.capabilities, isEmpty);
       expect(d.telemetry, isEmpty);
     });
@@ -53,7 +53,7 @@ void main() {
         'telemetry': {'power': false},
         'local_ip': '10.0.0.5',
       };
-      final device = MatterDevice.fromJson(json);
+      final device = IoTDevice.fromJson(json);
       expect(device.uniqueDeviceId, 'ESP-ABC');
       expect(device.deviceName, 'Kitchen Switch');
       expect(device.status, DeviceStatus.online);
@@ -70,7 +70,7 @@ void main() {
         'capabilities': <dynamic>[],
         'telemetry': <String, dynamic>{},
       };
-      final device = MatterDevice.fromJson(json);
+      final device = IoTDevice.fromJson(json);
       expect(device.status, DeviceStatus.offline);
     });
 
@@ -82,7 +82,7 @@ void main() {
         'capabilities': <dynamic>[],
         'telemetry': <String, dynamic>{},
       };
-      expect(MatterDevice.fromJson(json).status, DeviceStatus.provisioning);
+      expect(IoTDevice.fromJson(json).status, DeviceStatus.provisioning);
     });
 
     test('fromJson handles missing optional fields', () {
@@ -91,7 +91,7 @@ void main() {
         'name': 'X',
         'capabilities': <dynamic>[],
       };
-      final device = MatterDevice.fromJson(json);
+      final device = IoTDevice.fromJson(json);
       expect(device.localIp, isNull);
       expect(device.telemetry, isEmpty);
       expect(device.status, DeviceStatus.offline);
@@ -107,12 +107,12 @@ void main() {
     });
 
     test('toJson omits local_ip when null', () {
-      const d = MatterDevice(uniqueDeviceId: 'X', deviceName: 'X');
+      const d = IoTDevice(uniqueDeviceId: 'X', deviceName: 'X');
       expect(d.toJson().containsKey('local_ip'), isFalse);
     });
 
     test('toJson → fromJson round-trip preserves identity', () {
-      final restored = MatterDevice.fromJson(baseDevice.toJson());
+      final restored = IoTDevice.fromJson(baseDevice.toJson());
       expect(restored.uniqueDeviceId, baseDevice.uniqueDeviceId);
       expect(restored.deviceName, baseDevice.deviceName);
       expect(restored.status, baseDevice.status);

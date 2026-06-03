@@ -7,6 +7,7 @@ import '../../data/repositories/device_repository.dart';
 import '../../domain/models/iot_device.dart';
 import 'firebase_config_service.dart';
 import 'local_http_service.dart';
+import 'mdns_discovery_service.dart';
 import 'mqtt_service.dart';
 import 'telemetry_service.dart';
 
@@ -124,7 +125,35 @@ class DeviceManager extends AsyncNotifier<List<IoTDevice>> {
     debugPrint('[DeviceManager] Device $deviceId removed.');
   }
 
-  /// Registers a newly commissioned device (called after Matter pairing).
+  /// Scans the local Wi-Fi network for DSGV devices using mDNS and feeds
+  /// any discovered devices through the standard [handleAnnounce] pipeline.
+  ///
+  /// This runs alongside the MQTT flow — both paths call [handleAnnounce],
+  /// which is idempotent (it upserts, never duplicates).
+  ///
+  /// Call this once on app startup (after MQTT connects) and again when the
+  /// app resumes from background. On a typical home LAN it completes in
+  /// 1-3 seconds and fills in [localIp] for each found device.
+  ///
+  /// mDNS is LAN-only. Remote devices (away from home) are discovered via
+  /// MQTT announce as normal — this method is a faster local supplement.
+  Future<void> discoverLocalDevices() async {
+    debugPrint('[DeviceManager] Starting mDNS scan for _dsgv._tcp…');
+    final service = ref.read(mdnsDiscoveryServiceProvider);
+    int found = 0;
+
+    await for (final result in service.discoverDevices()) {
+      debugPrint('[DeviceManager] mDNS found: ${result.deviceId} @ ${result.localIp}');
+      // handleAnnounce upserts: creates the device if new, or updates
+      // localIp + capabilities on an existing device record.
+      await handleAnnounce(result.toDevice());
+      found++;
+    }
+
+    debugPrint('[DeviceManager] mDNS scan complete — $found device(s) found.');
+  }
+
+  /// Registers a newly provisioned device into the local cache.
   Future<void> registerNewDevice(IoTDevice device) async {
     await _repository.provisionDevice(device);
     ref.read(telemetryServiceProvider).logProvisionResult(

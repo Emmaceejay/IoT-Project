@@ -18,7 +18,7 @@ enum HubConnectionState {
   connecting,
   connectedCloud,  // any remote / public broker
   connectedLocal,  // private-IP broker (192.168.x, 10.x, etc.)
-  connectedDirect, // direct HTTP transport (Matter / Tasmota)
+  connectedDirect, // direct HTTP transport (local HTTP)
 }
 
 class MqttConnectionStatus {

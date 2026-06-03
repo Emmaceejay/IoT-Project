@@ -12,7 +12,7 @@ abstract class DeviceRepository {
   /// Updates a device's status or telemetry in the local cache.
   Future<void> updateDeviceState(String deviceId, Map<String, dynamic> patch);
 
-  /// Registers a newly commissioned Matter device into the local registry.
+  /// Registers a newly provisioned IoT device into the local registry.
   Future<void> provisionDevice(IoTDevice device);
 
   /// Removes a device from the local registry.

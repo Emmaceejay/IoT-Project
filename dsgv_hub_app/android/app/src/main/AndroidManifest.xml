@@ -6,12 +6,16 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE"/>
 
-    <!-- ── Wi-Fi (for mDNS local broker discovery) ─────────────────────── -->
+    <!-- ── Wi-Fi (mDNS discovery + broker connectivity) ────────────────── -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE"/>
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+    <!-- CHANGE_WIFI_MULTICAST_STATE: required on Android 12+ to send and
+         receive multicast UDP packets. Without this the mDNS query on
+         224.0.0.251:5353 is silently dropped by the WiFi driver. -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE"/>
 
-    <!-- ── Bluetooth (for Matter Commissioning BLE handshake) ───────────── -->
+    <!-- ── Bluetooth (BLE provisioning handshake) ──────────────────────── -->
     <uses-permission android:name="android.permission.BLUETOOTH"/>
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"/>
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
@@ -20,7 +24,7 @@
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE"/>
 
-    <!-- ── Camera (for Matter QR Code scanning) ─────────────────────────── -->
+    <!-- ── Camera (DSGV provisioning QR code scanning) ─────────────────── -->
     <uses-permission android:name="android.permission.CAMERA"/>
 
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true"/>

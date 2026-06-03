@@ -7,7 +7,7 @@ class DeviceEntity {
   @Id()
   int id = 0;
 
-  /// Globally unique device identifier (MAC address or Matter Node ID).
+  /// Globally unique device identifier (MAC address (WiFi interface)).
   /// Replace-on-conflict acts as an upsert when provisioning the same device twice.
   @Unique(onConflict: ConflictStrategy.replace)
   @Index()

@@ -216,3 +216,157 @@ exports.revertDeviceToFactory = functions.https.onRequest((req, res) => {
     return res.json({ success: true });
   });
 });
+
+// ── updateDeviceState ─────────────────────────────────────────────────────────
+// Called by the EMQX Rule Engine webhook OR the standalone MQTT bridge process
+// (functions/mqtt_bridge/bridge.js) whenever a device publishes telemetry.
+//
+// Two paths:
+//   POST { mac, state }     — telemetry (full or partial state snapshot)
+//   POST { mac, online }    — status (online / offline LWT)
+//
+// Auth: a shared secret in the "X-Bridge-Secret" header prevents unauthenticated
+// writes to device state. Set via: firebase functions:config:set bridge.secret=...
+
+exports.updateDeviceState = functions.https.onRequest(async (req, res) => {
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Method not allowed" });
+  }
+
+  // Verify the shared secret sent by the EMQX webhook or bridge process.
+  // This is NOT a user-facing OAuth token — it's a server-to-server secret.
+  const cfg    = functions.config();
+  const secret = cfg.bridge?.secret || process.env.BRIDGE_SECRET || "";
+  const header = req.headers["x-bridge-secret"] || "";
+
+  if (secret && !require("crypto").timingSafeEqual(
+    Buffer.from(header),
+    Buffer.from(secret),
+  )) {
+    return res.status(401).json({ error: "Invalid bridge secret" });
+  }
+
+  const { mac, state, online } = req.body || {};
+
+  if (!mac || !DEVICE_ID_RE.test(mac)) {
+    return res.status(400).json({ error: "Invalid or missing mac" });
+  }
+
+  const macUpper = mac.toUpperCase();
+
+  if (typeof online === "boolean") {
+    // Status update — just flip the online flag and timestamp
+    await db.ref(`device_states/${macUpper}`).update({
+      online,
+      last_updated: Date.now(),
+    });
+    return res.json({ success: true });
+  }
+
+  if (state && typeof state === "object") {
+    // Telemetry update — strip identity fields that belong in device_registry,
+    // not in the live state mirror. Then merge with existing state (update
+    // rather than set so fields absent from this message are preserved).
+    const { device_id, name, capabilities, firmware_version, local_ip, ...stateFields } = state;
+    await db.ref(`device_states/${macUpper}`).update({
+      ...stateFields,
+      online:       true,
+      last_updated: Date.now(),
+    });
+    return res.json({ success: true });
+  }
+
+  return res.status(400).json({ error: "Request must contain 'state' object or 'online' boolean" });
+});
+
+// ── linkDeviceToUser ──────────────────────────────────────────────────────────
+// Called by the Flutter app after account login to associate devices with the
+// authenticated user. This ownership record is what Google Home and Alexa read
+// when deciding which devices to show in a user's account.
+//
+// Auth: Firebase ID token in Authorization header ("Bearer <idToken>").
+// Body: { device_id, auth_token } — same auth_token the device was provisioned with.
+//
+// Security model: the device auth_token is verified against device_registry so
+// only someone who physically provisioned the device can link it to their account.
+
+exports.linkDeviceToUser = functions.https.onRequest((req, res) => {
+  cors(req, res, async () => {
+    if (req.method !== "POST") {
+      return res.status(405).json({ error: "Method not allowed" });
+    }
+
+    // Verify the Firebase ID token to find out which user is calling.
+    // The Flutter app gets an ID token via FirebaseAuth.currentUser.getIdToken().
+    const authHeader = req.headers.authorization || "";
+    if (!authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({ error: "Missing Authorization header" });
+    }
+    const idToken = authHeader.slice(7);
+
+    let decodedToken;
+    try {
+      decodedToken = await admin.auth().verifyIdToken(idToken);
+    } catch (err) {
+      return res.status(401).json({ error: "Invalid ID token" });
+    }
+    const uid = decodedToken.uid;
+
+    const { device_id, auth_token } = req.body || {};
+
+    if (!device_id || !auth_token) {
+      return res.status(400).json({ error: "Missing device_id or auth_token" });
+    }
+
+    const deviceId = device_id.toUpperCase();
+    const token    = auth_token.toUpperCase();
+
+    // Verify the device auth_token so the user must have provisioned the device.
+    const registrySnap = await db.ref(`device_registry/${deviceId}`).once("value");
+    if (!registrySnap.exists() || !safeEqual(registrySnap.val().auth_token, token)) {
+      return res.status(401).json({ error: "Unauthorized — invalid device credentials" });
+    }
+
+    // Write the ownership mapping — a simple presence key (value true) is enough.
+    // user_devices/{uid}/{mac}: true
+    await db.ref(`user_devices/${uid}/${deviceId}`).set(true);
+
+    return res.json({ success: true });
+  });
+});
+
+// ── OAuth 2.0 Authorization Server ───────────────────────────────────────────
+// Google Home and Alexa both require OAuth 2.0 Authorization Code flow for
+// account linking. These three endpoints implement the full server:
+//
+//   GET  /oauthLoginPage  — serves the HTML login form the user sees in the
+//                           voice assistant's account linking UI
+//   POST /oauthAuthorize  — verifies credentials, issues auth code, redirects
+//   POST /oauthToken      — exchanges auth code or refresh token for access token
+//
+// Configuration (set via firebase functions:config:set):
+//   oauth.google_client_id     / oauth.google_client_secret
+//   oauth.alexa_client_id      / oauth.alexa_client_secret
+//   oauth.firebase_api_key     (the Web API Key from Firebase console)
+
+const { oauthLoginPage, oauthAuthorize, oauthToken } = require("./lib/oauth");
+
+exports.oauthLoginPage  = functions.https.onRequest(oauthLoginPage);
+exports.oauthAuthorize  = functions.https.onRequest(oauthAuthorize);
+exports.oauthToken      = functions.https.onRequest(oauthToken);
+
+// ── Google Home Smart Home Action ─────────────────────────────────────────────
+// Handles SYNC, QUERY, EXECUTE, and DISCONNECT intents from Google Home.
+// Fulfillment URL (set in Actions Console):
+//   https://us-central1-YOUR_PROJECT_ID.cloudfunctions.net/googleSmartHome
+
+const { googleSmartHomeHandler } = require("./lib/smarthome_google");
+exports.googleSmartHome = functions.https.onRequest(googleSmartHomeHandler);
+
+// ── Amazon Alexa Smart Home Skill ─────────────────────────────────────────────
+// Handles Discovery, ReportState, and all control directives from Alexa.
+// Endpoint URL (set in Alexa Developer Console):
+//   https://us-central1-YOUR_PROJECT_ID.cloudfunctions.net/alexaSmartHome
+
+const { alexaSmartHomeHandler } = require("./lib/smarthome_alexa");
+exports.alexaSmartHome = functions.https.onRequest(alexaSmartHomeHandler);

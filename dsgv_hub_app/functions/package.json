@@ -1,6 +1,6 @@
 {
   "name": "dsgv-hub-functions",
-  "description": "Firebase Cloud Functions — DSGV Hub device config gateway",
+  "description": "Firebase Cloud Functions — DSGV Hub device config gateway + C2C voice control",
   "scripts": {
     "deploy": "firebase deploy --only functions",
     "logs": "firebase functions:log"
@@ -12,7 +12,8 @@
   "dependencies": {
     "firebase-admin": "^12.0.0",
     "firebase-functions": "^4.9.0",
-    "cors": "^2.8.5"
+    "cors": "^2.8.5",
+    "mqtt": "^5.3.4"
   },
   "private": true
 }

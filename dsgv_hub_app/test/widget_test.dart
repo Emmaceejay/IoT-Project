@@ -1,6 +1,6 @@
 ﻿import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:dsgv_hub_app/domain/models/matter_device.dart';
+import 'package:dsgv_hub_app/domain/models/iot_device.dart';
 import 'package:dsgv_hub_app/domain/services/device_manager.dart';
 import 'package:dsgv_hub_app/data/repositories/device_repository.dart';
 import 'package:dsgv_hub_app/main.dart';
@@ -8,11 +8,11 @@ import 'package:dsgv_hub_app/main.dart';
 /// Stub repository — avoids real Isar initialisation in widget tests.
 class _StubRepository implements DeviceRepository {
   @override
-  Future<List<MatterDevice>> getDevices() async => const [];
+  Future<List<IoTDevice>> getDevices() async => const [];
   @override
   Future<void> updateDeviceState(String id, Map<String, dynamic> p) async {}
   @override
-  Future<void> provisionDevice(MatterDevice device) async {}
+  Future<void> provisionDevice(IoTDevice device) async {}
   @override
   Future<void> removeDevice(String id) async {}
 }
