@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../domain/models/matter_device.dart';
+import '../../domain/models/iot_device.dart';
 import '../../domain/services/device_manager.dart';
 import '../../domain/services/ota_service.dart';
 
@@ -10,7 +10,7 @@ import '../../domain/services/ota_service.dart';
 /// – Live telemetry
 /// – OTA firmware update controls with progress
 class DeviceDetailScreen extends ConsumerStatefulWidget {
-  final MatterDevice device;
+  final IoTDevice device;
   const DeviceDetailScreen({super.key, required this.device});
 
   @override

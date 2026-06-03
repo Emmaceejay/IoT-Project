@@ -13,7 +13,8 @@
  *   4. GPIO init (relays, LEDC PWM, ADC, sensors)
  *   5. Wi-Fi connect — enters BLE provisioning mode if no credentials found
  *   6. HTTP server (Tasmota-compatible REST API, port 80)
- *   7. MQTT client (cloud TLS → local Mosquitto fallback)
+ *   7. mDNS service  — advertises device on local network for auto-discovery
+ *   8. MQTT client   — remote control, telemetry, C2C cloud bridge
  */
 
 #include "nvs_flash.h"
@@ -29,6 +30,7 @@
 #include "dsgv_device_config.h"
 #include "wifi_manager.h"
 #include "dsgv_http_server.h"
+#include "dsgv_mdns.h"        // local network discovery
 #include "dsgv_provisioning.h"
 
 esp_err_t DSGV_mqtt_start(void);
@@ -82,12 +84,13 @@ void dsgv_app_main(void)
     // ── Step 5: Local HTTP server ─────────────────────────────────────────────
     ESP_ERROR_CHECK(DSGV_http_server_start());
 
-    // ── Step 6: MQTT client ───────────────────────────────────────────────────
-    ESP_ERROR_CHECK(DSGV_mqtt_start());
+    // ── Step 6: mDNS ──────────────────────────────────────────────────────────
+    // Advertises this device on the LAN so the DSGV Hub App can discover it
+    // by querying _dsgv._tcp.local without waiting for an MQTT announce.
+    ESP_ERROR_CHECK(DSGV_mdns_start());
 
-    // ── Step 7: Matter endpoint (uncomment when esp-matter SDK is linked) ─────
-    // ESP_ERROR_CHECK(matter_endpoint_start());
-    ESP_LOGI(TAG, "Matter: uncomment matter_endpoint_start() when esp-matter SDK linked.");
+    // ── Step 7: MQTT client (remote control + C2C cloud bridge) ──────────────
+    ESP_ERROR_CHECK(DSGV_mqtt_start());
 
     ESP_LOGI(TAG, "=== DSGV Hub Firmware fully initialized ===");
     ESP_LOGI(TAG, "Device     : %s  caps=%s  relays=%u",

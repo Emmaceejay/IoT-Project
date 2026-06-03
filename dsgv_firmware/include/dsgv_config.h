@@ -171,9 +171,14 @@
 #define OTA_MIN_SIGNAL_DBMS      -70
 #define OTA_TIMEOUT_MS           60000
 
-// ── Matter ────────────────────────────────────────────────────────────────────
-#define MATTER_PRODUCT_ID        0x8001  // register with CSA for production
-#define MATTER_VENDOR_ID         0xFFF1  // test vendor (replace for production)
+// ── mDNS (Local Network Discovery) ───────────────────────────────────────────
+// See components/dsgv_common/include/dsgv_mdns.h for full documentation.
+// These constants are duplicated here for any code that includes only this
+// top-level header rather than the component header.
+#define MDNS_SERVICE_DSGV        "_dsgv"
+#define MDNS_SERVICE_HTTP        "_http"
+#define MDNS_PROTO_TCP           "_tcp"
+#define MDNS_HTTP_PORT           80
 
 // ── BLE WiFi Provisioning ─────────────────────────────────────────────────────
 // Device BLE name:  DSGV_PROV_DEVICE_NAME_PREFIX + last 3 MAC bytes (hex)

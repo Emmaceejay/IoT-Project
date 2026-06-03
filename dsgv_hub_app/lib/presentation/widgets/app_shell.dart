@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../domain/services/mqtt_service.dart';
 import '../screens/dashboard_screen.dart';
-import '../screens/matter_pairing_screen.dart';
+import '../screens/device_pairing_screen.dart';
 import '../screens/settings_screen.dart';
 
 /// Root shell with a persistent bottom navigation bar.
@@ -28,7 +28,7 @@ class _AppShellState extends ConsumerState<AppShell> {
 
   final List<Widget> _screens = const [
     DashboardScreen(),
-    MatterPairingScreen(),
+    DevicePairingScreen(),
     SettingsScreen(),
   ];
 

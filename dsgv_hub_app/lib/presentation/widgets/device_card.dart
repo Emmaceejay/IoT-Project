@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
-import '../../domain/models/matter_device.dart';
+import '../../domain/models/iot_device.dart';
 import '../widgets/schema_driven_ui_builder.dart';
 import '../screens/device_detail_screen.dart';
 
 /// Expandable card representing a single IoT device on the Dashboard.
 class DeviceCard extends StatefulWidget {
-  final MatterDevice device;
+  final IoTDevice device;
 
   const DeviceCard({super.key, required this.device});
 

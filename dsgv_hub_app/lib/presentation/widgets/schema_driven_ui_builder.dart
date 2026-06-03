@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../../domain/models/matter_device.dart';
+import '../../domain/models/iot_device.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../domain/services/device_manager.dart';
 
@@ -9,7 +9,7 @@ import '../../domain/services/device_manager.dart';
 /// It reads a device's [capabilities] list and dynamically renders
 /// the correct controls — no hardcoded UI per device type.
 class SchemaDrivenUiBuilder extends ConsumerWidget {
-  final MatterDevice device;
+  final IoTDevice device;
 
   const SchemaDrivenUiBuilder({super.key, required this.device});
 

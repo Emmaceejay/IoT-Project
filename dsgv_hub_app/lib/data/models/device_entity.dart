@@ -1,6 +1,6 @@
 import 'dart:convert';
 import 'package:objectbox/objectbox.dart';
-import '../../domain/models/matter_device.dart';
+import '../../domain/models/iot_device.dart';
 
 @Entity()
 class DeviceEntity {
@@ -33,7 +33,7 @@ class DeviceEntity {
 
   // ── Conversions ───────────────────────────────────────────────────────────
 
-  MatterDevice toDomain() => MatterDevice(
+  IoTDevice toDomain() => IoTDevice(
         uniqueDeviceId: uniqueDeviceId,
         deviceName: deviceName,
         status: DeviceStatus.values.firstWhere(
@@ -49,7 +49,7 @@ class DeviceEntity {
         authToken: authToken,
       );
 
-  static DeviceEntity fromDomain(MatterDevice d) => DeviceEntity()
+  static DeviceEntity fromDomain(IoTDevice d) => DeviceEntity()
     ..uniqueDeviceId = d.uniqueDeviceId
     ..deviceName = d.deviceName
     ..statusName = d.status.name

@@ -170,9 +170,22 @@
 #define OTA_MIN_SIGNAL_DBMS      -70
 #define OTA_TIMEOUT_MS           60000
 
-// ── Matter ────────────────────────────────────────────────────────────────────
-#define MATTER_PRODUCT_ID        0x8001  // register with CSA for production
-#define MATTER_VENDOR_ID         0xFFF1  // test vendor (replace for production)
+// ── mDNS (Local Network Discovery) ───────────────────────────────────────────
+// The device advertises itself on the LAN so the DSGV Hub App can find it
+// without waiting for an MQTT announce. Both service types are registered:
+//   _dsgv._tcp   — primary service queried by the DSGV Hub App
+//   _http._tcp   — secondary, for compatibility with Tasmota-aware tools
+//
+// Hostname format: dsgv-<MAC_NO_COLONS>  e.g. "dsgv-a1b2c3d4e5f6"
+// TXT records:
+//   id=<MAC>    — matches uniqueDeviceId used in MQTT topics
+//   caps=<json> — capabilities array, e.g. ["relay","brightness"]
+//   type=<str>  — device type label, e.g. "Switch" or "Dimmer"
+//   fw=<str>    — firmware version, e.g. "1.0.0"
+#define MDNS_SERVICE_DSGV        "_dsgv"
+#define MDNS_SERVICE_HTTP        "_http"
+#define MDNS_PROTO_TCP           "_tcp"
+#define MDNS_HTTP_PORT           HTTP_SERVER_PORT  // 80
 
 // ── BLE WiFi Provisioning ─────────────────────────────────────────────────────
 // Device BLE name: DSGV_PROV_DEVICE_NAME_PREFIX + last 3 MAC bytes (hex)

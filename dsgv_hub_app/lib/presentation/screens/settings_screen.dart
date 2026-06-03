@@ -556,7 +556,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           // ── App Info ───────────────────────────────────────────────────
           const Center(
             child: Text(
-              'DSGV Hub  v1.0.0\nMatter + MQTT IoT Platform',
+              'DSGV Hub  v1.0.0\nC2C + WiFi/MQTT IoT Platform',
               textAlign: TextAlign.center,
               style: TextStyle(color: Colors.white24, fontSize: 12),
             ),

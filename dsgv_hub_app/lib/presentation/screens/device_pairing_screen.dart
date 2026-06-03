@@ -1,12 +1,15 @@
-﻿import 'dart:async';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import '../../domain/services/ble_provisioning_service.dart';
 import '../../domain/services/device_manager.dart';
-import '../../domain/services/matter_commissioning_service.dart';
 
 // ── Device type presets ───────────────────────────────────────────────────────
+// Each preset maps a human-readable label to the capability list that gets
+// sent to the device over BLE and stored in the device's NVS flash.
+// The capabilities list is what drives both the local UI and the C2C voice
+// trait mapping in the cloud (Google Home / Alexa / SmartThings).
 
 class _DevicePreset {
   final String label;
@@ -23,68 +26,63 @@ class _DevicePreset {
 }
 
 const _kDevicePresets = [
+  // Switches — one or more independent relay outputs
   _DevicePreset(label: '1-Gang Switch',  deviceType: 'Switch',     capabilities: ['relay'],                                                   relayCount: 1),
   _DevicePreset(label: '2-Gang Switch',  deviceType: 'Switch',     capabilities: ['relay', 'relay_2'],                                        relayCount: 2),
   _DevicePreset(label: '3-Gang Switch',  deviceType: 'Switch',     capabilities: ['relay', 'relay_2', 'relay_3'],                             relayCount: 3),
   _DevicePreset(label: '4-Gang Switch',  deviceType: 'Switch',     capabilities: ['relay', 'relay_2', 'relay_3', 'relay_4'],                  relayCount: 4),
+
+  // Lighting — relay + LEDC PWM channels
   _DevicePreset(label: 'Dimmer',         deviceType: 'Dimmer',     capabilities: ['relay', 'brightness'],                                     relayCount: 1),
   _DevicePreset(label: 'Color Temp',     deviceType: 'Light',      capabilities: ['relay', 'brightness', 'color_temp'],                       relayCount: 1),
   _DevicePreset(label: 'RGB Light',      deviceType: 'Light',      capabilities: ['relay', 'brightness', 'rgb'],                              relayCount: 1),
+
+  // Sensors — read-only, no relay outputs
   _DevicePreset(label: 'Temp Sensor',    deviceType: 'Sensor',     capabilities: ['temperature', 'humidity'],                                 relayCount: 0),
   _DevicePreset(label: 'Motion Sensor',  deviceType: 'Sensor',     capabilities: ['motion'],                                                  relayCount: 0),
   _DevicePreset(label: 'Contact Sensor', deviceType: 'Sensor',     capabilities: ['contact'],                                                 relayCount: 0),
+
+  // Climate
   _DevicePreset(label: 'Thermostat',     deviceType: 'Thermostat', capabilities: ['temperature', 'hvac_mode'],                                relayCount: 1),
 ];
 
-// ── QR code type ──────────────────────────────────────────────────────────────
-
-enum _QrType { dsgvProvision, matter }
+// ── QR code parsing ───────────────────────────────────────────────────────────
+// DSGV provisioning QR codes always use the dsgv:// scheme:
+//   dsgv://provision?name=DSGVHub_A1B2C3
+// The "name" parameter is the BLE device name the app searches for.
 
 class _ParsedQr {
-  final _QrType type;
   final String raw;
 
-  /// For dsgvProvision: the BLE device name (e.g. "DSGVHub_A1B2C3")
-  final String? dsgvDeviceName;
+  /// The BLE device name extracted from the QR code's "name=" parameter,
+  /// e.g. "DSGVHub_A1B2C3". The BLE provisioning service scans for this name.
+  final String dsgvDeviceName;
 
-  const _ParsedQr.dsgv(this.raw, this.dsgvDeviceName)
-      : type = _QrType.dsgvProvision;
+  const _ParsedQr(this.raw, this.dsgvDeviceName);
 
-  const _ParsedQr.matter(this.raw)
-      : type = _QrType.matter,
-        dsgvDeviceName = null;
-
-  /// Parses a raw QR string and returns a typed result, or null if unknown.
+  /// Tries to parse [raw] as a DSGV provisioning QR code.
+  /// Returns null for any other QR code type.
   static _ParsedQr? tryParse(String raw) {
-    // dsgv://provision?name=DSGVHub_XXXXXX
-    if (raw.startsWith('dsgv://provision')) {
-      final uri = Uri.tryParse(raw);
-      final name = uri?.queryParameters['name'];
-      if (name != null && name.isNotEmpty) {
-        return _ParsedQr.dsgv(raw, name);
-      }
-      return null;
-    }
-    // MT:XXXXXX — Matter setup payload
-    if (raw.startsWith('MT:')) {
-      return _ParsedQr.matter(raw);
-    }
-    return null;
+    if (!raw.startsWith('dsgv://provision')) return null;
+    final uri  = Uri.tryParse(raw);
+    final name = uri?.queryParameters['name'];
+    if (name == null || name.isEmpty) return null;
+    return _ParsedQr(raw, name);
   }
 }
 
 // ── Screen ────────────────────────────────────────────────────────────────────
 
-class MatterPairingScreen extends ConsumerStatefulWidget {
-  const MatterPairingScreen({super.key});
+class DevicePairingScreen extends ConsumerStatefulWidget {
+  const DevicePairingScreen({super.key});
 
   @override
-  ConsumerState<MatterPairingScreen> createState() =>
-      _MatterPairingScreenState();
+  ConsumerState<DevicePairingScreen> createState() =>
+      _DevicePairingScreenState();
 }
 
-class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
-  // Controllers
+class _DevicePairingScreenState extends ConsumerState<DevicePairingScreen> {
+  // ── Controllers ───────────────────────────────────────────────────────────
   final _nameCtrl     = TextEditingController();
   final _ssidCtrl     = TextEditingController();
   final _passwordCtrl = TextEditingController();
@@ -93,16 +91,14 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
     facing: CameraFacing.back,
   );
 
-  // State
-  _ParsedQr? _parsedQr;
-  bool _scannerActive = true;
-  bool _obscurePassword = true;
-  _DevicePreset _selectedPreset = _kDevicePresets.first;
-
-  // Provisioning/commissioning progress
-  bool _inProgress = false;
-  String? _statusMessage;
-  bool _isSuccess = false;
+  // ── State ─────────────────────────────────────────────────────────────────
+  _ParsedQr?      _parsedQr;
+  bool            _scannerActive    = true;
+  bool            _obscurePassword  = true;
+  _DevicePreset   _selectedPreset   = _kDevicePresets.first;
+  bool            _inProgress       = false;
+  String?         _statusMessage;
+  bool            _isSuccess        = false;
   ProvisioningStep? _provStep;
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
@@ -124,41 +120,39 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
 
     final parsed = _ParsedQr.tryParse(raw);
     if (parsed == null) {
-      // Scanned something unrecognised — show a brief hint
       setState(() {
         _statusMessage =
-            'Unrecognised QR code. Scan a DSGV provisioning or Matter QR code.';
+            'Unrecognised QR code. Scan a DSGV provisioning QR (dsgv://…).';
       });
       return;
     }
 
     _scannerCtrl.stop();
     setState(() {
-      _parsedQr = parsed;
-      _scannerActive = false;
-      _statusMessage = parsed.type == _QrType.dsgvProvision
-          ? 'DSGV device found: ${parsed.dsgvDeviceName}.\n'
-            'Enter a name and your Wi-Fi credentials, then tap Provision.'
-          : 'Matter QR captured. Enter a name and tap Commission.';
+      _parsedQr       = parsed;
+      _scannerActive  = false;
+      _statusMessage  =
+          'Device found: ${parsed.dsgvDeviceName}.\n'
+          'Enter a name and your Wi-Fi credentials, then tap Provision.';
     });
   }
 
   void _resetScanner() {
     setState(() {
-      _parsedQr = null;
-      _scannerActive = true;
-      _statusMessage = null;
-      _isSuccess = false;
-      _inProgress = false;
-      _provStep = null;
+      _parsedQr       = null;
+      _scannerActive  = true;
+      _statusMessage  = null;
+      _isSuccess      = false;
+      _inProgress     = false;
+      _provStep       = null;
       _selectedPreset = _kDevicePresets.first;
     });
     _scannerCtrl.start();
   }
 
-  // ── Action handlers ───────────────────────────────────────────────────────
+  // ── BLE provisioning ──────────────────────────────────────────────────────
 
-  Future<void> _startAction() async {
+  Future<void> _startProvisioning() async {
     if (_nameCtrl.text.trim().isEmpty) {
       setState(() => _statusMessage = 'Please enter a device name.');
       return;
@@ -167,15 +161,6 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
       setState(() => _statusMessage = 'Please scan the device QR code first.');
       return;
     }
-
-    if (_parsedQr!.type == _QrType.dsgvProvision) {
-      await _runBleProvisioning();
-    } else {
-      await _runMatterCommissioning();
-    }
-  }
-
-  Future<void> _runBleProvisioning() async {
     if (_ssidCtrl.text.trim().isEmpty) {
       setState(() => _statusMessage = 'Please enter your Wi-Fi network name (SSID).');
       return;
@@ -186,17 +171,19 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
     }
 
     setState(() {
-      _inProgress = true;
+      _inProgress    = true;
       _statusMessage = null;
-      _isSuccess = false;
+      _isSuccess     = false;
     });
 
-    final service = ref.read(matterCommissioningProvider);
-    final stream = service.provisionViaBle(
-      deviceName: _parsedQr!.dsgvDeviceName!,
-      ssid: _ssidCtrl.text.trim(),
-      password: _passwordCtrl.text,
-      assignedName: _nameCtrl.text.trim(),
+    // BleProvisioningService.provision() is a stream that yields progress
+    // steps as it connects to the device over Bluetooth, sends Wi-Fi
+    // credentials, and waits for the device to reboot and confirm.
+    // Each ProvisioningStatus carries a step enum and optional message string.
+    final stream = BleProvisioningService.provision(
+      deviceName:   _parsedQr!.dsgvDeviceName,
+      ssid:         _ssidCtrl.text.trim(),
+      password:     _passwordCtrl.text,
       deviceType:   _selectedPreset.deviceType,
       capabilities: _selectedPreset.capabilities,
       relayCount:   _selectedPreset.relayCount,
@@ -205,28 +192,33 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
     await for (final status in stream) {
       if (!mounted) return;
       setState(() {
-        _provStep = status.step;
+        _provStep      = status.step;
         _statusMessage = status.message ?? _stepLabel(status.step);
-        _isSuccess = status.step == ProvisioningStep.success;
+        _isSuccess     = status.step == ProvisioningStep.success;
         if (status.isTerminal) _inProgress = false;
       });
+
       if (status.step == ProvisioningStep.success) {
         if (status.authToken != null && status.provisionedDeviceId != null) {
           final manager = ref.read(deviceManagerProvider.notifier);
 
-          // Store token locally so MQTT announce can be matched to this device
+          // Cache the auth token locally so that when the device's MQTT
+          // announce arrives (a few seconds later, after reboot) the
+          // DeviceManager can match the announce to this provisioning session
+          // and attach the auth token to the device record.
           manager.setPendingToken(
             status.provisionedDeviceId!,
             status.authToken!,
           );
 
-          // Register device in Firebase — creates its config entry so the
-          // firmware can fetch the broker via HTTPS on first boot
+          // Register the device in Firebase so the device firmware can fetch
+          // its broker config via HTTPS on its first boot after provisioning.
           manager.registerDevice(
             status.provisionedDeviceId!,
             status.authToken!,
           );
         }
+
         await Future.delayed(const Duration(seconds: 1));
         if (mounted) Navigator.of(context).pop();
         return;
@@ -234,34 +226,9 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
     }
   }
 
-  Future<void> _runMatterCommissioning() async {
-    setState(() {
-      _inProgress = true;
-      _statusMessage = 'Commissioning Matter device…';
-      _isSuccess = false;
-    });
-
-    final service = ref.read(matterCommissioningProvider);
-    final result = await service.commissionDevice(
-      qrCodeString: _parsedQr!.raw,
-      assignedName: _nameCtrl.text.trim(),
-    );
-
-    if (!mounted) return;
-    setState(() {
-      _inProgress = false;
-      _statusMessage = result.message;
-      _isSuccess = result.success;
-    });
-
-    if (result.success) {
-      await Future.delayed(const Duration(seconds: 1));
-      if (mounted) Navigator.of(context).pop();
-    }
-  }
-
   // ── Helpers ───────────────────────────────────────────────────────────────
 
+  /// Maps the current [ProvisioningStep] to a display string shown in the UI.
   String _stepLabel(ProvisioningStep step) => switch (step) {
         ProvisioningStep.requestingPermissions => 'Requesting Bluetooth permissions…',
         ProvisioningStep.scanningForDevice     => 'Scanning for device via BLE…',
@@ -273,27 +240,12 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
         ProvisioningStep.failed                => 'Provisioning failed.',
       };
 
-  bool get _canAct {
+  /// Whether the provision button should be enabled.
+  bool get _canProvision {
     if (_inProgress || _parsedQr == null) return false;
-    if (_nameCtrl.text.trim().isEmpty) return false;
-    // For BLE provisioning the SSID is also mandatory
-    if (_parsedQr!.type == _QrType.dsgvProvision &&
-        _ssidCtrl.text.trim().isEmpty) {
-      return false;
-    }
+    if (_nameCtrl.text.trim().isEmpty)    return false;
+    if (_ssidCtrl.text.trim().isEmpty)    return false;
     return true;
-  }
-
-  String get _actionLabel {
-    if (_parsedQr == null) return 'Scan QR Code First';
-    if (_inProgress) {
-      return _parsedQr!.type == _QrType.dsgvProvision
-          ? 'Provisioning…'
-          : 'Commissioning…';
-    }
-    return _parsedQr!.type == _QrType.dsgvProvision
-        ? 'Provision Device'
-        : 'Commission Device';
   }
 
   // ── Build ─────────────────────────────────────────────────────────────────
@@ -315,12 +267,10 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // ── QR Scanner / Preview ─────────────────────────────────────
             _buildScannerSection(),
-
             const SizedBox(height: 28),
 
-            // ── Device Name ───────────────────────────────────────────────
+            // Device name field
             _buildTextField(
               controller: _nameCtrl,
               label: 'Device Name (e.g., Kitchen Switch)',
@@ -328,14 +278,10 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
               onChanged: (_) => setState(() {}),
             ),
 
-            // ── Device type preset (DSGV BLE provisioning only) ─────────
-            if (_parsedQr?.type == _QrType.dsgvProvision) ...[
+            // Device type and Wi-Fi fields — only shown after a valid QR scan
+            if (_parsedQr != null) ...[
               const SizedBox(height: 16),
               _buildPresetDropdown(),
-            ],
-
-            // ── Wi-Fi credentials (DSGV BLE provisioning only) ───────────
-            if (_parsedQr?.type == _QrType.dsgvProvision) ...[
               const SizedBox(height: 16),
               _buildTextField(
                 controller: _ssidCtrl,
@@ -363,15 +309,13 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
 
             const SizedBox(height: 20),
 
-            // ── Progress indicator (BLE provisioning) ─────────────────────
-            if (_inProgress &&
-                _parsedQr?.type == _QrType.dsgvProvision &&
-                _provStep != null) ...[
+            // Provisioning step progress bar
+            if (_inProgress && _provStep != null) ...[
               _buildProvisioningProgress(_provStep!),
               const SizedBox(height: 12),
             ],
 
-            // ── Status message ────────────────────────────────────────────
+            // Status message (error, progress, or success)
             if (_statusMessage != null) ...[
               Text(
                 _statusMessage!,
@@ -389,7 +333,7 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
               const SizedBox(height: 16),
             ],
 
-            // ── Action button ─────────────────────────────────────────────
+            // Provision button
             ElevatedButton.icon(
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF00E5FF),
@@ -400,7 +344,7 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12)),
               ),
-              onPressed: _canAct ? _startAction : null,
+              onPressed: _canProvision ? _startProvisioning : null,
               icon: _inProgress
                   ? const SizedBox(
                       width: 18,
@@ -408,15 +352,17 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
                       child: CircularProgressIndicator(
                           strokeWidth: 2, color: Colors.black),
                     )
-                  : Icon(_parsedQr?.type == _QrType.dsgvProvision
-                      ? Icons.bluetooth_searching
-                      : Icons.devices),
-              label: Text(_actionLabel),
+                  : const Icon(Icons.bluetooth_searching),
+              label: Text(
+                _inProgress
+                    ? 'Provisioning…'
+                    : _parsedQr == null
+                        ? 'Scan QR Code First'
+                        : 'Provision Device',
+              ),
             ),
 
             const SizedBox(height: 32),
-
-            // ── Info footer ───────────────────────────────────────────────
             _buildFooter(),
           ],
         ),
@@ -434,8 +380,7 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
         decoration: BoxDecoration(
           color: const Color(0xFF121826),
           border: Border.all(
-            color: const Color(0xFF00E5FF).withValues(alpha: 0.3),
-          ),
+              color: const Color(0xFF00E5FF).withValues(alpha: 0.3)),
           borderRadius: BorderRadius.circular(20),
         ),
         child: _scannerActive
@@ -451,7 +396,7 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
                     padding: const EdgeInsets.all(8),
                     color: Colors.black54,
                     child: const Text(
-                      'Scan a DSGV provisioning QR (DSGV://…) or Matter QR (MT:…)',
+                      'Scan DSGV provisioning QR code (dsgv://…)',
                       textAlign: TextAlign.center,
                       style: TextStyle(color: Colors.white70, fontSize: 11),
                     ),
@@ -461,25 +406,18 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
             : Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(
-                    _parsedQr?.type == _QrType.dsgvProvision
-                        ? Icons.bluetooth_searching
-                        : Icons.check_circle,
-                    size: 48,
-                    color: const Color(0xFF00E5FF),
-                  ),
+                  const Icon(Icons.bluetooth_searching,
+                      size: 48, color: Color(0xFF00E5FF)),
                   const SizedBox(height: 8),
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
                     child: Text(
-                      _parsedQr?.type == _QrType.dsgvProvision
-                          ? 'DSGV: ${_parsedQr!.dsgvDeviceName}'
-                          : 'Matter: ${_parsedQr?.raw}',
+                      _parsedQr!.dsgvDeviceName,
                       textAlign: TextAlign.center,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                          color: Colors.white70, fontSize: 12),
+                      style:
+                          const TextStyle(color: Colors.white70, fontSize: 12),
                     ),
                   ),
                   const SizedBox(height: 12),
@@ -536,7 +474,8 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
       decoration: InputDecoration(
         labelText: 'Device Type',
         labelStyle: const TextStyle(color: Colors.white38),
-        prefixIcon: const Icon(Icons.devices_other, color: Color(0xFF00E5FF)),
+        prefixIcon:
+            const Icon(Icons.devices_other, color: Color(0xFF00E5FF)),
         filled: true,
         fillColor: const Color(0xFF121826),
         border: OutlineInputBorder(
@@ -549,18 +488,19 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
         ),
       ),
       items: _kDevicePresets
-          .map((p) => DropdownMenuItem(
-                value: p,
-                child: Text(p.label),
-              ))
+          .map((p) =>
+              DropdownMenuItem(value: p, child: Text(p.label)))
           .toList(),
       onChanged: _inProgress
           ? null
-          : (p) => setState(() => _selectedPreset = p ?? _selectedPreset),
+          : (p) =>
+              setState(() => _selectedPreset = p ?? _selectedPreset),
     );
   }
 
   Widget _buildProvisioningProgress(ProvisioningStep step) {
+    // The steps are ordered here to match the actual provisioning sequence.
+    // The progress bar advances one notch per step.
     const steps = [
       ProvisioningStep.requestingPermissions,
       ProvisioningStep.scanningForDevice,
@@ -570,32 +510,24 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
       ProvisioningStep.waitingForDevice,
     ];
     final currentIndex = steps.indexOf(step);
-    return Column(
-      children: [
-        LinearProgressIndicator(
-          value: currentIndex < 0
-              ? null
-              : (currentIndex + 1) / steps.length,
-          backgroundColor: const Color(0xFF1E2736),
-          color: const Color(0xFF00E5FF),
-          borderRadius: BorderRadius.circular(4),
-          minHeight: 4,
-        ),
-      ],
+    return LinearProgressIndicator(
+      value: currentIndex < 0
+          ? null // indeterminate while calculating
+          : (currentIndex + 1) / steps.length,
+      backgroundColor: const Color(0xFF1E2736),
+      color: const Color(0xFF00E5FF),
+      borderRadius: BorderRadius.circular(4),
+      minHeight: 4,
     );
   }
 
   Widget _buildFooter() {
-    final isDSGV = _parsedQr?.type == _QrType.dsgvProvision;
-    return Text(
-      isDSGV
-          ? 'Wi-Fi credentials are sent directly to your device\n'
-            'over an encrypted BLE channel. They are never uploaded\n'
-            'to any server.'
-          : 'Matter pairing uses the OS-native BLE commissioning\n'
-            'stack to securely onboard your device.',
+    return const Text(
+      'Wi-Fi credentials are sent directly to your device\n'
+      'over an encrypted BLE channel. They are never uploaded\n'
+      'to any server.',
       textAlign: TextAlign.center,
-      style: const TextStyle(color: Colors.white24, fontSize: 11, height: 1.6),
+      style: TextStyle(color: Colors.white24, fontSize: 11, height: 1.6),
     );
   }
 }

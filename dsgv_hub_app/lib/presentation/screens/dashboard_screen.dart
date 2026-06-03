@@ -1,9 +1,9 @@
 ﻿import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../domain/models/matter_device.dart';
+import '../../domain/models/iot_device.dart';
 import '../../domain/services/device_manager.dart';
 import '../widgets/device_card.dart';
-import 'matter_pairing_screen.dart';
+import 'device_pairing_screen.dart';
 
 /// The Main Dashboard — the app's home screen.
 ///
@@ -44,11 +44,11 @@ class DashboardScreen extends ConsumerWidget {
             icon: const Icon(Icons.refresh, color: Colors.white54),
             onPressed: () => ref.read(deviceManagerProvider.notifier).refresh(),
           ),
-          // Matter QR Pair button
+          // Pair new device button
           IconButton(
             icon: const Icon(Icons.qr_code_scanner, color: Color(0xFF00E5FF)),
             tooltip: 'Pair New Device',
-            onPressed: () => _launchMatterPairing(context),
+            onPressed: () => _launchDevicePairing(context),
           ),
         ],
       ),
@@ -66,7 +66,7 @@ class DashboardScreen extends ConsumerWidget {
   }
 
   Widget _buildDeviceList(
-      BuildContext context, WidgetRef ref, List<MatterDevice> devices) {
+      BuildContext context, WidgetRef ref, List<IoTDevice> devices) {
     if (devices.isEmpty) {
       return const Center(
         child: Text(
@@ -116,14 +116,14 @@ class DashboardScreen extends ConsumerWidget {
     );
   }
 
-  void _launchMatterPairing(BuildContext context) {
+  void _launchDevicePairing(BuildContext context) {
     Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const MatterPairingScreen()),
+      MaterialPageRoute(builder: (_) => const DevicePairingScreen()),
     );
   }
 
   Widget _dismissibleCard(
-      BuildContext context, WidgetRef ref, MatterDevice d) {
+      BuildContext context, WidgetRef ref, IoTDevice d) {
     return Dismissible(
       key: Key(d.uniqueDeviceId),
       direction: DismissDirection.endToStart,

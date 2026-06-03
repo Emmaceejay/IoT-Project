@@ -1,58 +1,68 @@
 # DSGV Firmware SDK Config Defaults
-# These override ESP-IDF defaults for production IoT use
+# These settings override ESP-IDF defaults for production IoT use.
+# They apply to ALL device types. Per-device overrides live in:
+#   devices/<device_name>/sdkconfig.defaults
 
 # ── Partition table ───────────────────────────────────────────────────────────
 # Always use a custom CSV so partition layout is explicit and version-controlled.
 # Path is relative to each device project root (devices/<device_name>/), so
 # ../../ navigates up to the repo root where the CSV files live.
-# Default: 4 MB dual-bank OTA + isolated Matter NVS (partitions_4mb.csv).
+# Default: 4 MB dual-bank OTA (partitions_4mb.csv).
 # Override per-device to partitions_8mb.csv for 8 MB hardware variants.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="../../partitions_4mb.csv"
 
-# ── MQTT ─────────────────────────────────────────────────────────────────────
+# ── MQTT ──────────────────────────────────────────────────────────────────────
+# Buffer size: maximum MQTT message payload in bytes. 2048 B covers all
+# telemetry and command payloads with room to spare.
 CONFIG_MQTT_BUFFER_SIZE=2048
+# Task stack: MQTT client runs in its own FreeRTOS task. 6144 B is sufficient
+# for JSON serialisation + TLS handshake overhead.
 CONFIG_MQTT_TASK_STACK_SIZE=6144
 
-# ── Secure Boot / Flash Encryption (enable for production) ───────────────────
-# CONFIG_SECURE_BOOT=y
-# CONFIG_FLASH_ENCRYPTION_ENABLED=y
-
-# ── Matter / CHIP SDK ─────────────────────────────────────────────────────────
-CONFIG_ENABLE_CHIP_SHELL=n
-CONFIG_CHIP_ENABLE_PAIRING_AUTOSTART=y
-CONFIG_CHIP_TASK_STACK_SIZE=8192
-# Disable Matter's own OTA requestor — dsgv_ota.c handles OTA for this project.
-# Saves ~100 KB of binary space, which is significant on 4 MB flash.
-CONFIG_CHIP_OTA_REQUESTOR=n
-# Use the ESP-IDF system heap allocator instead of CHIP's internal allocator.
-# Reduces memory fragmentation and ROM footprint.
-CONFIG_CHIP_MALLOC_SYS_HEAP=y
-# Store all Matter pairing and fabric data in a dedicated NVS partition so
-# that a Matter factory-reset (decommission from HomeKit / Google Home / Alexa)
-# erases ONLY Matter pairing data, not Wi-Fi creds or device config.
-CONFIG_CHIP_NVS_PARTITION_NAME="matter_nvs"
-
 # ── TLS / mbedTLS ─────────────────────────────────────────────────────────────
+# CERTIFICATE_BUNDLE: bundles Mozilla's trusted CA list into the firmware so
+# HTTPS calls to Firebase and the MQTT broker can verify server certificates
+# without needing to provision a CA cert manually on each device.
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+# TLS_CLIENT: enables the mbedTLS TLS 1.2 client stack used by esp_http_client
+# (Firebase config fetch) and the MQTT client (cloud broker).
 CONFIG_MBEDTLS_TLS_CLIENT=y
 
-# ── BLE / NimBLE (for Wi-Fi provisioning on first boot) ──────────────────────
-# NimBLE works on ESP32-C3, ESP32-C6, and ESP32-S3 out of the box.
-# For the original ESP32 (classic), also add:
+# ── BLE / NimBLE (Wi-Fi provisioning on first boot) ───────────────────────────
+# NimBLE is Espressif's open-source BLE host stack. It is lighter than the
+# Bluedroid stack and works on ESP32-C3, C6, and S3 out of the box.
+# For the original ESP32 (classic) dual-mode controller, you also need:
 #   CONFIG_BTDM_CTRL_MODE_BLE_ONLY=y
-# to restrict the dual-mode BT controller to BLE-only and enable NimBLE.
+# which restricts the controller to BLE-only and enables NimBLE on that chip.
 CONFIG_BT_ENABLED=y
 CONFIG_BT_NIMBLE_ENABLED=y
+# MAX_CONNECTIONS=1: only one phone connects at a time for provisioning.
+# Keeping this at 1 reduces RAM usage — each connection slot costs ~2 KB.
 CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
+# ALLOC_MODE_INTERNAL: allocate NimBLE memory from internal SRAM rather than
+# external PSRAM. Faster access and required on chips without PSRAM.
 CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_INTERNAL=y
+# LOG_LEVEL_NONE: suppress NimBLE's verbose stack-level logs in production.
+# Change to LOG_LEVEL_DEBUG temporarily when diagnosing BLE issues.
 CONFIG_BT_NIMBLE_LOG_LEVEL_NONE=y
 
 # ── Compiler optimisations ────────────────────────────────────────────────────
-# Optimise for size rather than speed. Critical for fitting Matter + MQTT +
-# BLE + OTA into a 1.8 MB OTA slot on 4 MB flash. Safe for all IoT workloads
-# in this project (no floating-point-heavy or latency-critical hot paths).
+# Optimise for binary size rather than raw speed. This is the right trade-off
+# for IoT firmware: the hot paths (JSON parsing, GPIO toggling) are not
+# CPU-bound, but fitting MQTT + BLE + OTA + mDNS into a 1.8 MB OTA slot
+# on 4 MB flash requires size discipline.
 CONFIG_COMPILER_OPTIMIZATION_SIZE=y
 
-# ── Logging (reduce in production) ───────────────────────────────────────────
+# ── Logging ───────────────────────────────────────────────────────────────────
+# INFO level in production: errors, warnings, and key events are logged.
+# Set to DEBUG locally when diagnosing issues, then revert before shipping.
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
-CONFIG_PARTITION_TABLE_CUSTOM=y
-CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="../../partitions_4mb.csv"
+
+# ── Secure Boot / Flash Encryption (enable for production) ───────────────────
+# Uncomment these two lines before programming production hardware to prevent
+# firmware extraction via UART and enforce signed OTA images.
+# WARNING: once flash encryption is enabled it cannot be disabled — test on
+# a dedicated board first.
+# CONFIG_SECURE_BOOT=y
+# CONFIG_FLASH_ENCRYPTION_ENABLED=y

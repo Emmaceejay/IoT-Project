@@ -1,5 +1,5 @@
 ﻿import 'dart:convert';
-import '../../domain/models/matter_device.dart';
+import '../../domain/models/iot_device.dart';
 import '../models/device_entity.dart';
 import '../repositories/device_repository.dart';
 
@@ -22,7 +22,7 @@ class ObjectBoxDeviceDatasource implements DeviceRepository {
   ObjectBoxDeviceDatasource(Store store) : _box = store.box<DeviceEntity>();
 
   @override
-  Future<List<MatterDevice>> getDevices() async {
+  Future<List<IoTDevice>> getDevices() async {
     return _box.getAll().map((e) => e.toDomain()).toList();
   }
 
@@ -43,7 +43,7 @@ class ObjectBoxDeviceDatasource implements DeviceRepository {
   }
 
   @override
-  Future<void> provisionDevice(MatterDevice device) async {
+  Future<void> provisionDevice(IoTDevice device) async {
     // @Unique(onConflict: ConflictStrategy.replace) handles upsert automatically.
     _box.put(DeviceEntity.fromDomain(device));
   }

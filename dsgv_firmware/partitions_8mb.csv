@@ -1,7 +1,7 @@
 # DSGV Hub Firmware — Partition Table (8 MB flash)
 #
-# Layout: dual-bank OTA + isolated Matter NVS + SPIFFS storage
-# Recommended for new hardware spins — no binary size pressure.
+# Layout: dual-bank OTA + SPIFFS file storage
+# Recommended for new hardware spins — generous OTA headroom, no size pressure.
 #
 # ┌─────────────┬──────────┬─────────────────────────────────────────────────┐
 # │ nvs         │  24 KB   │ App config, Wi-Fi creds, MQTT config, auth token│
@@ -9,17 +9,26 @@
 # │ phy_init    │   4 KB   │ RF / PHY calibration data                       │
 # │ ota_0       │   3 MB   │ Active firmware (production slot)               │
 # │ ota_1       │   3 MB   │ OTA update slot (bootloader rolls back on crash)│
-# │ matter_nvs  │ 384 KB   │ Matter pairing & fabric data (ISOLATED)         │
-# │ storage     │ 1.5 MB   │ SPIFFS — optional file storage for future use   │
+# │ storage     │ ~1.9 MB  │ SPIFFS — optional file storage for future use   │
 # └─────────────┴──────────┴─────────────────────────────────────────────────┘
 #
-# matter_nvs is a separate NVS partition so that a Matter factory-reset
-# (decommission from HomeKit / Google Home / Alexa) erases ONLY Matter pairing
-# data — it does NOT touch Wi-Fi credentials or device config in the main nvs
-# partition. Set CONFIG_CHIP_NVS_PARTITION_NAME="matter_nvs" to activate this.
+# OTA behaviour:
+#   The bootloader reads otadata to decide which slot (ota_0 or ota_1) is
+#   the active firmware. During an OTA update, new firmware is written to the
+#   inactive slot. If the new firmware crashes before calling
+#   esp_ota_mark_app_valid_cancel_rollback(), the bootloader rolls back to the
+#   previous slot automatically — the device can never be permanently bricked
+#   by a bad OTA image.
 #
 # OTA slot headroom: 3,145,728 B slot − 3,080,192 B limit = 65,536 B (64 KB)
 # Hard build limit enforced by scripts/check_binary_size.py.
+#
+# storage (SPIFFS):
+#   ~1.9 MB of raw file storage. Intended for future use: local automation
+#   scripts, certificate bundles, or any file-based config. SPIFFS is
+#   mounted automatically by esp_spiffs_register() — see dsgv_storage.c
+#   (not yet implemented; the partition is reserved here so the flash layout
+#   does not change when that feature lands).
 #
 # To use this table, add to the device sdkconfig.defaults:
 #   CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="../../partitions_8mb.csv"
@@ -31,5 +40,4 @@ otadata,      data, ota,      0xf000,   0x2000
 phy_init,     data, phy,      0x11000,  0x1000
 ota_0,        app,  ota_0,    0x20000,  0x300000
 ota_1,        app,  ota_1,    0x320000, 0x300000
-matter_nvs,   data, nvs,      0x620000, 0x60000
-storage,      data, spiffs,   0x680000, 0x180000
+storage,      data, spiffs,   0x620000, 0x1E0000
