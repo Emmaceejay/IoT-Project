@@ -5,6 +5,7 @@ import '../../core/objectbox_store_provider.dart';
 import '../../data/datasources/objectbox_device_datasource.dart';
 import '../../data/repositories/device_repository.dart';
 import '../models/matter_device.dart';
+import 'firebase_config_service.dart';
 import 'local_http_service.dart';
 import 'mqtt_service.dart';
 import 'telemetry_service.dart';
@@ -112,6 +113,17 @@ class DeviceManager extends AsyncNotifier<List<MatterDevice>> {
     await _repository.updateDeviceState(deviceId, command);
   }
 
+  /// Removes a device from the local registry and live state.
+  Future<void> removeDevice(String deviceId) async {
+    await _repository.removeDevice(deviceId);
+    state = AsyncValue.data(
+      (state.valueOrNull ?? [])
+          .where((d) => d.uniqueDeviceId != deviceId)
+          .toList(),
+    );
+    debugPrint('[DeviceManager] Device $deviceId removed.');
+  }
+
   /// Registers a newly commissioned device (called after Matter pairing).
   Future<void> registerNewDevice(MatterDevice device) async {
     await _repository.provisionDevice(device);
@@ -194,39 +206,49 @@ class DeviceManager extends AsyncNotifier<List<MatterDevice>> {
     }
   }
 
-  /// Publishes the current MQTT broker config to every device that has a stored
-  /// auth token. Call this from Settings after changing the broker.
+  /// Registers a newly provisioned device in Firebase.
+  /// Called immediately after BLE provisioning succeeds so the device
+  /// gets a config entry before its first HTTPS fetch on boot.
+  Future<void> registerDevice(String deviceId, String authToken) async {
+    await ref.read(firebaseConfigServiceProvider).registerDevice(
+      deviceId: deviceId,
+      authToken: authToken,
+    );
+    debugPrint('[DeviceManager] Firebase registration triggered for $deviceId');
+  }
+
+  /// Writes the current custom broker config to Firebase for every provisioned
+  /// device. Devices pick it up on their next reboot or config poll.
   ///
-  /// Returns the number of devices the command was sent to.
+  /// Returns the number of devices updated.
   Future<int> pushBrokerConfig() async {
     final devices = state.valueOrNull ?? [];
-    final mqttConfig = ref.read(mqttConfigProvider);
-    final mqttService = ref.read(mqttServiceProvider.notifier);
+    final config  = ref.read(mqttConfigProvider);
+    final firebase = ref.read(firebaseConfigServiceProvider);
 
     int sent = 0;
     for (final device in devices) {
       if (device.authToken == null) continue;
-      final payload = jsonEncode({
-        'auth_token': device.authToken,
-        'mqtt_host': mqttConfig.host,
-        'mqtt_port': mqttConfig.port,
-        'mqtt_use_tls': mqttConfig.useTls,
-      });
-      await mqttService.publishConfig(device.uniqueDeviceId, payload);
-      sent++;
-      debugPrint('[DeviceManager] Broker config sent to ${device.uniqueDeviceId}');
+      final ok = await firebase.updateDeviceConfig(
+        deviceId:  device.uniqueDeviceId,
+        authToken: device.authToken!,
+        config:    config,
+      );
+      if (ok) {
+        sent++;
+        debugPrint('[DeviceManager] Firebase config updated for ${device.uniqueDeviceId}');
+      }
     }
     return sent;
   }
 
-  /// Sends a factory-broker revert command to a single device.
+  /// Resets a single device's broker config to the factory default in Firebase.
   Future<void> revertDeviceBroker(String deviceId, String authToken) async {
-    final payload = jsonEncode({
-      'auth_token': authToken,
-      'revert_to_factory': true,
-    });
-    await ref.read(mqttServiceProvider.notifier).publishConfig(deviceId, payload);
-    debugPrint('[DeviceManager] Factory broker revert sent to $deviceId');
+    await ref.read(firebaseConfigServiceProvider).revertDeviceToFactory(
+      deviceId:  deviceId,
+      authToken: authToken,
+    );
+    debugPrint('[DeviceManager] Firebase factory revert triggered for $deviceId');
   }
 }
 

@@ -26,11 +26,21 @@
 #define DSGV_DEVICE_TYPE         CONFIG_DSGV_DEVICE_TYPE
 #define DSGV_DEVICE_CAPABILITIES CONFIG_DSGV_DEVICE_CAPABILITIES
 
-// ── MQTT Broker (Primary: Cloud TLS, Fallback: Local Mosquitto) ───────────────
-#define MQTT_CLOUD_HOST          "your-emqx-endpoint.cloud"  // replace with real
+// ── Firebase Config Gateway ───────────────────────────────────────────────────
+// Replace YOUR_PROJECT_ID with your Firebase project ID.
+// Find it at: Firebase Console → Project Settings → General → Project ID.
+// This URL is not a secret — security is enforced by the auth_token.
+#define FIREBASE_GET_CONFIG_URL \
+    "https://us-central1-YOUR_PROJECT_ID.cloudfunctions.net/getDeviceConfig"
+
+// How long (ms) to wait for a Firebase response before falling back to NVS cache
+#define FIREBASE_TIMEOUT_MS      10000
+
+// ── MQTT Broker (factory default — overridden by Firebase config fetch) ───────
+// Must match MqttConfig.factoryDefault.host in mqtt_config.dart
+// and FACTORY_CONFIG.broker_host in functions/index.js
+#define MQTT_CLOUD_HOST          "mqtt.dsgv.io"
 #define MQTT_CLOUD_PORT          8883
-#define MQTT_LOCAL_HOST          "192.168.1.100"
-#define MQTT_LOCAL_PORT          1883
 #define MQTT_KEEPALIVE_SEC       60
 #define MQTT_QOS_AT_LEAST_ONCE   1
 #define MQTT_RECONNECT_DELAY_MS  5000

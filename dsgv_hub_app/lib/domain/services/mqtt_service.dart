@@ -16,8 +16,8 @@ import 'device_manager.dart';
 enum HubConnectionState {
   disconnected,
   connecting,
-  connectedCloud,  // remote / cloud broker (TLS or plain)
-  connectedLocal,  // local Mosquitto on same LAN
+  connectedCloud,  // any remote / public broker
+  connectedLocal,  // private-IP broker (192.168.x, 10.x, etc.)
   connectedDirect, // direct HTTP transport (Matter / Tasmota)
 }
 
@@ -33,7 +33,38 @@ class MqttConnectionStatus {
       state == HubConnectionState.connectedDirect;
 }
 
-// ── Config Notifier (persists via flutter_secure_storage) ──────────────────
+// ── Factory Mode Notifier ───────────────────────────────────────────────────
+// Controls whether the app uses the manufacturer's pre-configured broker
+// or a user-supplied custom broker. Defaults to factory (true) on fresh install.
+
+class MqttFactoryModeNotifier extends StateNotifier<bool> {
+  static const _storage = FlutterSecureStorage(
+    aOptions: AndroidOptions(encryptedSharedPreferences: true),
+  );
+  static const _key = 'mqtt_use_factory';
+
+  MqttFactoryModeNotifier() : super(true) {
+    _load();
+  }
+
+  Future<void> _load() async {
+    final val = await _storage.read(key: _key);
+    // Treat null (first install) and 'true' as factory mode
+    state = val != 'false';
+  }
+
+  Future<void> setFactoryMode(bool useFactory) async {
+    state = useFactory;
+    await _storage.write(key: _key, value: useFactory.toString());
+  }
+}
+
+final mqttUseFactoryProvider =
+    StateNotifierProvider<MqttFactoryModeNotifier, bool>((ref) {
+  return MqttFactoryModeNotifier();
+});
+
+// ── Config Notifier (persists user's custom broker via flutter_secure_storage)
 
 class MqttConfigNotifier extends StateNotifier<MqttConfig> {
   static const _storage = FlutterSecureStorage(
@@ -48,7 +79,7 @@ class MqttConfigNotifier extends StateNotifier<MqttConfig> {
     const keys = [
       'mqtt_host', 'mqtt_port', 'mqtt_use_tls',
       'mqtt_username', 'mqtt_password', 'mqtt_client_id',
-      'mqtt_local_host', 'mqtt_local_port', 'mqtt_timeout', 'mqtt_local_http',
+      'mqtt_timeout', 'mqtt_local_http',
     ];
     final map = <String, String?>{
       for (final k in keys) k: await _storage.read(key: k),
@@ -71,9 +102,8 @@ final mqttConfigProvider =
 
 // ── Connectivity Service ────────────────────────────────────────────────────
 
-/// Broker-agnostic MQTT service with dual-broker fallback strategy.
-/// Strategy: cloud broker → local LAN broker → show error.
-/// Supports any broker: EMQX, Mosquitto, HiveMQ, AWS IoT Core, etc.
+/// Single-broker MQTT service.
+/// Uses the factory broker when in factory mode, or the user's saved config.
 class MqttConnectivityService extends StateNotifier<MqttConnectionStatus>
     with WidgetsBindingObserver {
   final Ref _ref;
@@ -94,54 +124,32 @@ class MqttConnectivityService extends StateNotifier<MqttConnectionStatus>
     }
   }
 
-  /// Connect using the currently saved [MqttConfig].
-  /// Tries cloud broker first, falls back to local broker if configured.
+  /// Returns the effective config: factory default or user-saved custom.
+  MqttConfig _effectiveConfig() {
+    final useFactory = _ref.read(mqttUseFactoryProvider);
+    return useFactory ? MqttConfig.factoryDefault : _ref.read(mqttConfigProvider);
+  }
+
+  /// Connect to the effective broker (factory or custom).
   Future<void> connect() async {
-    final config = _ref.read(mqttConfigProvider);
+    final config = _effectiveConfig();
     if (!config.isConfigured) {
-      debugPrint('[MQTT] No broker host configured — skipping connect.');
+      debugPrint('[MQTT] No broker configured — skipping connect.');
       return;
     }
     _cancelled = false;
     await _disconnect();
     state = const MqttConnectionStatus(HubConnectionState.connecting);
 
-    var cloudError = 'Could not reach any broker. Check host and network.';
-
-    // 1. Try cloud / primary broker
     try {
-      await _connectWith(
-        config,
-        host: config.host,
-        port: config.port,
-        useTls: config.useTls,
-        isLocal: false,
-      );
-      return;
+      await _connectWith(config);
     } catch (e) {
-      cloudError = _friendlyError(e, config.host, config.port, config.useTls);
-      debugPrint('[MQTT] Cloud broker failed: $e');
-      if (_cancelled) return;
-    }
-
-    // 2. Fallback: local Mosquitto (same LAN, no internet needed)
-    if (config.hasLocalBroker) {
-      try {
-        await _connectWith(
-          config,
-          host: config.localHost,
-          port: config.localPort,
-          useTls: false,
-          isLocal: true,
-        );
-        return;
-      } catch (e) {
-        debugPrint('[MQTT] Local broker failed: $e');
-        if (_cancelled) return;
+      final msg = _friendlyError(e, config.host, config.port, config.useTls);
+      debugPrint('[MQTT] Connection failed: $e');
+      if (!_cancelled) {
+        state = MqttConnectionStatus(HubConnectionState.disconnected, msg);
       }
     }
-
-    state = MqttConnectionStatus(HubConnectionState.disconnected, cloudError);
   }
 
   /// Maps a raw exception to a human-readable message shown in the UI.
@@ -166,44 +174,33 @@ class MqttConnectivityService extends StateNotifier<MqttConnectionStatus>
     return 'Failed to connect to $host:$port — ${e.toString()}';
   }
 
-  Future<void> _connectWith(
-    MqttConfig config, {
-    required String host,
-    required int port,
-    required bool useTls,
-    required bool isLocal,
-  }) async {
-    // Append a random 6-char suffix so each connection attempt gets a unique
-    // client ID. Prevents conflicts on public brokers (e.g. broker.hivemq.com)
-    // where a duplicate ID causes both sessions to be forcibly disconnected.
+  Future<void> _connectWith(MqttConfig config) async {
+    // Unique client ID per attempt to avoid conflicts on shared brokers.
     final suffix = List.generate(
         6, (_) => Random().nextInt(36).toRadixString(36)).join();
     final effectiveClientId = '${config.clientId}_$suffix';
 
-    _client = MqttServerClient.withPort(host, effectiveClientId, port)
+    _client = MqttServerClient.withPort(config.host, effectiveClientId, config.port)
       ..keepAlivePeriod = 60
       ..onDisconnected = _onDisconnected
-      ..autoReconnect = !isLocal
+      ..autoReconnect = true
       ..logging(on: false);
 
-    if (useTls) {
+    if (config.useTls) {
       _client!.secure = true;
       _client!.securityContext = SecurityContext.defaultContext;
-      // Log bad-cert events instead of silently swallowing TLS errors.
       _client!.onBadCertificate = (cert) {
         debugPrint('[MQTT] TLS: certificate rejected — ${cert.subject}');
-        return false; // never accept invalid certs in production
+        return false;
       };
     }
 
     // Build CONNECT packet.
-    // NOTE: do NOT call withWillQos without withWillTopic — the MQTT spec
-    // (§3.1.2.6) forbids non-zero Will QoS when the Will Flag is 0. Strict
-    // brokers (HiveMQ, EMQX) reject such packets with a protocol error.
+    // NOTE: do NOT call withWillQos without withWillTopic — MQTT spec §3.1.2.6
+    // forbids non-zero Will QoS when Will Flag is 0. Strict brokers reject this.
     final connMsg = MqttConnectMessage()
         .withClientIdentifier(effectiveClientId)
         .startClean();
-
     if (config.hasCredentials) {
       connMsg.authenticateAs(config.username, config.password);
     }
@@ -213,8 +210,6 @@ class MqttConnectivityService extends StateNotifier<MqttConnectionStatus>
         .connect()
         .timeout(Duration(seconds: config.connectTimeoutSeconds));
 
-    // Verify the broker accepted the connection (non-zero CONNACK return
-    // codes indicate authentication failure, identifier rejected, etc.)
     if (_client!.connectionStatus?.state != MqttConnectionState.connected) {
       final rc = _client!.connectionStatus?.returnCode?.name ?? 'unknown';
       throw Exception('Broker refused connection (CONNACK: $rc)');
@@ -226,17 +221,24 @@ class MqttConnectivityService extends StateNotifier<MqttConnectionStatus>
       return;
     }
 
+    // Detect private-IP brokers (LAN) vs public/cloud brokers.
+    final isLocal = _isPrivateAddress(config.host);
     state = MqttConnectionStatus(
-      isLocal
-          ? HubConnectionState.connectedLocal
-          : HubConnectionState.connectedCloud,
+      isLocal ? HubConnectionState.connectedLocal : HubConnectionState.connectedCloud,
     );
     debugPrint(
-      '[MQTT] Connected → $host:$port | TLS: $useTls | '
-      'Local: $isLocal | Auth: ${config.hasCredentials} | '
+      '[MQTT] Connected → ${config.host}:${config.port} | '
+      'TLS: ${config.useTls} | Auth: ${config.hasCredentials} | '
       'ClientId: $effectiveClientId',
     );
     _subscribeToFleet();
+  }
+
+  /// Returns true when the host resolves to a private (LAN) address.
+  bool _isPrivateAddress(String host) {
+    return RegExp(
+            r'^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.|localhost$|127\.0\.0\.1$)')
+        .hasMatch(host);
   }
 
   /// Cancel any in-progress connection attempt and disconnect.
@@ -278,7 +280,6 @@ class MqttConnectivityService extends StateNotifier<MqttConnectionStatus>
         }
 
       case 'telemetry':
-        // Parse and apply live telemetry to the matching device in DeviceManager
         try {
           final map = jsonDecode(payload) as Map<String, dynamic>;
           _ref.read(deviceManagerProvider.notifier).applyTelemetry(deviceId, map);
@@ -288,8 +289,6 @@ class MqttConnectivityService extends StateNotifier<MqttConnectionStatus>
         }
 
       case 'announce':
-        // Firmware publishes this on every MQTT connect.
-        // Registers new devices or updates localIp for known ones.
         try {
           final map = jsonDecode(payload) as Map<String, dynamic>;
           final device = MatterDevice.fromJson(map);
@@ -307,13 +306,11 @@ class MqttConnectivityService extends StateNotifier<MqttConnectionStatus>
   }
 
   /// Publishes an authenticated broker-reconfiguration command to a device.
-  /// Payload must include the per-device auth_token — never call this without it.
   Future<void> publishConfig(String deviceId, String payloadJson) async {
     await publish('devices/$deviceId/config', payloadJson);
   }
 
-  /// General-purpose publish — used by OTA and other services that need
-  /// arbitrary topic routing (e.g. devices/{id}/ota-trigger).
+  /// General-purpose publish for arbitrary topic routing (OTA, etc.).
   Future<void> publish(String topic, String payloadJson) async {
     if (_client == null || !state.isConnected) {
       debugPrint('[MQTT] Not connected — publish to $topic dropped.');

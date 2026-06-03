@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../domain/models/mqtt_config.dart';
 import '../../domain/services/device_manager.dart';
@@ -12,15 +12,12 @@ class SettingsScreen extends ConsumerStatefulWidget {
 }
 
 class _SettingsScreenState extends ConsumerState<SettingsScreen> {
-  // Cloud broker
+  // Broker fields
   final _hostCtrl = TextEditingController();
   final _portCtrl = TextEditingController();
   final _usernameCtrl = TextEditingController();
   final _passwordCtrl = TextEditingController();
   final _clientIdCtrl = TextEditingController();
-  // Local / LAN broker
-  final _localHostCtrl = TextEditingController();
-  final _localPortCtrl = TextEditingController();
   // Advanced
   final _timeoutCtrl = TextEditingController();
 
@@ -28,7 +25,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   bool _enableLocalHttp = true;
   bool _showPassword = false;
   bool _saved = false;
-  bool _initialized = false;
+  bool _configInitialized = false;
   bool _brokerSyncInProgress = false;
 
   static const int _defaultPlainPort = 1883;
@@ -37,20 +34,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   @override
   void initState() {
     super.initState();
-    // Pre-fill defaults immediately so the form is never blank on first open.
-    // ref.listen (below) will override these once the async secure-storage
-    // load completes, or on the post-frame callback if it already finished.
     _portCtrl.text = _defaultPlainPort.toString();
     _clientIdCtrl.text = 'dsgv_hub_client';
-    _localPortCtrl.text = _defaultPlainPort.toString();
     _timeoutCtrl.text = '10';
 
-    // Handle the race where _load() completes before ref.listen is registered.
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || _initialized) return;
+      if (!mounted || _configInitialized) return;
       final config = ref.read(mqttConfigProvider);
       if (config.isConfigured) {
-        _initialized = true;
+        _configInitialized = true;
         _populateFromConfig(config);
       }
     });
@@ -63,8 +55,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     _usernameCtrl.dispose();
     _passwordCtrl.dispose();
     _clientIdCtrl.dispose();
-    _localHostCtrl.dispose();
-    _localPortCtrl.dispose();
     _timeoutCtrl.dispose();
     super.dispose();
   }
@@ -74,8 +64,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     _portCtrl.text = config.port.toString();
     _usernameCtrl.text = config.username;
     _clientIdCtrl.text = config.clientId;
-    _localHostCtrl.text = config.localHost;
-    _localPortCtrl.text = config.localPort.toString();
     _timeoutCtrl.text = config.connectTimeoutSeconds.toString();
     // Never pre-fill password for security
     setState(() {
@@ -94,6 +82,58 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         _portCtrl.text = _defaultTlsPort.toString();
       }
     });
+  }
+
+  /// User tapped "Use custom broker" — unlock the form fields.
+  Future<void> _switchToCustomMode() async {
+    await ref.read(mqttUseFactoryProvider.notifier).setFactoryMode(false);
+    // Pre-fill form with sensible defaults if nothing has been saved yet
+    final saved = ref.read(mqttConfigProvider);
+    if (!saved.isConfigured) {
+      _portCtrl.text = _defaultPlainPort.toString();
+      setState(() {
+        _useTls = false;
+        _enableLocalHttp = true;
+      });
+    } else {
+      _populateFromConfig(saved);
+    }
+  }
+
+  /// User tapped "Revert to manufacturer server" — lock the form back.
+  Future<void> _revertToFactory() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF121826),
+        title: const Text('Use manufacturer server?',
+            style: TextStyle(color: Colors.white)),
+        content: const Text(
+          'Your custom broker settings will be kept but the app will reconnect '
+          'to the manufacturer server. You can switch back to custom at any time.',
+          style: TextStyle(color: Colors.white70, fontSize: 13, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel', style: TextStyle(color: Colors.white54)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF00E5FF),
+              foregroundColor: Colors.black,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8)),
+            ),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Use manufacturer server'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    await ref.read(mqttUseFactoryProvider.notifier).setFactoryMode(true);
+    await ref.read(mqttServiceProvider.notifier).connect();
   }
 
   Future<void> _saveAndConnect() async {
@@ -118,8 +158,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       clientId: _clientIdCtrl.text.trim().isNotEmpty
           ? _clientIdCtrl.text.trim()
           : 'dsgv_hub_client',
-      localHost: _localHostCtrl.text.trim(),
-      localPort: int.tryParse(_localPortCtrl.text.trim()) ?? 1883,
       connectTimeoutSeconds: rawTimeout.clamp(3, 60),
       enableLocalHttp: _enableLocalHttp,
     );
@@ -148,15 +186,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     );
   }
 
-  // ── Broker sync helpers ────────────────────────────────────────────────────
-
-  /// Returns how many devices in the current list have a stored auth token.
   int _tokenDeviceCount() {
     final devices = ref.read(deviceManagerProvider).valueOrNull ?? [];
     return devices.where((d) => d.authToken != null).length;
   }
 
-  /// Gate 1 of 2: warn the user about the consequences, then show Gate 2.
   Future<void> _onPushBrokerTapped() async {
     final count = _tokenDeviceCount();
     if (count == 0) return;
@@ -167,7 +201,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       return;
     }
 
-    // Gate 1 — warning dialog
     final confirmed = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
@@ -235,7 +268,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
     if (confirmed != true || !mounted) return;
 
-    // Gate 2 — final confirmation
     final finalConfirmed = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
@@ -286,7 +318,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     }
   }
 
-  /// Prompts the user, then sends a factory-revert command to all provisioned devices.
   Future<void> _onRevertToFactoryTapped() async {
     final count = _tokenDeviceCount();
     if (count == 0) return;
@@ -337,8 +368,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       }
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(
-            'Factory broker restore sent to $sent device(s).'),
+        content: Text('Factory broker restore sent to $sent device(s).'),
         backgroundColor: const Color(0xFF00E5FF).withValues(alpha: 0.85),
         behavior: SnackBarBehavior.floating,
       ));
@@ -349,18 +379,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Populate form from storage on first load only
-    // Populate once when the async secure-storage load resolves.
-    // No isConfigured guard — even a freshly-installed app should show
-    // sensible defaults (port 1883, clientId, timeout) rather than blank fields.
     ref.listen<MqttConfig>(mqttConfigProvider, (_, config) {
-      if (!_initialized) {
-        _initialized = true;
+      if (!_configInitialized) {
+        _configInitialized = true;
         _populateFromConfig(config);
       }
     });
 
     final status = ref.watch(mqttServiceProvider);
+    final useFactory = ref.watch(mqttUseFactoryProvider);
     final isConnecting = status.state == HubConnectionState.connecting;
 
     return Scaffold(
@@ -377,66 +404,146 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         padding: const EdgeInsets.all(20),
         children: [
           // ── Connection Status Badge ────────────────────────────────────
-          _StatusBadge(status: status),
-          const SizedBox(height: 28),
+          _StatusBadge(status: status, useFactory: useFactory),
+          const SizedBox(height: 24),
 
-          // ── Cloud Broker ───────────────────────────────────────────────
-          _sectionHeader('Cloud Broker'),
-          _field('Host / IP', _hostCtrl, Icons.dns_outlined,
-              hint: 'e.g. broker.hivemq.com or 192.168.1.10'),
-          const SizedBox(height: 12),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                flex: 2,
-                child: _field('Port', _portCtrl, Icons.numbers,
-                    isNumber: true, hint: _useTls ? '8883' : '1883'),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                flex: 3,
-                child: _TlsToggleTile(
-                  value: _useTls,
-                  onChanged: _onTlsToggled,
+          // ── Broker Source Tile ─────────────────────────────────────────
+          _BrokerSourceTile(
+            useFactory: useFactory,
+            onSwitchToCustom: _switchToCustomMode,
+            onRevertToFactory: _revertToFactory,
+          ),
+          const SizedBox(height: 24),
+
+          // ── Custom Broker Form (only visible in custom mode) ───────────
+          if (!useFactory) ...[
+            _sectionHeader('Broker'),
+            _field('Host / IP', _hostCtrl, Icons.dns_outlined,
+                hint: 'e.g. broker.hivemq.com or 192.168.1.10'),
+            const SizedBox(height: 12),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  flex: 2,
+                  child: _field('Port', _portCtrl, Icons.numbers,
+                      isNumber: true, hint: _useTls ? '8883' : '1883'),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  flex: 3,
+                  child: _TlsToggleTile(
+                    value: _useTls,
+                    onChanged: _onTlsToggled,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+
+            _sectionHeader('Authentication  (optional)'),
+            _field('Username', _usernameCtrl, Icons.person_outline,
+                hint: 'Leave blank for anonymous'),
+            const SizedBox(height: 12),
+            _passwordField(),
+            const SizedBox(height: 20),
+
+            _sectionHeader('Advanced'),
+            _field('Client ID', _clientIdCtrl, Icons.fingerprint,
+                hint: 'dsgv_hub_client'),
+            const SizedBox(height: 12),
+            _field('Connection Timeout (s)', _timeoutCtrl, Icons.timer_outlined,
+                isNumber: true, hint: '10'),
+            const SizedBox(height: 12),
+            _LocalHttpToggleTile(
+              value: _enableLocalHttp,
+              onChanged: (v) => setState(() => _enableLocalHttp = v),
+            ),
+            const SizedBox(height: 28),
+
+            // ── Action Buttons ─────────────────────────────────────────
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _saved
+                          ? Colors.greenAccent
+                          : const Color(0xFF00E5FF),
+                      foregroundColor: Colors.black,
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                    ),
+                    onPressed: isConnecting ? null : _saveAndConnect,
+                    icon: isConnecting
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: Colors.black),
+                          )
+                        : Icon(_saved ? Icons.check : Icons.wifi_tethering),
+                    label: Text(
+                      isConnecting
+                          ? 'Connecting...'
+                          : _saved
+                              ? 'Saved!'
+                              : 'Save & Connect',
+                    ),
+                  ),
+                ),
+                if (isConnecting) ...[
+                  const SizedBox(width: 12),
+                  ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.redAccent,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(
+                          vertical: 16, horizontal: 20),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                    ),
+                    onPressed: _stopConnection,
+                    icon: const Icon(Icons.stop_circle_outlined),
+                    label: const Text('Stop'),
+                  ),
+                ],
+              ],
+            ),
+
+            // ── Error Message ──────────────────────────────────────────
+            if (status.errorMessage != null) ...[
+              const SizedBox(height: 12),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                decoration: BoxDecoration(
+                  color: Colors.redAccent.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                      color: Colors.redAccent.withValues(alpha: 0.3)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.error_outline,
+                        color: Colors.redAccent, size: 18),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        status.errorMessage!,
+                        style: const TextStyle(
+                            color: Colors.redAccent, fontSize: 13),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ],
-          ),
-          const SizedBox(height: 20),
+            const SizedBox(height: 32),
+          ],
 
-          // ── Authentication (optional) ──────────────────────────────────
-          _sectionHeader('Authentication  (optional)'),
-          _field('Username', _usernameCtrl, Icons.person_outline,
-              hint: 'Leave blank for anonymous'),
-          const SizedBox(height: 12),
-          _passwordField(),
-          const SizedBox(height: 20),
-
-          // ── Local Broker / LAN Fallback ────────────────────────────────
-          _sectionHeader('Local Broker  (LAN fallback)'),
-          _field('Local Host / IP', _localHostCtrl, Icons.router_outlined,
-              hint: 'e.g. 192.168.1.5 — same router as devices'),
-          const SizedBox(height: 12),
-          _field('Local Port', _localPortCtrl, Icons.numbers,
-              isNumber: true, hint: '1883'),
-          const SizedBox(height: 12),
-          _LocalHttpToggleTile(
-            value: _enableLocalHttp,
-            onChanged: (v) => setState(() => _enableLocalHttp = v),
-          ),
-          const SizedBox(height: 20),
-
-          // ── Advanced ───────────────────────────────────────────────────
-          _sectionHeader('Advanced'),
-          _field('Client ID', _clientIdCtrl, Icons.fingerprint,
-              hint: 'dsgv_hub_client'),
-          const SizedBox(height: 12),
-          _field('Connection Timeout (s)', _timeoutCtrl, Icons.timer_outlined,
-              isNumber: true, hint: '10'),
-          const SizedBox(height: 28),
-
-          // ── Device Broker Sync ─────────────────────────────────────────
+          // ── Device Broker Sync (always visible) ────────────────────────
           _sectionHeader('Device Broker Sync'),
           _BrokerSyncSection(
             tokenDeviceCount: _tokenDeviceCount(),
@@ -444,87 +551,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             onPush: _onPushBrokerTapped,
             onRevert: _onRevertToFactoryTapped,
           ),
-          const SizedBox(height: 32),
-
-          // ── Action Buttons ─────────────────────────────────────────────
-          Row(
-            children: [
-              Expanded(
-                child: ElevatedButton.icon(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor:
-                        _saved ? Colors.greenAccent : const Color(0xFF00E5FF),
-                    foregroundColor: Colors.black,
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12)),
-                  ),
-                  onPressed: isConnecting ? null : _saveAndConnect,
-                  icon: isConnecting
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                              strokeWidth: 2, color: Colors.black),
-                        )
-                      : Icon(_saved ? Icons.check : Icons.wifi_tethering),
-                  label: Text(
-                    isConnecting
-                        ? 'Connecting...'
-                        : _saved
-                            ? 'Saved!'
-                            : 'Save & Connect',
-                  ),
-                ),
-              ),
-              if (isConnecting) ...[
-                const SizedBox(width: 12),
-                ElevatedButton.icon(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.redAccent,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(
-                        vertical: 16, horizontal: 20),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12)),
-                  ),
-                  onPressed: _stopConnection,
-                  icon: const Icon(Icons.stop_circle_outlined),
-                  label: const Text('Stop'),
-                ),
-              ],
-            ],
-          ),
-
-          // ── Error Message ──────────────────────────────────────────────
-          if (status.errorMessage != null) ...[
-            const SizedBox(height: 12),
-            Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              decoration: BoxDecoration(
-                color: Colors.redAccent.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(
-                    color: Colors.redAccent.withValues(alpha: 0.3)),
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.error_outline,
-                      color: Colors.redAccent, size: 18),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      status.errorMessage!,
-                      style: const TextStyle(
-                          color: Colors.redAccent, fontSize: 13),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-
           const SizedBox(height: 32),
 
           // ── App Info ───────────────────────────────────────────────────
@@ -535,6 +561,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               style: TextStyle(color: Colors.white24, fontSize: 12),
             ),
           ),
+          const SizedBox(height: 20),
         ],
       ),
     );
@@ -610,6 +637,136 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         focusedBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(12),
             borderSide: const BorderSide(color: Color(0xFF00E5FF))),
+      ),
+    );
+  }
+}
+
+// ── Broker Source Tile ────────────────────────────────────────────────────────
+// Shows either "manufacturer server" (locked) or "custom broker" (active).
+
+class _BrokerSourceTile extends StatelessWidget {
+  final bool useFactory;
+  final VoidCallback onSwitchToCustom;
+  final VoidCallback onRevertToFactory;
+
+  const _BrokerSourceTile({
+    required this.useFactory,
+    required this.onSwitchToCustom,
+    required this.onRevertToFactory,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (useFactory) {
+      return Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: const Color(0xFF121826),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+              color: const Color(0xFF00E5FF).withValues(alpha: 0.25)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF00E5FF).withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.verified_outlined,
+                          size: 13, color: Color(0xFF00E5FF)),
+                      SizedBox(width: 4),
+                      Text(
+                        'Manufacturer',
+                        style: TextStyle(
+                            color: Color(0xFF00E5FF),
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            const Text(
+              'Connected to DSGV managed server',
+              style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'Your devices are managed by DSGV infrastructure. '
+              'No configuration required.',
+              style:
+                  TextStyle(color: Colors.white38, fontSize: 12, height: 1.5),
+            ),
+            const SizedBox(height: 14),
+            OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Colors.white54,
+                side: const BorderSide(color: Colors.white12),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8)),
+              ),
+              onPressed: onSwitchToCustom,
+              icon: const Icon(Icons.edit_outlined, size: 15),
+              label: const Text('Use custom broker',
+                  style: TextStyle(fontSize: 13)),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // Custom mode tile
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF121826),
+        borderRadius: BorderRadius.circular(12),
+        border:
+            Border.all(color: Colors.orangeAccent.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.settings_ethernet,
+              color: Colors.orangeAccent, size: 18),
+          const SizedBox(width: 10),
+          const Expanded(
+            child: Text(
+              'Custom broker active',
+              style: TextStyle(
+                  color: Colors.orangeAccent,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600),
+            ),
+          ),
+          TextButton(
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              foregroundColor: const Color(0xFF00E5FF),
+            ),
+            onPressed: onRevertToFactory,
+            child: const Text('↩ Manufacturer',
+                style: TextStyle(fontSize: 12)),
+          ),
+        ],
       ),
     );
   }
@@ -766,7 +923,6 @@ class _BrokerSyncSection extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // Warning banner — always visible
         Container(
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
@@ -796,8 +952,6 @@ class _BrokerSyncSection extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 12),
-
-        // Device count indicator
         Text(
           hasDevices
               ? '$tokenDeviceCount provisioned device(s) can receive broker changes.'
@@ -807,8 +961,6 @@ class _BrokerSyncSection extends StatelessWidget {
               fontSize: 12),
         ),
         const SizedBox(height: 12),
-
-        // Push broker button
         ElevatedButton.icon(
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.redAccent,
@@ -832,8 +984,6 @@ class _BrokerSyncSection extends StatelessWidget {
               : 'Push broker to all devices ($tokenDeviceCount)'),
         ),
         const SizedBox(height: 10),
-
-        // Factory revert button
         OutlinedButton.icon(
           style: OutlinedButton.styleFrom(
             foregroundColor:
@@ -860,14 +1010,17 @@ class _BrokerSyncSection extends StatelessWidget {
 
 class _StatusBadge extends StatelessWidget {
   final MqttConnectionStatus status;
+  final bool useFactory;
 
-  const _StatusBadge({required this.status});
+  const _StatusBadge({required this.status, required this.useFactory});
 
   @override
   Widget build(BuildContext context) {
     final (label, color, icon) = switch (status.state) {
       HubConnectionState.connectedCloud => (
-        'Connected · Cloud Broker',
+        useFactory
+            ? 'Connected · Manufacturer Server'
+            : 'Connected · Custom Broker',
         const Color(0xFF00E5FF),
         Icons.cloud_done_outlined,
       ),

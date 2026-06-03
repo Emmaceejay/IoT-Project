@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../domain/services/mqtt_service.dart';
 import '../screens/dashboard_screen.dart';
 import '../screens/matter_pairing_screen.dart';
 import '../screens/settings_screen.dart';
@@ -15,6 +16,15 @@ class AppShell extends ConsumerStatefulWidget {
 
 class _AppShellState extends ConsumerState<AppShell> {
   int _currentIndex = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    // Auto-connect to the factory or previously saved broker on startup
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.read(mqttServiceProvider.notifier).connect();
+    });
+  }
 
   final List<Widget> _screens = const [
     DashboardScreen(),

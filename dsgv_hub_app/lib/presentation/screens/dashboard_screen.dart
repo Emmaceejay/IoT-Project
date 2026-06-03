@@ -98,7 +98,7 @@ class DashboardScreen extends ConsumerWidget {
               count: online.length,
               color: const Color(0xFF00E5FF),
             ),
-            ...online.map((d) => DeviceCard(device: d)),
+            ...online.map((d) => _dismissibleCard(context, ref, d)),
             const SizedBox(height: 16),
           ],
 
@@ -109,7 +109,7 @@ class DashboardScreen extends ConsumerWidget {
               count: offline.length,
               color: Colors.grey,
             ),
-            ...offline.map((d) => DeviceCard(device: d)),
+            ...offline.map((d) => _dismissibleCard(context, ref, d)),
           ],
         ],
       ),
@@ -119,6 +119,69 @@ class DashboardScreen extends ConsumerWidget {
   void _launchMatterPairing(BuildContext context) {
     Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => const MatterPairingScreen()),
+    );
+  }
+
+  Widget _dismissibleCard(
+      BuildContext context, WidgetRef ref, MatterDevice d) {
+    return Dismissible(
+      key: Key(d.uniqueDeviceId),
+      direction: DismissDirection.endToStart,
+      background: Container(
+        alignment: Alignment.centerRight,
+        padding: const EdgeInsets.only(right: 24),
+        margin: const EdgeInsets.symmetric(vertical: 6),
+        decoration: BoxDecoration(
+          color: Colors.redAccent,
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: const Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.delete_outline, color: Colors.white, size: 22),
+            SizedBox(height: 2),
+            Text('Remove',
+                style: TextStyle(color: Colors.white, fontSize: 11)),
+          ],
+        ),
+      ),
+      confirmDismiss: (_) => _confirmDelete(context, d.deviceName),
+      onDismissed: (_) =>
+          ref.read(deviceManagerProvider.notifier).removeDevice(d.uniqueDeviceId),
+      child: DeviceCard(device: d),
+    );
+  }
+
+  Future<bool?> _confirmDelete(BuildContext context, String deviceName) {
+    return showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF121826),
+        title: const Text('Remove Device?',
+            style: TextStyle(color: Colors.white)),
+        content: Text(
+          'Remove "$deviceName"? It can be re-added by re-pairing.',
+          style: const TextStyle(
+              color: Colors.white70, fontSize: 13, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child:
+                const Text('Cancel', style: TextStyle(color: Colors.white54)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.redAccent,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8)),
+            ),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
     );
   }
 }

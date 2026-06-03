@@ -211,10 +211,18 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
         if (status.isTerminal) _inProgress = false;
       });
       if (status.step == ProvisioningStep.success) {
-        // Store the auth token so the app can send authenticated broker-change
-        // commands to this device later without needing BLE again.
         if (status.authToken != null && status.provisionedDeviceId != null) {
-          ref.read(deviceManagerProvider.notifier).setPendingToken(
+          final manager = ref.read(deviceManagerProvider.notifier);
+
+          // Store token locally so MQTT announce can be matched to this device
+          manager.setPendingToken(
+            status.provisionedDeviceId!,
+            status.authToken!,
+          );
+
+          // Register device in Firebase — creates its config entry so the
+          // firmware can fetch the broker via HTTPS on first boot
+          manager.registerDevice(
             status.provisionedDeviceId!,
             status.authToken!,
           );

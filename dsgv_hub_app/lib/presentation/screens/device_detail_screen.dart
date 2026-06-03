@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../domain/models/matter_device.dart';
+import '../../domain/services/device_manager.dart';
 import '../../domain/services/ota_service.dart';
 
 /// Device Detail Screen
@@ -31,6 +32,13 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
         iconTheme: const IconThemeData(color: Colors.white),
         title: Text(widget.device.deviceName,
             style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+            tooltip: 'Remove Device',
+            onPressed: _confirmAndDelete,
+          ),
+        ],
       ),
       body: ListView(
         padding: const EdgeInsets.all(20),
@@ -103,6 +111,46 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
         ],
       ),
     );
+  }
+
+  Future<void> _confirmAndDelete() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF121826),
+        title: const Text('Remove Device?',
+            style: TextStyle(color: Colors.white)),
+        content: Text(
+          'Remove "${widget.device.deviceName}"? It can be re-added by re-pairing.',
+          style: const TextStyle(
+              color: Colors.white70, fontSize: 13, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child:
+                const Text('Cancel', style: TextStyle(color: Colors.white54)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.redAccent,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8)),
+            ),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    final navigator = Navigator.of(context);
+    await ref
+        .read(deviceManagerProvider.notifier)
+        .removeDevice(widget.device.uniqueDeviceId);
+    if (!mounted) return;
+    navigator.pop();
   }
 
   Widget _infoCard(bool isOnline) {
