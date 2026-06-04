@@ -1,4 +1,5 @@
 #pragma once
+#include "sdkconfig.h"
 
 /**
  * dsgv_config.h — Hardware and protocol constants for the DSGV Hub firmware.
