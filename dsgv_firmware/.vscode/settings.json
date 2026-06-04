@@ -4,5 +4,7 @@
     "idf.openOcdConfigs": [
         "board/esp32c3-builtin.cfg"
     ],
-    "idf.flashType": "UART"
+    "idf.flashType": "UART",
+    "C_Cpp.default.compileCommands": "${workspaceFolder}/devices/1gang_switch/build/compile_commands.json",
+    "C_Cpp.errorSquiggles": "enabled"
 }
