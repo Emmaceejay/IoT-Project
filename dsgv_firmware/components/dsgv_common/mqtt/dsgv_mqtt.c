@@ -25,6 +25,7 @@
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_netif.h"
+#include "esp_app_desc.h"
 #include "cJSON.h"
 #include "freertos/timers.h"
 #include <stdio.h>
@@ -355,7 +356,7 @@ static void publish_announcement(void) {
         s_device_name,
         g_device_config.capabilities,
         ip_copy,
-        dsgv_firmware_VERSION
+        esp_app_get_description()->version
     );
 
     // Retained = true so a freshly subscribed App sees it immediately
@@ -466,17 +467,20 @@ static void handle_command(const char *payload, int len) {
     j = cJSON_GetObjectItemCaseSensitive(root, "red");
     if (cJSON_IsNumber(j)) {
         v_red = (int)j->valuedouble;
-        if (v_red < 0) v_red = 0; if (v_red > 255) v_red = 255;
+        if (v_red < 0) v_red = 0;
+        if (v_red > 255) v_red = 255;
     }
     j = cJSON_GetObjectItemCaseSensitive(root, "green");
     if (cJSON_IsNumber(j)) {
         v_green = (int)j->valuedouble;
-        if (v_green < 0) v_green = 0; if (v_green > 255) v_green = 255;
+        if (v_green < 0) v_green = 0;
+        if (v_green > 255) v_green = 255;
     }
     j = cJSON_GetObjectItemCaseSensitive(root, "blue");
     if (cJSON_IsNumber(j)) {
         v_blue = (int)j->valuedouble;
-        if (v_blue < 0) v_blue = 0; if (v_blue > 255) v_blue = 255;
+        if (v_blue < 0) v_blue = 0;
+        if (v_blue > 255) v_blue = 255;
     }
 
     cJSON_Delete(root);  // free before entering the lock

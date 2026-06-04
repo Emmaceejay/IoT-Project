@@ -28,7 +28,7 @@ DSGV_device_config_t g_device_config;
 static void _gen_token(char out[33]) {
     for (int i = 0; i < 4; i++) {
         uint32_t r = esp_random();
-        snprintf(out + i * 8, 9, "%08X", r);
+        snprintf(out + i * 8, 9, "%08" PRIX32, r);
     }
 }
 

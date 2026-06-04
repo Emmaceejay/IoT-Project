@@ -16,6 +16,7 @@ idf_component_register(
         esp_event
         mqtt
         esp_https_ota
+        app_update
         esp_http_client
         esp_http_server
         esp_driver_gpio

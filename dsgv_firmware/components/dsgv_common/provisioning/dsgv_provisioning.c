@@ -232,6 +232,8 @@ static const struct ble_gatt_svc_def s_gatt_svcs[] = {
 
 // ── BLE advertising ───────────────────────────────────────────────────────────
 
+static int gap_event_cb(struct ble_gap_event *event, void *arg);
+
 static void do_advertise(void) {
     struct ble_hs_adv_fields fields = {0};
     fields.flags             = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
