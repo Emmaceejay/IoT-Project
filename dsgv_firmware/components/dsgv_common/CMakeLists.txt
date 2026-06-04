@@ -22,6 +22,7 @@ idf_component_register(
         esp_driver_gpio
         esp_driver_ledc
         esp_driver_uart
+        esp_driver_tsens
         esp_adc
         bt
         esp_system
