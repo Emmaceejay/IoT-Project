@@ -208,7 +208,7 @@ static esp_err_t handle_tasmota_get(httpd_req_t *req) {
 
 /**
  * Builds the current device state as a JSON string.
- * Format matches MatterDevice.telemetry schema in the Flutter app.
+ * Format matches the device telemetry schema in the Flutter app.
  */
 static void build_status_json(char *buf, size_t buf_size) {
     STATE_LOCK();
@@ -291,15 +291,18 @@ static void apply_capability(const char *capability, cJSON *value) {
         }
     } else if (strcmp(capability, "red") == 0 && cJSON_IsNumber(value)) {
         int v = (int)value->valuedouble;
-        if (v < 0) v = 0; if (v > 255) v = 255;
+        if (v < 0) v = 0;
+        if (v > 255) v = 255;
         g_device_state.rgb_r = (uint8_t)v;
     } else if (strcmp(capability, "green") == 0 && cJSON_IsNumber(value)) {
         int v = (int)value->valuedouble;
-        if (v < 0) v = 0; if (v > 255) v = 255;
+        if (v < 0) v = 0;
+        if (v > 255) v = 255;
         g_device_state.rgb_g = (uint8_t)v;
     } else if (strcmp(capability, "blue") == 0 && cJSON_IsNumber(value)) {
         int v = (int)value->valuedouble;
-        if (v < 0) v = 0; if (v > 255) v = 255;
+        if (v < 0) v = 0;
+        if (v > 255) v = 255;
         g_device_state.rgb_b = (uint8_t)v;
     } else {
         ESP_LOGW(TAG, "Unknown capability: %s", capability);

@@ -9,7 +9,7 @@
  *   - Chip-specific GPIO pin maps (selected by CONFIG_IDF_TARGET_* at build time)
  *   - MQTT broker defaults, topics, telemetry interval
  *   - LEDC PWM channel assignments
- *   - OTA / Matter / BLE provisioning constants
+ *   - OTA / BLE provisioning constants
  *
  * What does NOT live here (moved to Kconfig / device sdkconfig.defaults):
  *   - DSGV_DEVICE_TYPE        → CONFIG_DSGV_DEVICE_TYPE
@@ -41,6 +41,8 @@
 // and FACTORY_CONFIG.broker_host in functions/index.js
 #define MQTT_CLOUD_HOST          "mqtt.dsgv.io"
 #define MQTT_CLOUD_PORT          8883
+#define MQTT_LOCAL_HOST          "192.168.1.1"
+#define MQTT_LOCAL_PORT          1883
 #define MQTT_KEEPALIVE_SEC       60
 #define MQTT_QOS_AT_LEAST_ONCE   1
 #define MQTT_RECONNECT_DELAY_MS  5000
@@ -70,18 +72,20 @@
 // Selected automatically by CONFIG_IDF_TARGET_* at build time.
 // Pass target: idf.py -DIDF_TARGET=esp32c3 build
 //
-//   relay           → DSGV_RELAY_PINS_ALL[0..3]   digital out, SSR / relay coil
-//   dimmer PWM      → GPIO_DIMMER_PIN              LEDC ch 0, 5 kHz
-//   CCT warm PWM    → GPIO_WARM_PIN                LEDC ch 1
-//   CCT cool PWM    → GPIO_COOL_PIN                LEDC ch 2
-//   RGB red PWM     → GPIO_RED_PIN                 LEDC ch 3
-//   RGB green PWM   → GPIO_GREEN_PIN               LEDC ch 4
-//   RGB blue PWM    → GPIO_BLUE_PIN                LEDC ch 5
-//   NTC ADC temp    → GPIO_ADC_TEMP_PIN            ADC1, 10 k NTC thermistor
-//   PIR motion      → GPIO_MOTION_PIN              digital in, HIGH = motion
-//   Reed contact    → GPIO_CONTACT_PIN             digital in, LOW = closed
+//   relay           → DSGV_RELAY_PINS_ALL[0..3]        digital out, SSR / relay coil
+//   wall switch in  → GPIO_WALL_SWITCH_PINS_ALL[0..3]  digital in, internal pull-up,
+//                                                        wire switch between pin and GND
+//   dimmer PWM      → GPIO_DIMMER_PIN                  LEDC ch 0, 5 kHz
+//   CCT warm PWM    → GPIO_WARM_PIN                    LEDC ch 1
+//   CCT cool PWM    → GPIO_COOL_PIN                    LEDC ch 2
+//   RGB red PWM     → GPIO_RED_PIN                     LEDC ch 3
+//   RGB green PWM   → GPIO_GREEN_PIN                   LEDC ch 4
+//   RGB blue PWM    → GPIO_BLUE_PIN                    LEDC ch 5
+//   NTC ADC temp    → GPIO_ADC_TEMP_PIN                ADC1, 10 k NTC thermistor
+//   PIR motion      → GPIO_MOTION_PIN                  digital in, HIGH = motion
+//   Reed contact    → GPIO_CONTACT_PIN                 digital in, LOW = closed
 //   Status LED      → GPIO_STATUS_LED_PIN
-//   Factory reset   → GPIO_BUTTON_PIN              hold 5 s
+//   Factory reset   → GPIO_BUTTON_PIN                  hold 5 s
 //
 // ESP32 classic: input-only GPIOs 34-39 have no internal pull resistors.
 //               Use external pull-up / pull-down on those pins.
@@ -98,19 +102,23 @@
 //   3-gang: relay_pins[0..2] = GPIO 2, 3, 4
 //   4-gang: relay_pins[0..3] = GPIO 2, 3, 4, 5
 //   Note: gangs 2-4 share pins with dimmer/CCT — do not combine those features.
-#  define DSGV_RELAY_PINS_ALL     { GPIO_NUM_2, GPIO_NUM_3, GPIO_NUM_4, GPIO_NUM_5 }
-#  define GPIO_DIMMER_PIN          GPIO_NUM_3
-#  define GPIO_WARM_PIN            GPIO_NUM_4
-#  define GPIO_COOL_PIN            GPIO_NUM_5
-#  define GPIO_RED_PIN             GPIO_NUM_6
-#  define GPIO_GREEN_PIN           GPIO_NUM_7
-#  define GPIO_BLUE_PIN            GPIO_NUM_10
-#  define GPIO_ADC_TEMP_PIN        GPIO_NUM_1
-#  define GPIO_ADC_TEMP_CHANNEL    ADC_CHANNEL_1
-#  define GPIO_MOTION_PIN          GPIO_NUM_11
-#  define GPIO_CONTACT_PIN         GPIO_NUM_20
-#  define GPIO_STATUS_LED_PIN      GPIO_NUM_8
-#  define GPIO_BUTTON_PIN          GPIO_NUM_9
+//
+// Wall switch inputs (one per relay gang, internal pull-up, switch to GND):
+//   On C3 dev kits GPIO 18/19 are USB D-/D+; safe on production PCBs without USB.
+#  define DSGV_RELAY_PINS_ALL          { GPIO_NUM_2,  GPIO_NUM_3,  GPIO_NUM_4,  GPIO_NUM_5  }
+#  define GPIO_WALL_SWITCH_PINS_ALL    { GPIO_NUM_18, GPIO_NUM_19, GPIO_NUM_20, GPIO_NUM_21 }
+#  define GPIO_DIMMER_PIN               GPIO_NUM_3
+#  define GPIO_WARM_PIN                 GPIO_NUM_4
+#  define GPIO_COOL_PIN                 GPIO_NUM_5
+#  define GPIO_RED_PIN                  GPIO_NUM_6
+#  define GPIO_GREEN_PIN                GPIO_NUM_7
+#  define GPIO_BLUE_PIN                 GPIO_NUM_10
+#  define GPIO_ADC_TEMP_PIN             GPIO_NUM_1
+#  define GPIO_ADC_TEMP_CHANNEL         ADC_CHANNEL_1
+#  define GPIO_MOTION_PIN               GPIO_NUM_11
+#  define GPIO_CONTACT_PIN              GPIO_NUM_20
+#  define GPIO_STATUS_LED_PIN           GPIO_NUM_8
+#  define GPIO_BUTTON_PIN               GPIO_NUM_9
 
 #elif defined(CONFIG_IDF_TARGET_ESP32S3)
 // ESP32-S3 — Xtensa dual-core, 8 LEDC channels (LS only), NimBLE, 45 GPIOs ──
@@ -118,19 +126,22 @@
 //   2-gang: GPIO 4, 21
 //   3-gang: GPIO 4, 21, 47
 //   4-gang: GPIO 4, 21, 47, 48
-#  define DSGV_RELAY_PINS_ALL     { GPIO_NUM_4, GPIO_NUM_21, GPIO_NUM_47, GPIO_NUM_48 }
-#  define GPIO_DIMMER_PIN          GPIO_NUM_5
-#  define GPIO_WARM_PIN            GPIO_NUM_6
-#  define GPIO_COOL_PIN            GPIO_NUM_7
-#  define GPIO_RED_PIN             GPIO_NUM_15
-#  define GPIO_GREEN_PIN           GPIO_NUM_16
-#  define GPIO_BLUE_PIN            GPIO_NUM_17
-#  define GPIO_ADC_TEMP_PIN        GPIO_NUM_1
-#  define GPIO_ADC_TEMP_CHANNEL    ADC_CHANNEL_0
-#  define GPIO_MOTION_PIN          GPIO_NUM_18
-#  define GPIO_CONTACT_PIN         GPIO_NUM_19
-#  define GPIO_STATUS_LED_PIN      GPIO_NUM_2
-#  define GPIO_BUTTON_PIN          GPIO_NUM_0
+//
+// Wall switch inputs: GPIO 36-39 (free, full-featured GPIOs on S3).
+#  define DSGV_RELAY_PINS_ALL          { GPIO_NUM_4,  GPIO_NUM_21, GPIO_NUM_47, GPIO_NUM_48 }
+#  define GPIO_WALL_SWITCH_PINS_ALL    { GPIO_NUM_36, GPIO_NUM_37, GPIO_NUM_38, GPIO_NUM_39 }
+#  define GPIO_DIMMER_PIN               GPIO_NUM_5
+#  define GPIO_WARM_PIN                 GPIO_NUM_6
+#  define GPIO_COOL_PIN                 GPIO_NUM_7
+#  define GPIO_RED_PIN                  GPIO_NUM_15
+#  define GPIO_GREEN_PIN                GPIO_NUM_16
+#  define GPIO_BLUE_PIN                 GPIO_NUM_17
+#  define GPIO_ADC_TEMP_PIN             GPIO_NUM_1
+#  define GPIO_ADC_TEMP_CHANNEL         ADC_CHANNEL_0
+#  define GPIO_MOTION_PIN               GPIO_NUM_18
+#  define GPIO_CONTACT_PIN              GPIO_NUM_19
+#  define GPIO_STATUS_LED_PIN           GPIO_NUM_2
+#  define GPIO_BUTTON_PIN               GPIO_NUM_0
 
 #else
 // ESP32 (classic) — Xtensa dual-core, 16 LEDC channels (HS+LS), 34 GPIOs ────
@@ -139,19 +150,22 @@
 //   2-gang: GPIO 26, 27
 //   3-gang: GPIO 26, 27, 25
 //   4-gang: GPIO 26, 27, 25, 32
-#  define DSGV_RELAY_PINS_ALL     { GPIO_NUM_26, GPIO_NUM_27, GPIO_NUM_25, GPIO_NUM_32 }
-#  define GPIO_DIMMER_PIN          GPIO_NUM_27
-#  define GPIO_WARM_PIN            GPIO_NUM_14
-#  define GPIO_COOL_PIN            GPIO_NUM_12
-#  define GPIO_RED_PIN             GPIO_NUM_25
-#  define GPIO_GREEN_PIN           GPIO_NUM_32
-#  define GPIO_BLUE_PIN            GPIO_NUM_33
-#  define GPIO_ADC_TEMP_PIN        GPIO_NUM_34   // ADC1 ch6, input-only
-#  define GPIO_ADC_TEMP_CHANNEL    ADC_CHANNEL_6
-#  define GPIO_MOTION_PIN          GPIO_NUM_35   // input-only, ext pull-down
-#  define GPIO_CONTACT_PIN         GPIO_NUM_36   // input-only (SENSOR_VP), ext pull-up
-#  define GPIO_STATUS_LED_PIN      GPIO_NUM_2
-#  define GPIO_BUTTON_PIN          GPIO_NUM_0
+//
+// Wall switch inputs: GPIO 13, 16, 17, 18 (all support internal pull-up).
+#  define DSGV_RELAY_PINS_ALL          { GPIO_NUM_26, GPIO_NUM_27, GPIO_NUM_25, GPIO_NUM_32 }
+#  define GPIO_WALL_SWITCH_PINS_ALL    { GPIO_NUM_13, GPIO_NUM_16, GPIO_NUM_17, GPIO_NUM_18 }
+#  define GPIO_DIMMER_PIN               GPIO_NUM_27
+#  define GPIO_WARM_PIN                 GPIO_NUM_14
+#  define GPIO_COOL_PIN                 GPIO_NUM_12
+#  define GPIO_RED_PIN                  GPIO_NUM_25
+#  define GPIO_GREEN_PIN                GPIO_NUM_32
+#  define GPIO_BLUE_PIN                 GPIO_NUM_33
+#  define GPIO_ADC_TEMP_PIN             GPIO_NUM_34   // ADC1 ch6, input-only
+#  define GPIO_ADC_TEMP_CHANNEL         ADC_CHANNEL_6
+#  define GPIO_MOTION_PIN               GPIO_NUM_35   // input-only, ext pull-down
+#  define GPIO_CONTACT_PIN              GPIO_NUM_36   // input-only (SENSOR_VP), ext pull-up
+#  define GPIO_STATUS_LED_PIN           GPIO_NUM_2
+#  define GPIO_BUTTON_PIN               GPIO_NUM_0
 #endif
 
 // ── LEDC PWM channels ─────────────────────────────────────────────────────────
@@ -169,10 +183,6 @@
 // ── OTA ───────────────────────────────────────────────────────────────────────
 #define OTA_MIN_SIGNAL_DBMS      -70
 #define OTA_TIMEOUT_MS           60000
-
-// ── Matter ────────────────────────────────────────────────────────────────────
-#define MATTER_PRODUCT_ID        0x8001  // register with CSA for production
-#define MATTER_VENDOR_ID         0xFFF1  // test vendor (replace for production)
 
 // ── BLE WiFi Provisioning ─────────────────────────────────────────────────────
 // Device BLE name: DSGV_PROV_DEVICE_NAME_PREFIX + last 3 MAC bytes (hex)

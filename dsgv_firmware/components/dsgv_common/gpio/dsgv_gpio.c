@@ -23,6 +23,8 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/queue.h"
+#include "esp_timer.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -45,7 +47,12 @@ static temperature_sensor_handle_t s_temp_sensor = NULL;
 static adc_oneshot_unit_handle_t s_adc1          = NULL;
 static bool                      s_adc_ready     = false;
 
-static TaskHandle_t s_sensor_task_handle = NULL;
+static TaskHandle_t  s_sensor_task_handle  = NULL;
+static QueueHandle_t s_wall_sw_queue       = NULL;
+static int64_t       s_wall_sw_last_us[DSGV_MAX_RELAY_COUNT];
+
+// 50 ms software debounce — mechanical wall switches typically settle in < 20 ms
+#define WALL_SW_DEBOUNCE_US  50000
 
 // ── External symbols ──────────────────────────────────────────────────────────
 
@@ -212,6 +219,43 @@ static void IRAM_ATTR contact_isr_handler(void *arg) {
     portYIELD_FROM_ISR(higher);
 }
 
+static void IRAM_ATTR wall_sw_isr(void *arg) {
+    uint32_t gang = (uint32_t)(uintptr_t)arg;
+    BaseType_t higher = pdFALSE;
+    xQueueSendFromISR(s_wall_sw_queue, &gang, &higher);
+    portYIELD_FROM_ISR(higher);
+}
+
+// ── Wall switch toggle task ───────────────────────────────────────────────────
+
+static void wall_switch_task(void *pvParam) {
+    (void)pvParam;
+    uint32_t gang;
+    for (;;) {
+        if (xQueueReceive(s_wall_sw_queue, &gang, portMAX_DELAY) != pdTRUE) continue;
+        if (gang >= (uint32_t)g_device_config.relay_count) continue;
+
+        // Software debounce: ignore edges within 50 ms of the last accepted one
+        int64_t now = esp_timer_get_time();
+        if (now - s_wall_sw_last_us[gang] < WALL_SW_DEBOUNCE_US) continue;
+        s_wall_sw_last_us[gang] = now;
+
+        bool new_state;
+        STATE_LOCK();
+        new_state = !g_device_state.relay_states[gang];
+        g_device_state.relay_states[gang] = new_state;
+        STATE_UNLOCK();
+
+        DSGV_gpio_apply_state();
+
+        char buf[512];
+        build_telemetry(buf, sizeof(buf));
+        DSGV_mqtt_publish_telemetry(buf);
+
+        ESP_LOGI(TAG, "Wall switch gang %" PRIu32 " → %s", gang, new_state ? "ON" : "OFF");
+    }
+}
+
 // ── Sensor + periodic telemetry task ─────────────────────────────────────────
 
 static void sensor_task(void *pvParam) {
@@ -262,6 +306,34 @@ void DSGV_gpio_init(void) {
 
     // ── ISR service (must precede gpio_isr_handler_add) ──────────────────
     (void)gpio_install_isr_service(0);  // no-op if already installed
+
+    // ── Wall switch inputs (one per relay gang, falling-edge toggle) ──────
+    // Wire: switch between the GPIO pin and GND; internal pull-up pulls idle HIGH.
+    // Works with latching rockers (each direction-change is a falling edge) and
+    // momentary push buttons (press = falling edge, release ignored).
+    memset(s_wall_sw_last_us, 0, sizeof(s_wall_sw_last_us));
+    s_wall_sw_queue = xQueueCreate(8, sizeof(uint32_t));
+    if (g_device_config.relay_count > 0) {
+        gpio_config_t sw_in = {
+            .mode         = GPIO_MODE_INPUT,
+            .pull_up_en   = GPIO_PULLUP_ENABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+            .intr_type    = GPIO_INTR_NEGEDGE,
+        };
+        for (int i = 0; i < (int)g_device_config.relay_count; i++) {
+            sw_in.pin_bit_mask = (1ULL << g_device_config.wall_switch_pins[i]);
+            gpio_config(&sw_in);
+        }
+        xTaskCreate(wall_switch_task, "DSGV_wall_sw", 3072, NULL, 3, NULL);
+        for (int i = 0; i < (int)g_device_config.relay_count; i++) {
+            gpio_isr_handler_add(g_device_config.wall_switch_pins[i],
+                                 wall_sw_isr, (void *)(uintptr_t)i);
+        }
+        ESP_LOGI(TAG, "Wall switches: %u input(s) → pins [%d,%d,%d,%d]",
+                 g_device_config.relay_count,
+                 g_device_config.wall_switch_pins[0], g_device_config.wall_switch_pins[1],
+                 g_device_config.wall_switch_pins[2], g_device_config.wall_switch_pins[3]);
+    }
 
     // ── Motion sensor input (PIR, HIGH-active) ────────────────────────────
     gpio_config_t in = {

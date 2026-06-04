@@ -4,7 +4,7 @@
 /**
  * wifi_manager.h
  * Handles Wi-Fi credential storage in NVS and connection lifecycle.
- * Credentials are received via Matter Commissioning (BLE handshake)
+ * Credentials are received via BLE provisioning handshake
  * and persisted to NVS so they survive device reboots.
  */
 
@@ -17,7 +17,7 @@ esp_err_t wifi_manager_connect(void);
 
 /**
  * @brief Save new Wi-Fi SSID and password into NVS.
- *        Called by Matter commissioning callback after BLE handshake.
+ *        Called by BLE provisioning callback after handshake.
  */
 esp_err_t wifi_manager_save_credentials(const char *ssid, const char *password);
 

@@ -85,10 +85,6 @@ void dsgv_app_main(void)
     // ── Step 6: MQTT client ───────────────────────────────────────────────────
     ESP_ERROR_CHECK(DSGV_mqtt_start());
 
-    // ── Step 7: Matter endpoint (uncomment when esp-matter SDK is linked) ─────
-    // ESP_ERROR_CHECK(matter_endpoint_start());
-    ESP_LOGI(TAG, "Matter: uncomment matter_endpoint_start() when esp-matter SDK linked.");
-
     ESP_LOGI(TAG, "=== DSGV Hub Firmware fully initialized ===");
     ESP_LOGI(TAG, "Device     : %s  caps=%s  relays=%u",
              g_device_config.device_type,

@@ -1,22 +1,16 @@
 # DSGV Hub Firmware — Partition Table (4 MB flash)
 #
-# Layout: dual-bank OTA + isolated Matter NVS
+# Layout: dual-bank OTA
 #
 # ┌─────────────┬──────────┬─────────────────────────────────────────────────┐
 # │ nvs         │  24 KB   │ App config, Wi-Fi creds, MQTT config, auth token│
 # │ otadata     │   8 KB   │ Bootloader OTA state (which bank is active)     │
 # │ phy_init    │   4 KB   │ RF / PHY calibration data                       │
-# │ ota_0       │  1.8 MB  │ Active firmware (production slot)               │
-# │ ota_1       │  1.8 MB  │ OTA update slot (bootloader rolls back on crash)│
-# │ matter_nvs  │ 256 KB   │ Matter pairing & fabric data (ISOLATED)         │
+# │ ota_0       │  1.9 MB  │ Active firmware (production slot)               │
+# │ ota_1       │  1.9 MB  │ OTA update slot (bootloader rolls back on crash)│
 # └─────────────┴──────────┴─────────────────────────────────────────────────┘
 #
-# matter_nvs is a separate NVS partition so that a Matter factory-reset
-# (decommission from HomeKit / Google Home / Alexa) erases ONLY Matter pairing
-# data — it does NOT touch Wi-Fi credentials or device config in the main nvs
-# partition. Set CONFIG_CHIP_NVS_PARTITION_NAME="matter_nvs" to activate this.
-#
-# OTA slot headroom: 1,900,544 B slot − 1,835,008 B limit = 65,536 B (64 KB)
+# OTA slot size: 0x1F0000 = 1,966,080 B (1.875 MB) each.
 # Hard build limit enforced by scripts/check_binary_size.py.
 #
 # For 8 MB flash (recommended for new hardware spins): use partitions_8mb.csv
@@ -25,6 +19,5 @@
 nvs,          data, nvs,      0x9000,   0x6000
 otadata,      data, ota,      0xf000,   0x2000
 phy_init,     data, phy,      0x11000,  0x1000
-ota_0,        app,  ota_0,    0x20000,  0x1D0000
-ota_1,        app,  ota_1,    0x1F0000, 0x1D0000
-matter_nvs,   data, nvs,      0x3C0000, 0x40000
+ota_0,        app,  ota_0,    0x20000,  0x1F0000
+ota_1,        app,  ota_1,    0x210000, 0x1F0000

@@ -38,6 +38,11 @@ typedef struct {
     // Unused entries (index >= relay_count) are ignored.
     gpio_num_t relay_pins[DSGV_MAX_RELAY_COUNT];
 
+    // GPIO input pin for each wall switch (one per relay gang).
+    // Internal pull-up is enabled; wire switch between pin and GND.
+    // Interrupt fires on falling edge (switch closed). Unused entries ignored.
+    gpio_num_t wall_switch_pins[DSGV_MAX_RELAY_COUNT];
+
     // LEDC PWM output pins (used only when the matching capability is set)
     gpio_num_t dimmer_pin;
     gpio_num_t warm_pin;

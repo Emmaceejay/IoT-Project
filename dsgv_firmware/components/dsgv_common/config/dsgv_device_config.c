@@ -47,6 +47,12 @@ esp_err_t DSGV_device_config_load(void) {
         g_device_config.relay_pins[i] = default_relay_pins[i];
     }
 
+    static const gpio_num_t default_wall_sw_pins[DSGV_MAX_RELAY_COUNT] =
+        GPIO_WALL_SWITCH_PINS_ALL;
+    for (int i = 0; i < DSGV_MAX_RELAY_COUNT; i++) {
+        g_device_config.wall_switch_pins[i] = default_wall_sw_pins[i];
+    }
+
     g_device_config.dimmer_pin    = GPIO_DIMMER_PIN;
     g_device_config.warm_pin      = GPIO_WARM_PIN;
     g_device_config.cool_pin      = GPIO_COOL_PIN;
@@ -85,6 +91,9 @@ esp_err_t DSGV_device_config_load(void) {
         size_t pins_len = sizeof(g_device_config.relay_pins);
         nvs_get_blob(nvs, "relay_pins", g_device_config.relay_pins, &pins_len);
 
+        size_t sw_pins_len = sizeof(g_device_config.wall_switch_pins);
+        nvs_get_blob(nvs, "sw_pins", g_device_config.wall_switch_pins, &sw_pins_len);
+
         int32_t pin;
         if (nvs_get_i32(nvs, "dim_pin",   &pin) == ESP_OK) g_device_config.dimmer_pin = (gpio_num_t)pin;
         if (nvs_get_i32(nvs, "warm_pin",  &pin) == ESP_OK) g_device_config.warm_pin   = (gpio_num_t)pin;
@@ -108,6 +117,12 @@ esp_err_t DSGV_device_config_load(void) {
                 ESP_LOGW(TAG, "relay_pins[%d]=%d invalid — using compile-time default",
                          i, (int)g_device_config.relay_pins[i]);
                 g_device_config.relay_pins[i] = default_relay_pins[i];
+            }
+            if ((int)g_device_config.wall_switch_pins[i] < 0 ||
+                (int)g_device_config.wall_switch_pins[i] >= GPIO_NUM_MAX) {
+                ESP_LOGW(TAG, "wall_switch_pins[%d]=%d invalid — using compile-time default",
+                         i, (int)g_device_config.wall_switch_pins[i]);
+                g_device_config.wall_switch_pins[i] = default_wall_sw_pins[i];
             }
         }
 #define _GUARD_PIN(pin, def) do { \
@@ -158,6 +173,7 @@ esp_err_t DSGV_device_config_save(const DSGV_device_config_t *cfg) {
     nvs_set_str(nvs, "caps",       cfg->capabilities);
     nvs_set_u8 (nvs, "relay_cnt",  cfg->relay_count);
     nvs_set_blob(nvs, "relay_pins", cfg->relay_pins, sizeof(cfg->relay_pins));
+    nvs_set_blob(nvs, "sw_pins",   cfg->wall_switch_pins, sizeof(cfg->wall_switch_pins));
     nvs_set_i32(nvs, "dim_pin",   (int32_t)cfg->dimmer_pin);
     nvs_set_i32(nvs, "warm_pin",  (int32_t)cfg->warm_pin);
     nvs_set_i32(nvs, "cool_pin",  (int32_t)cfg->cool_pin);

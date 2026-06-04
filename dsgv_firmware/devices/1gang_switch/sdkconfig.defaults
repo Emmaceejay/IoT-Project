@@ -10,8 +10,9 @@ CONFIG_DSGV_DEVICE_CAPABILITIES="[\"relay\"]"
 CONFIG_DSGV_RELAY_COUNT=1
 
 # ── Partition table ───────────────────────────────────────────────────────────
-# 4 MB flash: dual-bank OTA (1.8 MB each) + isolated Matter NVS (256 KB).
+# 4 MB flash: dual-bank OTA (1.9 MB each).
 # To upgrade to 8 MB hardware, replace with:
 #   CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="../../partitions_8mb.csv"
 #   CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="../../partitions_4mb.csv"
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
