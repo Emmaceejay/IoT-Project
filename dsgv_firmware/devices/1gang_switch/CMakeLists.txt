@@ -1,5 +1,8 @@
 cmake_minimum_required(VERSION 3.16)
 
+# Must be set before project.cmake is included
+set(IDF_TARGET "esp32c3")
+
 # Path to shared dsgv_common component
 set(EXTRA_COMPONENT_DIRS "${CMAKE_CURRENT_LIST_DIR}/../../components")
 
