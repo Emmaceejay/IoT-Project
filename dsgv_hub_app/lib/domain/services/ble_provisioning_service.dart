@@ -1,19 +1,91 @@
 ﻿import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart' show IconData, Icons;
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 // ── Protocol constants ────────────────────────────────────────────────────────
 // Must match DSGV_provisioning.c on the firmware side.
 
-const _kServiceUuid = '4fafc201-1fb5-459e-8fcc-c5c9c331914b';
+const _kServiceUuid   = '4fafc201-1fb5-459e-8fcc-c5c9c331914b';
 const _kCredentialUuid = 'beb5483e-36e1-4688-b7f5-ea07361b26a8';
-const _kStatusUuid = 'beb5483f-36e1-4688-b7f5-ea07361b26a8';
+const _kStatusUuid    = 'beb5483f-36e1-4688-b7f5-ea07361b26a8';
+// Wi-Fi scan results characteristic — READ only, populated on device boot.
+// Returns a JSON array: [{"ssid":"Network","rssi":-45}, ...]
+const _kWifiScanUuid   = 'beb5483d-36e1-4688-b7f5-ea07361b26a8';
+// Device identity characteristic — READ only.
+// Returns: {"device_type":"Switch","capabilities":["relay"],"relay_count":1}
+const _kDeviceInfoUuid = 'beb5483c-36e1-4688-b7f5-ea07361b26a8';
 
 const _kDeviceNamePrefix = 'DSGVHub_';
 const _kScanTimeout = Duration(seconds: 20);
 const _kConnectTimeout = Duration(seconds: 15);
+
+// ── Wi-Fi network model ───────────────────────────────────────────────────────
+
+class WifiNetwork {
+  final String ssid;
+  final int rssi;
+
+  const WifiNetwork({required this.ssid, required this.rssi});
+
+  factory WifiNetwork.fromJson(Map<String, dynamic> json) => WifiNetwork(
+        ssid: json['ssid'] as String,
+        rssi: (json['rssi'] as num).toInt(),
+      );
+
+  /// Signal level 0–3 (weak → excellent) for icon/colour selection.
+  int get signalLevel {
+    if (rssi >= -55) return 3;
+    if (rssi >= -67) return 2;
+    if (rssi >= -78) return 1;
+    return 0;
+  }
+}
+
+// ── Device identity model ─────────────────────────────────────────────────────
+
+/// Everything the app needs before provisioning starts, fetched in a single
+/// BLE connection so the user never has to pick a device type manually.
+class ProvisioningDeviceInfo {
+  final List<WifiNetwork> networks;
+  final String deviceType;
+  final List<String> capabilities;
+  final int relayCount;
+
+  const ProvisioningDeviceInfo({
+    required this.networks,
+    required this.deviceType,
+    required this.capabilities,
+    required this.relayCount,
+  });
+
+  /// Human-readable label derived from the device's own capabilities.
+  String get label {
+    if (capabilities.contains('rgb'))                              return 'RGB Light';
+    if (capabilities.contains('brightness') &&
+        capabilities.contains('color_temp'))                       return 'Colour Temp Light';
+    if (capabilities.contains('brightness'))                       return 'Dimmable Light';
+    if (capabilities.contains('hvac_mode'))                        return 'Thermostat';
+    if (capabilities.contains('motion'))                           return 'Motion Sensor';
+    if (capabilities.contains('contact'))                          return 'Contact Sensor';
+    if (capabilities.contains('temperature'))                      return 'Temperature Sensor';
+    if (relayCount > 1)                                            return '$relayCount-Gang Switch';
+    if (capabilities.contains('relay'))                            return '1-Gang Switch';
+    return deviceType;
+  }
+
+  IconData get icon {
+    if (capabilities.contains('rgb') || capabilities.contains('brightness')) {
+      return Icons.light_mode;
+    }
+    if (capabilities.contains('hvac_mode')) return Icons.thermostat;
+    if (capabilities.contains('motion'))    return Icons.sensors;
+    if (capabilities.contains('contact'))   return Icons.sensor_door;
+    return Icons.power; // relay / switch
+  }
+}
 
 // ── Progress model ────────────────────────────────────────────────────────────
 
@@ -211,6 +283,82 @@ class BleProvisioningService {
       } catch (_) {}
     }
   }
+
+  // ── Pre-provisioning data fetch ──────────────────────────────────────────────
+
+  /// Opens a single BLE connection to [deviceName], reads the device identity
+  /// and nearby Wi-Fi networks in parallel, then disconnects.
+  ///
+  /// Never throws — returns sensible defaults on any failure so the screen
+  /// can always fall back to manual entry.
+  static Future<ProvisioningDeviceInfo> fetchProvisioningData(
+      String deviceName) async {
+    BluetoothDevice? device;
+    try {
+      await _ensurePermissions();
+      device = await _scanForDevice(deviceName);
+      await device.connect(timeout: _kConnectTimeout);
+
+      // Negotiate a larger MTU so both JSON payloads fit in a single read each.
+      try { await device.requestMtu(512); } catch (_) {}
+
+      final services = await device.discoverServices();
+      final provSvc = services
+          .where((s) => s.serviceUuid == Guid(_kServiceUuid))
+          .firstOrNull;
+      if (provSvc == null) return _emptyDeviceInfo();
+
+      // Read both characteristics concurrently.
+      final wifiChar = provSvc.characteristics
+          .where((c) => c.characteristicUuid == Guid(_kWifiScanUuid))
+          .firstOrNull;
+      final infoChar = provSvc.characteristics
+          .where((c) => c.characteristicUuid == Guid(_kDeviceInfoUuid))
+          .firstOrNull;
+
+      final results = await Future.wait([
+        wifiChar != null ? wifiChar.read() : Future.value(<int>[]),
+        infoChar != null ? infoChar.read() : Future.value(<int>[]),
+      ]);
+
+      final networks  = _parseNetworks(utf8.decode(results[0], allowMalformed: true));
+      final identity  = _parseDeviceInfo(utf8.decode(results[1], allowMalformed: true));
+
+      debugPrint('[BLE Prov] device info: ${utf8.decode(results[1])}');
+      debugPrint('[BLE Prov] wifi scan:   ${utf8.decode(results[0])}');
+
+      return ProvisioningDeviceInfo(
+        networks:     networks,
+        deviceType:   identity['device_type'] as String? ?? 'Unknown',
+        capabilities: (identity['capabilities'] as List<dynamic>?)
+                          ?.map((e) => e.toString())
+                          .toList() ?? [],
+        relayCount:   (identity['relay_count'] as num?)?.toInt() ?? 1,
+      );
+    } catch (e) {
+      debugPrint('[BLE Prov] fetchProvisioningData failed: $e');
+      return _emptyDeviceInfo();
+    } finally {
+      try { await device?.disconnect(); } catch (_) {}
+    }
+  }
+
+  static List<WifiNetwork> _parseNetworks(String json) {
+    try {
+      final raw = jsonDecode(json) as List<dynamic>;
+      return raw.map((e) => WifiNetwork.fromJson(e as Map<String, dynamic>)).toList();
+    } catch (_) { return []; }
+  }
+
+  static Map<String, dynamic> _parseDeviceInfo(String json) {
+    try { return jsonDecode(json) as Map<String, dynamic>; }
+    catch (_) { return {}; }
+  }
+
+  static ProvisioningDeviceInfo _emptyDeviceInfo() =>
+      const ProvisioningDeviceInfo(
+        networks: [], deviceType: 'Unknown', capabilities: [], relayCount: 1);
+
 
   // ── Helpers ─────────────────────────────────────────────────────────────────
 

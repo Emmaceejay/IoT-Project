@@ -6,36 +6,6 @@ import '../../domain/services/ble_provisioning_service.dart';
 import '../../domain/services/device_manager.dart';
 import '../../domain/services/matter_commissioning_service.dart';
 
-// ── Device type presets ───────────────────────────────────────────────────────
-
-class _DevicePreset {
-  final String label;
-  final String deviceType;
-  final List<String> capabilities;
-  final int relayCount;
-
-  const _DevicePreset({
-    required this.label,
-    required this.deviceType,
-    required this.capabilities,
-    required this.relayCount,
-  });
-}
-
-const _kDevicePresets = [
-  _DevicePreset(label: '1-Gang Switch',  deviceType: 'Switch',     capabilities: ['relay'],                                                   relayCount: 1),
-  _DevicePreset(label: '2-Gang Switch',  deviceType: 'Switch',     capabilities: ['relay', 'relay_2'],                                        relayCount: 2),
-  _DevicePreset(label: '3-Gang Switch',  deviceType: 'Switch',     capabilities: ['relay', 'relay_2', 'relay_3'],                             relayCount: 3),
-  _DevicePreset(label: '4-Gang Switch',  deviceType: 'Switch',     capabilities: ['relay', 'relay_2', 'relay_3', 'relay_4'],                  relayCount: 4),
-  _DevicePreset(label: 'Dimmer',         deviceType: 'Dimmer',     capabilities: ['relay', 'brightness'],                                     relayCount: 1),
-  _DevicePreset(label: 'Color Temp',     deviceType: 'Light',      capabilities: ['relay', 'brightness', 'color_temp'],                       relayCount: 1),
-  _DevicePreset(label: 'RGB Light',      deviceType: 'Light',      capabilities: ['relay', 'brightness', 'rgb'],                              relayCount: 1),
-  _DevicePreset(label: 'Temp Sensor',    deviceType: 'Sensor',     capabilities: ['temperature', 'humidity'],                                 relayCount: 0),
-  _DevicePreset(label: 'Motion Sensor',  deviceType: 'Sensor',     capabilities: ['motion'],                                                  relayCount: 0),
-  _DevicePreset(label: 'Contact Sensor', deviceType: 'Sensor',     capabilities: ['contact'],                                                 relayCount: 0),
-  _DevicePreset(label: 'Thermostat',     deviceType: 'Thermostat', capabilities: ['temperature', 'hvac_mode'],                                relayCount: 1),
-];
-
 // ── QR code type ──────────────────────────────────────────────────────────────
 
 enum _QrType { dsgvProvision, matter }
@@ -97,13 +67,18 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
   _ParsedQr? _parsedQr;
   bool _scannerActive = true;
   bool _obscurePassword = true;
-  _DevicePreset _selectedPreset = _kDevicePresets.first;
 
   // Provisioning/commissioning progress
   bool _inProgress = false;
   String? _statusMessage;
   bool _isSuccess = false;
   ProvisioningStep? _provStep;
+
+  // Pre-provisioning device info (identity + Wi-Fi networks), fetched
+  // automatically after the QR code is scanned.
+  ProvisioningDeviceInfo? _deviceInfo;
+  bool _isLoadingDeviceInfo = false;
+  bool _manualSsidEntry = false; // user opted to type SSID instead of picking
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -141,6 +116,12 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
             'Enter a name and your Wi-Fi credentials, then tap Provision.'
           : 'Matter QR captured. Enter a name and tap Commission.';
     });
+
+    // Immediately fetch device identity + Wi-Fi networks in one BLE session.
+    if (parsed.type == _QrType.dsgvProvision &&
+        parsed.dsgvDeviceName != null) {
+      _loadProvisioningData(parsed.dsgvDeviceName!);
+    }
   }
 
   void _resetScanner() {
@@ -151,9 +132,28 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
       _isSuccess = false;
       _inProgress = false;
       _provStep = null;
-      _selectedPreset = _kDevicePresets.first;
+      _deviceInfo = null;
+      _isLoadingDeviceInfo = false;
+      _manualSsidEntry = false;
+      _ssidCtrl.clear();
     });
     _scannerCtrl.start();
+  }
+
+  /// Connects to the device in a background BLE session, reads device identity
+  /// and nearby Wi-Fi networks in one connection, then disconnects.
+  Future<void> _loadProvisioningData(String deviceName) async {
+    setState(() => _isLoadingDeviceInfo = true);
+    final info = await BleProvisioningService.fetchProvisioningData(deviceName);
+    if (!mounted) return;
+    setState(() {
+      _deviceInfo = info;
+      _isLoadingDeviceInfo = false;
+      // Auto-select the strongest network if the user hasn't typed anything yet
+      if (info.networks.length == 1 && _ssidCtrl.text.isEmpty) {
+        _ssidCtrl.text = info.networks.first.ssid;
+      }
+    });
   }
 
   // ── Action handlers ───────────────────────────────────────────────────────
@@ -193,13 +193,13 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
 
     final service = ref.read(matterCommissioningProvider);
     final stream = service.provisionViaBle(
-      deviceName: _parsedQr!.dsgvDeviceName!,
-      ssid: _ssidCtrl.text.trim(),
-      password: _passwordCtrl.text,
+      deviceName:   _parsedQr!.dsgvDeviceName!,
+      ssid:         _ssidCtrl.text.trim(),
+      password:     _passwordCtrl.text,
       assignedName: _nameCtrl.text.trim(),
-      deviceType:   _selectedPreset.deviceType,
-      capabilities: _selectedPreset.capabilities,
-      relayCount:   _selectedPreset.relayCount,
+      // Device type/capabilities/relayCount are NOT sent — the device already
+      // has the correct config baked into firmware. The app reads them for
+      // display only; overriding them from the app is an error source.
     );
 
     await for (final status in stream) {
@@ -328,21 +328,16 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
               onChanged: (_) => setState(() {}),
             ),
 
-            // ── Device type preset (DSGV BLE provisioning only) ─────────
+            // ── Auto-detected device type (DSGV BLE provisioning only) ───
             if (_parsedQr?.type == _QrType.dsgvProvision) ...[
               const SizedBox(height: 16),
-              _buildPresetDropdown(),
+              _buildDeviceInfoCard(),
             ],
 
             // ── Wi-Fi credentials (DSGV BLE provisioning only) ───────────
             if (_parsedQr?.type == _QrType.dsgvProvision) ...[
               const SizedBox(height: 16),
-              _buildTextField(
-                controller: _ssidCtrl,
-                label: 'Wi-Fi Network Name (SSID)',
-                icon: Icons.wifi,
-                onChanged: (_) => setState(() {}),
-              ),
+              _buildSsidSection(),
               const SizedBox(height: 12),
               _buildTextField(
                 controller: _passwordCtrl,
@@ -528,35 +523,59 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
     );
   }
 
-  Widget _buildPresetDropdown() {
-    return DropdownButtonFormField<_DevicePreset>(
-      initialValue: _selectedPreset,
-      dropdownColor: const Color(0xFF121826),
-      style: const TextStyle(color: Colors.white, fontSize: 14),
-      decoration: InputDecoration(
-        labelText: 'Device Type',
-        labelStyle: const TextStyle(color: Colors.white38),
-        prefixIcon: const Icon(Icons.devices_other, color: Color(0xFF00E5FF)),
-        filled: true,
-        fillColor: const Color(0xFF121826),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide.none,
+  /// Shows the device type auto-detected from firmware via BLE.
+  /// While loading, shows a skeleton; on failure, shows nothing (graceful).
+  Widget _buildDeviceInfoCard() {
+    if (_isLoadingDeviceInfo) {
+      return _buildDisabledField(
+        icon: Icons.devices_other,
+        label: 'Reading device identity…',
+        trailing: const SizedBox(
+          width: 16,
+          height: 16,
+          child: CircularProgressIndicator(
+              strokeWidth: 2, color: Color(0xFF00E5FF)),
         ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(color: Color(0xFF00E5FF)),
+      );
+    }
+
+    final info = _deviceInfo;
+    if (info == null) return const SizedBox.shrink();
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF121826),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: const Color(0xFF00E5FF).withValues(alpha: 0.25),
         ),
       ),
-      items: _kDevicePresets
-          .map((p) => DropdownMenuItem(
-                value: p,
-                child: Text(p.label),
-              ))
-          .toList(),
-      onChanged: _inProgress
-          ? null
-          : (p) => setState(() => _selectedPreset = p ?? _selectedPreset),
+      child: Row(children: [
+        Icon(info.icon, color: const Color(0xFF00E5FF), size: 22),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                info.label,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                'Auto-detected from device firmware',
+                style: const TextStyle(color: Colors.white38, fontSize: 11),
+              ),
+            ],
+          ),
+        ),
+        const Icon(Icons.verified, color: Color(0xFF00E5FF), size: 16),
+      ]),
     );
   }
 
@@ -583,6 +602,170 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
         ),
       ],
     );
+  }
+
+  // ── Wi-Fi network picker ───────────────────────────────────────────────────
+
+  /// Shows a loading indicator, a tap-to-select dropdown, or a plain text
+  /// field depending on whether the network scan has completed.
+  Widget _buildSsidSection() {
+    // Still loading (BLE fetch in progress) — show a disabled field with a spinner
+    if (_isLoadingDeviceInfo) {
+      return _buildDisabledField(
+        icon: Icons.wifi_find,
+        label: 'Scanning for Wi-Fi networks…',
+        trailing: const SizedBox(
+          width: 16,
+          height: 16,
+          child: CircularProgressIndicator(
+              strokeWidth: 2, color: Color(0xFF00E5FF)),
+        ),
+      );
+    }
+
+    final nets = _deviceInfo?.networks;
+
+    // Networks available and user hasn't switched to manual entry
+    if (nets != null && nets.isNotEmpty && !_manualSsidEntry) {
+      return _buildNetworkDropdown(nets);
+    }
+
+    // No networks found, scan failed, or manual entry selected
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _buildTextField(
+          controller: _ssidCtrl,
+          label: 'Wi-Fi Network Name (SSID)',
+          icon: Icons.wifi,
+          onChanged: (_) => setState(() {}),
+        ),
+        if (nets != null && nets.isNotEmpty) ...[
+          const SizedBox(height: 4),
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton(
+              onPressed: () => setState(() => _manualSsidEntry = false),
+              child: const Text('Pick from list',
+                  style: TextStyle(color: Color(0xFF00E5FF), fontSize: 12)),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildNetworkDropdown(List<WifiNetwork> networks) {
+    // Ensure the current text value is in the list; if not, default to first.
+    final currentSsid = _ssidCtrl.text;
+    final inList = networks.any((n) => n.ssid == currentSsid);
+    if (!inList) {
+      // Pre-select the strongest network on first render
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _ssidCtrl.text.isEmpty) {
+          setState(() => _ssidCtrl.text = networks.first.ssid);
+        }
+      });
+    }
+
+    final selectedSsid = inList ? currentSsid : networks.first.ssid;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        DropdownButtonFormField<String>(
+          value: selectedSsid,
+          dropdownColor: const Color(0xFF121826),
+          style: const TextStyle(color: Colors.white, fontSize: 14),
+          isExpanded: true,
+          decoration: InputDecoration(
+            labelText: 'Wi-Fi Network',
+            labelStyle: const TextStyle(color: Colors.white38),
+            prefixIcon:
+                const Icon(Icons.wifi, color: Color(0xFF00E5FF)),
+            filled: true,
+            fillColor: const Color(0xFF121826),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide.none,
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide:
+                  const BorderSide(color: Color(0xFF00E5FF)),
+            ),
+          ),
+          items: networks
+              .map((n) => DropdownMenuItem(
+                    value: n.ssid,
+                    child: Row(children: [
+                      Icon(
+                        Icons.wifi,
+                        size: 18,
+                        color: _signalColor(n.signalLevel),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(n.ssid,
+                            overflow: TextOverflow.ellipsis),
+                      ),
+                      Text('${n.rssi} dBm',
+                          style: const TextStyle(
+                              color: Colors.white38, fontSize: 11)),
+                    ]),
+                  ))
+              .toList(),
+          onChanged: _inProgress
+              ? null
+              : (v) => setState(() => _ssidCtrl.text = v ?? selectedSsid),
+        ),
+        const SizedBox(height: 4),
+        Align(
+          alignment: Alignment.centerRight,
+          child: TextButton(
+            onPressed:
+                () => setState(() => _manualSsidEntry = true),
+            child: const Text('Type manually',
+                style: TextStyle(
+                    color: Color(0xFF00E5FF), fontSize: 12)),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// A read-only-looking field used while the network scan is in progress.
+  Widget _buildDisabledField(
+      {required IconData icon,
+      required String label,
+      required Widget trailing}) {
+    return Container(
+      padding:
+          const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF121826),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(children: [
+        Icon(icon, color: const Color(0xFF00E5FF)),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Text(label,
+              style:
+                  const TextStyle(color: Colors.white38, fontSize: 14)),
+        ),
+        trailing,
+      ]),
+    );
+  }
+
+  Color _signalColor(int level) {
+    switch (level) {
+      case 3:  return Colors.greenAccent;
+      case 2:  return Colors.lightGreenAccent;
+      case 1:  return Colors.orangeAccent;
+      default: return Colors.redAccent;
+    }
   }
 
   Widget _buildFooter() {
