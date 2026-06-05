@@ -22,11 +22,11 @@ CONFIG_MBEDTLS_TLS_CLIENT=y
 
 # ── BLE / NimBLE (for Wi-Fi provisioning on first boot) ──────────────────────
 # NimBLE works on ESP32-C3, ESP32-C6, and ESP32-S3 out of the box.
-# For the original ESP32 (classic), also add:
-#   CONFIG_BTDM_CTRL_MODE_BLE_ONLY=y
-# to restrict the dual-mode BT controller to BLE-only and enable NimBLE.
+# Classic ESP32 (WROOM/WROVER) has a dual-mode BT controller; restrict it to
+# BLE-only so NimBLE can drive it.
 CONFIG_BT_ENABLED=y
 CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BTDM_CTRL_MODE_BLE_ONLY=y
 CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
 CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_INTERNAL=y
 CONFIG_BT_NIMBLE_LOG_LEVEL_NONE=y

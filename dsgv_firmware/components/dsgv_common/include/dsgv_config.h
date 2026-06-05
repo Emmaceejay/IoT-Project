@@ -192,3 +192,10 @@
 // Credential char:    beb5483e-36e1-4688-b7f5-ea07361b26a8  (Write JSON creds)
 // Status char:        beb5483f-36e1-4688-b7f5-ea07361b26a8  (Read + Notify)
 #define DSGV_PROV_DEVICE_NAME_PREFIX  "DSGVHub_"
+
+// ── Factory Reset via Wall Switch ─────────────────────────────────────────────
+// Toggle gang 0's wall switch DSGV_RESET_TOGGLE_COUNT times within
+// DSGV_RESET_WINDOW_MS milliseconds to erase Wi-Fi credentials and reboot
+// into BLE provisioning mode.
+#define DSGV_RESET_TOGGLE_COUNT   5
+#define DSGV_RESET_WINDOW_MS      10000

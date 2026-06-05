@@ -16,6 +16,7 @@
 #include "dsgv_config.h"
 #include "dsgv_device_config.h"
 #include "dsgv_device_state.h"
+#include "wifi_manager.h"
 
 #include "driver/gpio.h"
 #include "driver/ledc.h"
@@ -53,6 +54,11 @@ static int64_t       s_wall_sw_last_us[DSGV_MAX_RELAY_COUNT];
 
 // 50 ms software debounce — mechanical wall switches typically settle in < 20 ms
 #define WALL_SW_DEBOUNCE_US  50000
+
+#define RESET_WINDOW_US  ((int64_t)DSGV_RESET_WINDOW_MS * 1000)
+
+static int     s_reset_count           = 0;
+static int64_t s_reset_window_start_us = 0;
 
 // ── External symbols ──────────────────────────────────────────────────────────
 
@@ -239,6 +245,22 @@ static void wall_switch_task(void *pvParam) {
         int64_t now = esp_timer_get_time();
         if (now - s_wall_sw_last_us[gang] < WALL_SW_DEBOUNCE_US) continue;
         s_wall_sw_last_us[gang] = now;
+
+        // Factory reset: toggle gang 0 DSGV_RESET_TOGGLE_COUNT times within
+        // DSGV_RESET_WINDOW_MS ms → erase Wi-Fi creds and reboot into provisioning.
+        if (gang == 0) {
+            if (s_reset_count == 0 || (now - s_reset_window_start_us) > RESET_WINDOW_US) {
+                s_reset_count           = 1;
+                s_reset_window_start_us = now;
+            } else {
+                s_reset_count++;
+                if (s_reset_count >= DSGV_RESET_TOGGLE_COUNT) {
+                    ESP_LOGW(TAG, "Factory reset triggered (%d toggles in %d ms)",
+                             DSGV_RESET_TOGGLE_COUNT, DSGV_RESET_WINDOW_MS);
+                    wifi_manager_factory_reset(); // erases NVS and calls esp_restart()
+                }
+            }
+        }
 
         bool new_state;
         STATE_LOCK();

@@ -22,6 +22,7 @@
 #include "esp_netif.h"
 #include "esp_wifi.h"
 #include "esp_app_desc.h"
+#include "esp_mac.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -36,6 +37,22 @@ esp_err_t DSGV_mqtt_start(void);
 void      DSGV_gpio_init(void);
 
 static const char *TAG = "DSGV_main";
+
+// Prints device identity to serial once NVS config is loaded.
+// Copy the Pair Code and Auth Token from here when building each device.
+static void print_device_identity(void) {
+    uint8_t mac[6];
+    esp_read_mac(mac, ESP_MAC_BT);
+    ESP_LOGI(TAG, "");
+    ESP_LOGI(TAG, "================================================");
+    ESP_LOGI(TAG, "  BLE Name  : %s%02X%02X%02X",
+             DSGV_PROV_DEVICE_NAME_PREFIX, mac[3], mac[4], mac[5]);
+    ESP_LOGI(TAG, "  Pair Code : %02X%02X%02X", mac[3], mac[4], mac[5]);
+    ESP_LOGI(TAG, "  Auth Token: %.16s", g_device_config.auth_token);
+    ESP_LOGI(TAG, "             %.16s", g_device_config.auth_token + 16);
+    ESP_LOGI(TAG, "================================================");
+    ESP_LOGI(TAG, "");
+}
 
 void dsgv_app_main(void)
 {
@@ -52,6 +69,7 @@ void dsgv_app_main(void)
 
     // Load per-SKU device config (NVS overlay on top of CONFIG_DSGV_* defaults)
     ESP_ERROR_CHECK(DSGV_device_config_load());
+    print_device_identity();
 
     // ── Step 2: TCP/IP stack + Event Loop ────────────────────────────────────
     ESP_ERROR_CHECK(esp_netif_init());
@@ -59,22 +77,35 @@ void dsgv_app_main(void)
     esp_netif_create_default_wifi_sta();
 
     // ── Step 3: GPIO ─────────────────────────────────────────────────────────
+    // sensor_task calls STATE_LOCK() as soon as it's created inside DSGV_gpio_init(),
+    // which is before DSGV_mqtt_start() would normally create the mutex — so create
+    // it here first.
+    if (g_state_mutex == NULL) {
+        g_state_mutex = xSemaphoreCreateMutex();
+        configASSERT(g_state_mutex != NULL);
+    }
     DSGV_gpio_init();
 
     // ── Step 4: Wi-Fi ────────────────────────────────────────────────────────
     esp_err_t wifi_err = wifi_manager_connect();
 
     if (wifi_err == ESP_ERR_NOT_FOUND) {
-        ESP_LOGW(TAG, "No Wi-Fi credentials — entering BLE provisioning mode.");
+        ESP_LOGW(TAG, "No Wi-Fi credentials — starting BLE advertising now.");
+        ESP_LOGW(TAG, "Open your app and connect to: %s<Pair Code from above>",
+                 DSGV_PROV_DEVICE_NAME_PREFIX);
         ESP_ERROR_CHECK(DSGV_provisioning_start());
         vTaskSuspend(NULL);
         return;
     }
 
-    vTaskDelay(pdMS_TO_TICKS(3000));
+    // Poll up to 15 s — WPA3-SAE (Dragonfly handshake) takes 4-5 s, well over
+    // the 3 s that WPA2 needs.
+    for (int i = 0; i < 15 && !wifi_manager_is_connected(); i++) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
 
     if (!wifi_manager_is_connected()) {
-        ESP_LOGE(TAG, "Wi-Fi failed to connect within 3 s. Halting.");
+        ESP_LOGE(TAG, "Wi-Fi failed to connect within 15 s. Halting.");
         return;
     }
 
@@ -84,7 +115,13 @@ void dsgv_app_main(void)
     ESP_ERROR_CHECK(DSGV_http_server_start());
 
     // ── Step 6: MQTT client ───────────────────────────────────────────────────
-    ESP_ERROR_CHECK(DSGV_mqtt_start());
+    // Best-effort — a failed MQTT init must NOT abort the device.
+    // HTTP server and physical button control remain fully functional without cloud.
+    esp_err_t mqtt_err = DSGV_mqtt_start();
+    if (mqtt_err != ESP_OK) {
+        ESP_LOGW(TAG, "MQTT start failed (%s) — device operable via HTTP and local control",
+                 esp_err_to_name(mqtt_err));
+    }
 
     ESP_LOGI(TAG, "=== DSGV Hub Firmware fully initialized ===");
     ESP_LOGI(TAG, "Device     : %s  caps=%s  relays=%u",

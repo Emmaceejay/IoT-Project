@@ -89,3 +89,79 @@ esp_err_t wifi_manager_factory_reset(void) {
 bool wifi_manager_is_connected(void) {
     return s_connected;
 }
+
+// ── Provisioning-time Wi-Fi scan ──────────────────────────────────────────────
+
+// Write a JSON-safe quoted string into buf[off], return new offset.
+static size_t _json_str(char *buf, size_t cap, size_t off, const char *s) {
+    if (off + 3 >= cap) return off;
+    buf[off++] = '"';
+    for (; *s && off + 2 < cap; s++) {
+        unsigned char c = (unsigned char)*s;
+        if (c == '"' || c == '\\') { buf[off++] = '\\'; buf[off++] = (char)c; }
+        else if (c >= 0x20)         { buf[off++] = (char)c; }
+        // control chars silently dropped
+    }
+    buf[off++] = '"';
+    return off;
+}
+
+esp_err_t wifi_manager_scan_networks(char *json_out, size_t json_len) {
+    // Initialise Wi-Fi driver only if it hasn't been started yet.
+    wifi_mode_t mode;
+    if (esp_wifi_get_mode(&mode) == ESP_ERR_WIFI_NOT_INIT) {
+        wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+        esp_err_t err = esp_wifi_init(&cfg);
+        if (err != ESP_OK) {
+            snprintf(json_out, json_len, "[]");
+            return err;
+        }
+        esp_wifi_set_mode(WIFI_MODE_STA);
+        esp_wifi_start();
+    }
+
+    ESP_LOGI(TAG, "Scanning for Wi-Fi networks…");
+    esp_err_t err = esp_wifi_scan_start(NULL, true); // blocking ~2 s
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Wi-Fi scan failed: %d", err);
+        snprintf(json_out, json_len, "[]");
+        return err;
+    }
+
+    uint16_t count = 15;
+    wifi_ap_record_t recs[15];
+    esp_wifi_scan_get_ap_records(&count, recs);
+
+    // Serialize to JSON array; deduplicate SSIDs; skip hidden networks.
+    size_t off = 0;
+    json_out[off++] = '[';
+    bool first = true;
+    // Keep track of SSIDs already written to avoid duplicates.
+    // Points into recs[].ssid which is valid for the lifetime of this function.
+    const char *seen[15];
+    int seen_n = 0;
+
+    for (int i = 0; i < (int)count && off < json_len - 64; i++) {
+        const char *ssid = (const char *)recs[i].ssid;
+        if (ssid[0] == '\0') continue;      // hidden network — skip
+
+        bool dup = false;
+        for (int j = 0; j < seen_n; j++) {
+            if (strcmp(seen[j], ssid) == 0) { dup = true; break; }
+        }
+        if (dup) continue;
+        if (seen_n < 15) seen[seen_n++] = ssid;
+
+        if (!first) json_out[off++] = ',';
+        first = false;
+
+        memcpy(json_out + off, "{\"ssid\":", 8); off += 8;
+        off = _json_str(json_out, json_len - 16, off, ssid);
+        off += snprintf(json_out + off, json_len - off, ",\"rssi\":%d}", recs[i].rssi);
+    }
+    json_out[off++] = ']';
+    json_out[off]   = '\0';
+
+    ESP_LOGI(TAG, "Wi-Fi scan complete: %d network(s) → %zu bytes JSON", seen_n, off);
+    return ESP_OK;
+}

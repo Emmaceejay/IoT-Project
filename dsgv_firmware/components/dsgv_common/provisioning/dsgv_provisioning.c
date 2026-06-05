@@ -38,10 +38,11 @@ static const char *TAG = "DSGV_prov";
 
 // ── Module state ─────────────────────────────────────────────────────────────
 
-static char     s_dev_name[24];   // "DSGVHub_AABBCC\0"
-static char     s_status[80];     // Current status string sent to the app
-static uint16_t s_status_handle;  // Resolved GATT handle for status char
+static char     s_dev_name[24];          // "DSGVHub_AABBCC\0"
+static char     s_status[80];            // Current status string sent to the app
+static uint16_t s_status_handle;         // Resolved GATT handle for status char
 static uint16_t s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+static char     s_wifi_scan_json[1024];  // JSON array populated before advertising starts
 
 // ── UUID definitions (128-bit, stored in little-endian byte order) ─────────
 //
@@ -65,6 +66,21 @@ static const ble_uuid128_t s_cred_uuid = BLE_UUID128_INIT(
 static const ble_uuid128_t s_status_uuid = BLE_UUID128_INIT(
     0xa8, 0x26, 0x1b, 0x36, 0x07, 0xea, 0xf5, 0xb7,
     0x88, 0x46, 0xe1, 0x36, 0x3f, 0x48, 0xb5, 0xbe
+);
+
+// Wi-Fi Scan Results (Read): beb5483d-36e1-4688-b7f5-ea07361b26a8
+// App reads this after connecting to get a JSON list of nearby networks.
+static const ble_uuid128_t s_wifi_scan_uuid = BLE_UUID128_INIT(
+    0xa8, 0x26, 0x1b, 0x36, 0x07, 0xea, 0xf5, 0xb7,
+    0x88, 0x46, 0xe1, 0x36, 0x3d, 0x48, 0xb5, 0xbe
+);
+
+// Device Info (Read): beb5483c-36e1-4688-b7f5-ea07361b26a8
+// Returns the device's own identity so the app never needs a type picker.
+// Format: {"device_type":"Switch","capabilities":["relay"],"relay_count":1}
+static const ble_uuid128_t s_device_info_uuid = BLE_UUID128_INIT(
+    0xa8, 0x26, 0x1b, 0x36, 0x07, 0xea, 0xf5, 0xb7,
+    0x88, 0x46, 0xe1, 0x36, 0x3c, 0x48, 0xb5, 0xbe
 );
 
 // ── Forward declarations ──────────────────────────────────────────────────────
@@ -204,6 +220,27 @@ static int status_read_cb(uint16_t conn_handle, uint16_t attr_handle,
     return rc == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
 }
 
+static int wifi_scan_read_cb(uint16_t conn_handle, uint16_t attr_handle,
+                              struct ble_gatt_access_ctxt *ctxt, void *arg) {
+    size_t len = strlen(s_wifi_scan_json);
+    int rc = os_mbuf_append(ctxt->om, s_wifi_scan_json, (uint16_t)len);
+    return rc == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
+}
+
+static int device_info_read_cb(uint16_t conn_handle, uint16_t attr_handle,
+                                struct ble_gatt_access_ctxt *ctxt, void *arg) {
+    // g_device_config.capabilities is already a JSON array string e.g. ["relay"]
+    char buf[300];
+    int len = snprintf(buf, sizeof(buf),
+        "{\"device_type\":\"%s\",\"capabilities\":%s,\"relay_count\":%u}",
+        g_device_config.device_type,
+        g_device_config.capabilities,
+        (unsigned)g_device_config.relay_count);
+    if (len <= 0) return BLE_ATT_ERR_UNLIKELY;
+    int rc = os_mbuf_append(ctxt->om, buf, (uint16_t)len);
+    return rc == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
+}
+
 // ── GATT service table ────────────────────────────────────────────────────────
 
 static const struct ble_gatt_svc_def s_gatt_svcs[] = {
@@ -224,6 +261,20 @@ static const struct ble_gatt_svc_def s_gatt_svcs[] = {
                 .flags      = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
                 .val_handle = &s_status_handle,
             },
+            {
+                // Read nearby Wi-Fi networks — JSON array, populated before
+                // advertising starts so the value is always ready when app reads.
+                .uuid      = &s_wifi_scan_uuid.u,
+                .access_cb = wifi_scan_read_cb,
+                .flags     = BLE_GATT_CHR_F_READ,
+            },
+            {
+                // Device identity — type, capabilities, relay count.
+                // App reads this so it never needs to ask the user to pick a device type.
+                .uuid      = &s_device_info_uuid.u,
+                .access_cb = device_info_read_cb,
+                .flags     = BLE_GATT_CHR_F_READ,
+            },
             { 0 }, // end of characteristics
         },
     },
@@ -235,15 +286,29 @@ static const struct ble_gatt_svc_def s_gatt_svcs[] = {
 static int gap_event_cb(struct ble_gap_event *event, void *arg);
 
 static void do_advertise(void) {
+    // Primary ad: flags + service UUID — UUID in the primary packet ensures apps that
+    // filter by service UUID find the device even with passive scanning.
     struct ble_hs_adv_fields fields = {0};
-    fields.flags             = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
-    fields.name              = (const uint8_t *)s_dev_name;
-    fields.name_len          = (uint8_t)strlen(s_dev_name);
-    fields.name_is_complete  = 1;
+    fields.flags                = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
+    fields.uuids128             = &s_svc_uuid;
+    fields.num_uuids128         = 1;
+    fields.uuids128_is_complete = 1;
 
     int rc = ble_gap_adv_set_fields(&fields);
     if (rc != 0) {
         ESP_LOGE(TAG, "ble_gap_adv_set_fields failed: rc=%d", rc);
+        return;
+    }
+
+    // Scan response: device name (returned on active scan / connection for display)
+    struct ble_hs_adv_fields rsp = {0};
+    rsp.name             = (const uint8_t *)s_dev_name;
+    rsp.name_len         = (uint8_t)strlen(s_dev_name);
+    rsp.name_is_complete = 1;
+
+    rc = ble_gap_adv_rsp_set_fields(&rsp);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "ble_gap_adv_rsp_set_fields failed: rc=%d", rc);
         return;
     }
 
@@ -332,6 +397,13 @@ esp_err_t DSGV_provisioning_start(void) {
              DSGV_PROV_DEVICE_NAME_PREFIX, mac[3], mac[4], mac[5]);
 
     strlcpy(s_status, "idle", sizeof(s_status));
+
+    // Scan for nearby networks before BLE starts — result is stored in
+    // s_wifi_scan_json and served via the Wi-Fi scan GATT characteristic.
+    // Doing this synchronously here means data is always ready the moment
+    // the app connects; no polling or notification timing required.
+    strlcpy(s_wifi_scan_json, "[]", sizeof(s_wifi_scan_json));
+    wifi_manager_scan_networks(s_wifi_scan_json, sizeof(s_wifi_scan_json));
 
     ESP_LOGI(TAG, "Initialising BLE provisioning (%s)…", s_dev_name);
 

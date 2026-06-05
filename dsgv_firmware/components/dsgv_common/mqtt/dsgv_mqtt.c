@@ -299,11 +299,15 @@ static void mqtt_event_handler(void *arg, esp_event_base_t base,
         case MQTT_EVENT_ERROR:
             ESP_LOGE(TAG, "MQTT error. Broker unreachable.");
             if (!s_using_local_broker) {
-                // Cloud broker failed → fall back to local Mosquitto
+                // Cloud broker failed → fall back to local Mosquitto.
+                // MUST use the deferred task — calling esp_mqtt_client_destroy()
+                // from inside an MQTT event callback deadlocks the MQTT task and
+                // can starve the HTTP server and GPIO interrupt tasks.
                 s_using_local_broker = true;
-                ESP_LOGW(TAG, "Retrying with local broker %s:%d (plain)",
+                ESP_LOGW(TAG, "Scheduling fallback to local broker %s:%d (plain)",
                          MQTT_LOCAL_HOST, MQTT_LOCAL_PORT);
-                connect_to_broker(MQTT_LOCAL_HOST, MQTT_LOCAL_PORT, false);
+                _schedule_broker_switch(MQTT_LOCAL_HOST, MQTT_LOCAL_PORT,
+                                        /*tls=*/false, /*is_rollback=*/false);
             }
             break;
 
