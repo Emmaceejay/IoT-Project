@@ -35,6 +35,9 @@ class DeviceEntity {
   /// Never overwritten by MQTT announce — only changed by explicit user action.
   String? customName;
 
+  /// Power restore preference stored as its enum name: "off" | "restore" | "on".
+  String powerRestoreModeStr = 'off';
+
   // ── Conversions ───────────────────────────────────────────────────────────
 
   MatterDevice toDomain() => MatterDevice(
@@ -52,6 +55,10 @@ class DeviceEntity {
         localIp: localIp,
         authToken: authToken,
         customName: customName,
+        powerRestoreMode: PowerRestoreMode.values.firstWhere(
+          (m) => m.name == powerRestoreModeStr,
+          orElse: () => PowerRestoreMode.off,
+        ),
       );
 
   static DeviceEntity fromDomain(MatterDevice d) => DeviceEntity()
@@ -63,5 +70,6 @@ class DeviceEntity {
         d.telemetry.isNotEmpty ? jsonEncode(d.telemetry) : '{}'
     ..localIp = d.localIp
     ..authToken = d.authToken
-    ..customName = d.customName;
+    ..customName = d.customName
+    ..powerRestoreModeStr = d.powerRestoreMode.name;
 }

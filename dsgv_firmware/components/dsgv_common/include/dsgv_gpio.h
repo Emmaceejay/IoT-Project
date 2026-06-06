@@ -36,3 +36,8 @@ void DSGV_gpio_rgb_set(uint8_t r, uint8_t g, uint8_t b);  // 0-255 per channel
 // Called by MQTT handle_command() and HTTP apply_capability() after any state
 // update so relay, LEDC PWM, and LED all reflect the latest command.
 void DSGV_gpio_apply_state(void);
+
+// ── Persist current relay states to NVS ──────────────────────────────────────
+// Call after any relay state change so "restore" mode can recover them.
+// Safe to call from any task context (NVS write is blocking but < 100 ms).
+void DSGV_gpio_save_relay_state(void);

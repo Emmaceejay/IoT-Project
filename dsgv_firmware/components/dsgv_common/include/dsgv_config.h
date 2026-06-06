@@ -61,6 +61,11 @@
 
 // ── NVS namespaces ────────────────────────────────────────────────────────────
 #define MQTT_CFG_NVS_NS          "mqtt_cfg"
+#define DSGV_DEVICE_NVS_NS       "dsgv_device"    // per-device user settings
+
+// Keys inside DSGV_DEVICE_NVS_NS:
+#define DSGV_NVS_KEY_RESTORE     "restore_mode"   // "off" | "on" | "restore"
+#define DSGV_NVS_KEY_RELAY_ST    "relay_state"    // uint8 bitmask, bits 0-3
 
 // ── Telemetry ─────────────────────────────────────────────────────────────────
 #define DSGV_TELEMETRY_INTERVAL_MS      30000   // heartbeat: publish every 30 s

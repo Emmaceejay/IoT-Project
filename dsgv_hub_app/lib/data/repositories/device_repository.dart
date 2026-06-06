@@ -25,4 +25,8 @@ abstract class DeviceRepository {
   /// Preferred over [updateDeviceState] for status changes because it writes
   /// [DeviceEntity.statusName] rather than patching telemetryJson.
   Future<void> updateDeviceStatus(String deviceId, DeviceStatus status);
+
+  /// Persists the user's power restore preference as a dedicated field.
+  /// Never touches telemetryJson — this is a device configuration, not telemetry.
+  Future<void> updatePowerRestoreMode(String deviceId, PowerRestoreMode mode);
 }

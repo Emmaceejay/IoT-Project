@@ -21,6 +21,11 @@ class DeviceSettingsScreen extends ConsumerStatefulWidget {
 class _DeviceSettingsScreenState extends ConsumerState<DeviceSettingsScreen> {
   late final TextEditingController _nameController;
 
+  /// True when the device has at least one relay — power restore only applies
+  /// to output devices, not pure sensors.
+  bool get _hasRelay => widget.device.capabilities
+      .any((c) => c == 'relay' || c.startsWith('relay_'));
+
   @override
   void initState() {
     super.initState();
@@ -42,8 +47,24 @@ class _DeviceSettingsScreenState extends ConsumerState<DeviceSettingsScreen> {
     if (mounted) Navigator.of(context).pop();
   }
 
+  Future<void> _setRestoreMode(PowerRestoreMode mode) async {
+    await ref
+        .read(deviceManagerProvider.notifier)
+        .setPowerRestoreMode(widget.device.uniqueDeviceId, mode);
+  }
+
   @override
   Widget build(BuildContext context) {
+    // Watch live device so the power restore chip updates immediately after send.
+    final device = ref
+            .watch(deviceManagerProvider)
+            .valueOrNull
+            ?.firstWhere(
+              (d) => d.uniqueDeviceId == widget.device.uniqueDeviceId,
+              orElse: () => widget.device,
+            ) ??
+        widget.device;
+
     return Scaffold(
       backgroundColor: const Color(0xFF0A0E1A),
       appBar: AppBar(
@@ -107,6 +128,66 @@ class _DeviceSettingsScreenState extends ConsumerState<DeviceSettingsScreen> {
             ),
           ),
 
+          // ── Power Restore ────────────────────────────────────────────
+          if (_hasRelay) ...[
+            const SizedBox(height: 24),
+            _section('Power Restore'),
+            _card(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'What should this device do when power returns after an outage or restart?',
+                    style: TextStyle(
+                        color: Colors.white54,
+                        fontSize: 12,
+                        height: 1.5),
+                  ),
+                  const SizedBox(height: 12),
+                  _restoreOption(
+                    current: device.powerRestoreMode,
+                    value: PowerRestoreMode.off,
+                    label: 'Always OFF',
+                    description:
+                        'Stays off — you switch it on manually. Safest choice.',
+                    icon: Icons.power_off_rounded,
+                  ),
+                  _restoreOption(
+                    current: device.powerRestoreMode,
+                    value: PowerRestoreMode.restore,
+                    label: 'Restore last state',
+                    description:
+                        'Returns to whatever it was before the outage.',
+                    icon: Icons.history_rounded,
+                  ),
+                  _restoreOption(
+                    current: device.powerRestoreMode,
+                    value: PowerRestoreMode.on,
+                    label: 'Always ON',
+                    description:
+                        'Turns on automatically — useful for essential devices.',
+                    icon: Icons.power_rounded,
+                  ),
+                  if (device.status != DeviceStatus.online) ...[
+                    const SizedBox(height: 10),
+                    const Row(
+                      children: [
+                        Icon(Icons.info_outline,
+                            size: 13, color: Colors.white38),
+                        SizedBox(width: 6),
+                        Text(
+                          'Device is offline — setting will apply on reconnect.',
+                          style:
+                              TextStyle(color: Colors.white38, fontSize: 11),
+                        ),
+                      ],
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+
           const SizedBox(height: 24),
 
           // ── Read-only device info ────────────────────────────────────
@@ -131,6 +212,81 @@ class _DeviceSettingsScreenState extends ConsumerState<DeviceSettingsScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _restoreOption({
+    required PowerRestoreMode current,
+    required PowerRestoreMode value,
+    required String label,
+    required String description,
+    required IconData icon,
+  }) {
+    final selected = current == value;
+    return InkWell(
+      borderRadius: BorderRadius.circular(10),
+      onTap: () => _setRestoreMode(value),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Radio indicator
+            Container(
+              width: 20,
+              height: 20,
+              margin: const EdgeInsets.only(top: 2, right: 12),
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: selected
+                      ? const Color(0xFF00E5FF)
+                      : Colors.white24,
+                  width: 2,
+                ),
+              ),
+              child: selected
+                  ? Center(
+                      child: Container(
+                        width: 9,
+                        height: 9,
+                        decoration: const BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: Color(0xFF00E5FF),
+                        ),
+                      ),
+                    )
+                  : null,
+            ),
+            // Icon
+            Icon(icon,
+                size: 18,
+                color:
+                    selected ? const Color(0xFF00E5FF) : Colors.white38),
+            const SizedBox(width: 10),
+            // Text
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(label,
+                      style: TextStyle(
+                        color: selected ? Colors.white : Colors.white70,
+                        fontSize: 14,
+                        fontWeight: selected
+                            ? FontWeight.w600
+                            : FontWeight.normal,
+                      )),
+                  const SizedBox(height: 2),
+                  Text(description,
+                      style: const TextStyle(
+                          color: Colors.white38, fontSize: 11, height: 1.4)),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

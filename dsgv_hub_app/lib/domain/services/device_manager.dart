@@ -171,19 +171,68 @@ class DeviceManager extends AsyncNotifier<List<MatterDevice>> {
   }
 
   /// Applies live telemetry payload from MQTT to the matching device.
+  /// If the payload contains [power_restore], it is extracted and stored as a
+  /// dedicated field rather than mixed into the raw telemetry map.
   void applyTelemetry(String deviceId, Map<String, dynamic> telemetry) {
     final devices = state.value;
     if (devices == null) return;
+
+    // Extract power_restore before storing telemetry so it stays a typed field.
+    final restoreRaw = telemetry['power_restore'] as String?;
+    PowerRestoreMode? restoreMode;
+    if (restoreRaw != null) {
+      restoreMode = PowerRestoreMode.values.firstWhere(
+        (m) => m.name == restoreRaw,
+        orElse: () => PowerRestoreMode.off,
+      );
+    }
+    final cleanTelemetry = restoreRaw != null
+        ? (Map<String, dynamic>.from(telemetry)..remove('power_restore'))
+        : telemetry;
+
     state = AsyncValue.data(
       devices.map((d) {
         if (d.uniqueDeviceId != deviceId) return d;
         return d.copyWith(
           status: DeviceStatus.online,
-          telemetry: {...d.telemetry, ...telemetry},
+          telemetry: {...d.telemetry, ...cleanTelemetry},
+          powerRestoreMode: restoreMode,
         );
       }).toList(),
     );
-    _repository.updateDeviceState(deviceId, telemetry);
+    _repository.updateDeviceState(deviceId, cleanTelemetry);
+    if (restoreMode != null) {
+      _repository.updatePowerRestoreMode(deviceId, restoreMode);
+    }
+  }
+
+  /// Sends the user's power restore preference to the device and persists it.
+  /// The command is sent via MQTT. Local state and ObjectBox are updated
+  /// optimistically so the UI reflects the change even while the device is
+  /// processing the request.
+  Future<void> setPowerRestoreMode(
+      String deviceId, PowerRestoreMode mode) async {
+    // 1. Optimistic local update
+    state = AsyncValue.data(
+      (state.valueOrNull ?? []).map((d) {
+        if (d.uniqueDeviceId != deviceId) return d;
+        return d.copyWith(powerRestoreMode: mode);
+      }).toList(),
+    );
+
+    // 2. MQTT command — device stores it in NVS and echoes back in telemetry
+    final mqttStatus = ref.read(mqttServiceProvider);
+    if (mqttStatus.isConnected) {
+      final payload =
+          jsonEncode({'device_id': deviceId, 'power_restore': mode.name});
+      await ref
+          .read(mqttServiceProvider.notifier)
+          .publishCommand(deviceId, payload);
+    }
+
+    // 3. Persist to ObjectBox
+    await _repository.updatePowerRestoreMode(deviceId, mode);
+    debugPrint('[DeviceManager] Device $deviceId power_restore → ${mode.name}');
   }
 
   /// Handles a device announce message from MQTT.

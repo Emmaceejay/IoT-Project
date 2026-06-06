@@ -40,19 +40,20 @@ static const char *TAG = "DSGV_mqtt";
 
 // ── Global shared state (also used by DSGV_http_server.c) ───────────────────
 DSGV_device_state_t g_device_state = {
-    .relay_states    = {false, false, false, false},
-    .brightness      = 0,
-    .color_temp_k    = 4000,
-    .rgb_r           = 255,
-    .rgb_g           = 255,
-    .rgb_b           = 255,
-    .humidity        = 0.0f,
-    .motion_detected = false,
-    .contact_closed  = false,
-    .current_temp    = 0.0f,
-    .target_temp     = 22.0f,
-    .hvac_mode       = "auto",
-    .local_ip        = "",
+    .relay_states        = {false, false, false, false},
+    .brightness          = 0,
+    .color_temp_k        = 4000,
+    .rgb_r               = 255,
+    .rgb_g               = 255,
+    .rgb_b               = 255,
+    .humidity            = 0.0f,
+    .motion_detected     = false,
+    .contact_closed      = false,
+    .current_temp        = 0.0f,
+    .target_temp         = 22.0f,
+    .hvac_mode           = "auto",
+    .local_ip            = "",
+    .power_restore_mode  = "off",  // safe default — overwritten by NVS on first boot
 };
 SemaphoreHandle_t g_state_mutex = NULL;
 
@@ -91,6 +92,7 @@ extern esp_err_t DSGV_ota_begin(const char *json_payload);
 
 // Declared in DSGV_gpio.c
 extern void DSGV_gpio_apply_state(void);
+extern void DSGV_gpio_save_relay_state(void);
 
 // ── Topic builder ─────────────────────────────────────────────────────────────
 
@@ -412,7 +414,8 @@ static void handle_command(const char *payload, int len) {
     int8_t v_power = -1, v_power_2 = -1, v_power_3 = -1, v_power_4 = -1;
     int    v_brightness = -1, v_ct = -1;
     float  v_target = 0.0f; bool v_has_target = false;
-    char   v_mode[16] = ""; bool v_has_mode = false;
+    char   v_mode[16] = "";    bool v_has_mode    = false;
+    char   v_restore[16] = ""; bool v_has_restore = false;
     int    v_red = -1, v_green = -1, v_blue = -1;
 
     cJSON *j;
@@ -462,6 +465,17 @@ static void handle_command(const char *payload, int len) {
         }
     }
 
+    j = cJSON_GetObjectItemCaseSensitive(root, "power_restore");
+    if (cJSON_IsString(j) && j->valuestring) {
+        const char *m = j->valuestring;
+        if (strcmp(m, "off") == 0 || strcmp(m, "on") == 0 || strcmp(m, "restore") == 0) {
+            strlcpy(v_restore, m, sizeof(v_restore));
+            v_has_restore = true;
+        } else {
+            ESP_LOGW(TAG, "CMD power_restore '%s' rejected — must be off|on|restore", m);
+        }
+    }
+
     j = cJSON_GetObjectItemCaseSensitive(root, "red");
     if (cJSON_IsNumber(j)) {
         v_red = (int)j->valuedouble;
@@ -497,6 +511,11 @@ static void handle_command(const char *payload, int len) {
         strlcpy(g_device_state.hvac_mode, v_mode, sizeof(g_device_state.hvac_mode));
         state_changed = true;
     }
+    if (v_has_restore) {
+        strlcpy(g_device_state.power_restore_mode, v_restore,
+                sizeof(g_device_state.power_restore_mode));
+        state_changed = true;
+    }
     if (v_red   >= 0) { g_device_state.rgb_r = (uint8_t)v_red;   state_changed = true; }
     if (v_green >= 0) { g_device_state.rgb_g = (uint8_t)v_green; state_changed = true; }
     if (v_blue  >= 0) { g_device_state.rgb_b = (uint8_t)v_blue;  state_changed = true; }
@@ -511,13 +530,28 @@ static void handle_command(const char *payload, int len) {
     if (v_ct >= 0)         ESP_LOGI(TAG, "CMD color_temp → %dK",  v_ct);
     if (v_has_target)      ESP_LOGI(TAG, "CMD target_temp → %.1fC", v_target);
     if (v_has_mode)        ESP_LOGI(TAG, "CMD mode → %s", v_mode);
+    if (v_has_restore)     ESP_LOGI(TAG, "CMD power_restore → %s", v_restore);
     if (v_red   >= 0) ESP_LOGI(TAG, "CMD red   → %d", v_red);
     if (v_green >= 0) ESP_LOGI(TAG, "CMD green → %d", v_green);
     if (v_blue  >= 0) ESP_LOGI(TAG, "CMD blue  → %d", v_blue);
 
+    // Persist power_restore mode to NVS so it survives reboots.
+    if (v_has_restore) {
+        nvs_handle_t hdev;
+        if (nvs_open(DSGV_DEVICE_NVS_NS, NVS_READWRITE, &hdev) == ESP_OK) {
+            nvs_set_str(hdev, DSGV_NVS_KEY_RESTORE, v_restore);
+            nvs_commit(hdev);
+            nvs_close(hdev);
+        }
+    }
+
     // Drive GPIO outputs to match the new state (relay, LED)
     if (state_changed) {
         DSGV_gpio_apply_state();
+        // Any relay state changes must be persisted for "restore" mode.
+        bool relay_changed = (v_power >= 0 || v_power_2 >= 0 ||
+                              v_power_3 >= 0 || v_power_4 >= 0);
+        if (relay_changed) DSGV_gpio_save_relay_state();
     }
 
     // Publish updated telemetry so the App stays in sync after a command
@@ -532,7 +566,8 @@ static void handle_command(const char *payload, int len) {
             "\"red\":%u,\"green\":%u,\"blue\":%u,"
             "\"current_temp\":%.1f,\"humidity\":%.1f,"
             "\"motion\":%s,\"contact\":%s,"
-            "\"target_temp\":%.1f,\"mode\":\"%s\"}",
+            "\"target_temp\":%.1f,\"mode\":\"%s\","
+            "\"power_restore\":\"%s\"}",
             snap.relay_states[0] ? "true"  : "false",
             snap.relay_states[1] ? "true"  : "false",
             snap.relay_states[2] ? "true"  : "false",
@@ -545,7 +580,8 @@ static void handle_command(const char *payload, int len) {
             snap.motion_detected ? "true"  : "false",
             snap.contact_closed  ? "true"  : "false",
             snap.target_temp,
-            snap.hvac_mode
+            snap.hvac_mode,
+            snap.power_restore_mode[0] ? snap.power_restore_mode : "off"
         );
         DSGV_mqtt_publish_telemetry(telemetry);
     }

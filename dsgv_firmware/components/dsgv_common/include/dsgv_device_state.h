@@ -49,6 +49,12 @@ typedef struct {
 
     // ── Network (populated at runtime from DHCP) ──────────────────────────────
     char local_ip[16];      // e.g. "192.168.1.42"
+
+    // ── Power restore behaviour (persisted in NVS, user-configurable) ─────────
+    // "off"     → relay(s) always start OFF after power loss  (safe default)
+    // "on"      → relay(s) always start ON  after power loss
+    // "restore" → relay(s) return to last known state before power loss
+    char power_restore_mode[16];
 } DSGV_device_state_t;
 
 // ── Global instances (defined in DSGV_mqtt.c, used by all modules) ──────────

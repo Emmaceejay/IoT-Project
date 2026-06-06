@@ -78,4 +78,16 @@ class ObjectBoxDeviceDatasource implements DeviceRepository {
     entity.statusName = status.name;
     _box.put(entity);
   }
+
+  @override
+  Future<void> updatePowerRestoreMode(
+      String deviceId, PowerRestoreMode mode) async {
+    final q =
+        _box.query(DeviceEntity_.uniqueDeviceId.equals(deviceId)).build();
+    final entity = q.findFirst();
+    q.close();
+    if (entity == null) return;
+    entity.powerRestoreModeStr = mode.name;
+    _box.put(entity);
+  }
 }

@@ -77,4 +77,12 @@ class MockDeviceDatasource implements DeviceRepository {
     if (index == -1) return;
     _devices[index] = _devices[index].copyWith(status: status);
   }
+
+  @override
+  Future<void> updatePowerRestoreMode(
+      String deviceId, PowerRestoreMode mode) async {
+    final index = _devices.indexWhere((d) => d.uniqueDeviceId == deviceId);
+    if (index == -1) return;
+    _devices[index] = _devices[index].copyWith(powerRestoreMode: mode);
+  }
 }

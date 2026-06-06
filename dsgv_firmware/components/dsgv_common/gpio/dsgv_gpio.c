@@ -27,6 +27,8 @@
 #include "freertos/queue.h"
 #include "esp_timer.h"
 
+#include "nvs.h"
+
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -199,7 +201,8 @@ static void build_telemetry(char *buf, size_t len) {
         "\"red\":%u,\"green\":%u,\"blue\":%u,"
         "\"current_temp\":%.1f,\"humidity\":%.1f,"
         "\"motion\":%s,\"contact\":%s,"
-        "\"target_temp\":%.1f,\"mode\":\"%s\"}",
+        "\"target_temp\":%.1f,\"mode\":\"%s\","
+        "\"power_restore\":\"%s\"}",
         s.relay_states[0] ? "true"  : "false",
         s.relay_states[1] ? "true"  : "false",
         s.relay_states[2] ? "true"  : "false",
@@ -212,8 +215,68 @@ static void build_telemetry(char *buf, size_t len) {
         s.motion_detected ? "true"  : "false",
         s.contact_closed  ? "true"  : "false",
         s.target_temp,
-        s.hvac_mode
+        s.hvac_mode,
+        s.power_restore_mode[0] ? s.power_restore_mode : "off"
     );
+}
+
+// ── NVS relay-state persistence ───────────────────────────────────────────────
+
+void DSGV_gpio_save_relay_state(void) {
+    STATE_LOCK();
+    uint8_t mask = 0;
+    for (int i = 0; i < 4; i++) {
+        if (g_device_state.relay_states[i]) mask |= (uint8_t)(1u << i);
+    }
+    STATE_UNLOCK();
+
+    nvs_handle_t h;
+    if (nvs_open(DSGV_DEVICE_NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_u8(h, DSGV_NVS_KEY_RELAY_ST, mask);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+}
+
+// Reads power_restore_mode and last relay bitmask from NVS, applies them to
+// g_device_state, and drives the GPIO outputs.  Called once from DSGV_gpio_init()
+// after all relay pins are configured so the device boots into the correct state.
+static void apply_restore_mode_on_boot(void) {
+    char    mode[16] = "off";
+    uint8_t mask     = 0;
+
+    nvs_handle_t h;
+    if (nvs_open(DSGV_DEVICE_NVS_NS, NVS_READONLY, &h) == ESP_OK) {
+        size_t len = sizeof(mode);
+        nvs_get_str(h, DSGV_NVS_KEY_RESTORE, mode, &len);
+        nvs_get_u8 (h, DSGV_NVS_KEY_RELAY_ST, &mask);
+        nvs_close(h);
+    }
+
+    // Persist mode into the shared state struct (reported in every telemetry).
+    STATE_LOCK();
+    strlcpy(g_device_state.power_restore_mode, mode,
+            sizeof(g_device_state.power_restore_mode));
+
+    if (strcmp(mode, "restore") == 0) {
+        for (int i = 0; i < 4; i++) {
+            g_device_state.relay_states[i] = (mask >> i) & 1u;
+        }
+    } else if (strcmp(mode, "on") == 0) {
+        for (int i = 0; i < (int)g_device_config.relay_count; i++) {
+            g_device_state.relay_states[i] = true;
+        }
+    } else {
+        // "off" — default; relay_states already zeroed at boot
+        for (int i = 0; i < 4; i++) {
+            g_device_state.relay_states[i] = false;
+        }
+    }
+    STATE_UNLOCK();
+
+    DSGV_gpio_apply_state();
+
+    ESP_LOGI(TAG, "Power restore: mode=%s, relay_mask=0x%02x", mode, mask);
 }
 
 // ── ISR handlers (IRAM — no heap alloc, no ESP_LOG*) ─────────────────────────
@@ -274,6 +337,7 @@ static void wall_switch_task(void *pvParam) {
         STATE_UNLOCK();
 
         DSGV_gpio_apply_state();
+        DSGV_gpio_save_relay_state();   // persist for "restore" mode
 
         char buf[512];
         build_telemetry(buf, sizeof(buf));
@@ -441,6 +505,9 @@ void DSGV_gpio_init(void) {
     if (s_has_motion)  gpio_isr_handler_add(GPIO_MOTION_PIN,  motion_isr_handler,  NULL);
     if (s_has_contact) gpio_isr_handler_add(GPIO_CONTACT_PIN, contact_isr_handler, NULL);
 
+    // Apply power restore mode — must run last so all GPIOs are ready.
+    apply_restore_mode_on_boot();
+
     ESP_LOGI(TAG, "GPIO ready (relay[0]=%d cnt=%u LED=%d dim=%d warm=%d cool=%d "
              "R=%d G=%d B=%d motion=%d contact=%d)",
              g_device_config.relay_pins[0], g_device_config.relay_count,
@@ -459,6 +526,8 @@ void DSGV_gpio_relay_set(bool on) {
     STATE_LOCK();
     g_device_state.relay_states[0] = on;
     STATE_UNLOCK();
+
+    DSGV_gpio_save_relay_state();   // persist for "restore" mode
 
     ESP_LOGI(TAG, "Relay → %s", on ? "ON" : "OFF");
 

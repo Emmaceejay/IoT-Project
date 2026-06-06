@@ -19,6 +19,8 @@ class _StubRepository implements DeviceRepository {
   Future<void> renameDevice(String id, String name) async {}
   @override
   Future<void> updateDeviceStatus(String id, DeviceStatus status) async {}
+  @override
+  Future<void> updatePowerRestoreMode(String id, PowerRestoreMode mode) async {}
 }
 
 Widget _wrap(MatterDevice device) {
