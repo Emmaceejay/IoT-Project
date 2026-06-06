@@ -52,6 +52,11 @@ static TaskHandle_t  s_sensor_task_handle  = NULL;
 static QueueHandle_t s_wall_sw_queue       = NULL;
 static int64_t       s_wall_sw_last_us[DSGV_MAX_RELAY_COUNT];
 
+// Set in DSGV_gpio_init() from g_device_config.capabilities.
+// Prevents floating-pin ISR storms on devices without these sensors.
+static bool s_has_motion  = false;
+static bool s_has_contact = false;
+
 // 50 ms software debounce — mechanical wall switches typically settle in < 20 ms
 #define WALL_SW_DEBOUNCE_US  50000
 
@@ -282,13 +287,31 @@ static void wall_switch_task(void *pvParam) {
 
 static void sensor_task(void *pvParam) {
     (void)pvParam;
+    char    last_telemetry[512] = "";
+    int64_t last_pub_us         = 0;
+
     for (;;) {
-        // Block until an ISR wakes us or the periodic interval expires.
+        // Block until an ISR wakes us or the heartbeat interval expires.
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(DSGV_TELEMETRY_INTERVAL_MS));
 
+        int64_t now        = esp_timer_get_time();
+        int64_t elapsed_us = now - last_pub_us;
+
+        // Rate cap: never publish faster than DSGV_TELEMETRY_MIN_INTERVAL_MS.
+        // When an ISR storm occurs (e.g. noisy sensor), sleep the remainder of
+        // the window and consume any stacked notifications before continuing.
+        if (last_pub_us != 0 &&
+            elapsed_us < (int64_t)DSGV_TELEMETRY_MIN_INTERVAL_MS * 1000) {
+            TickType_t wait = pdMS_TO_TICKS(
+                DSGV_TELEMETRY_MIN_INTERVAL_MS - (uint32_t)(elapsed_us / 1000));
+            ulTaskNotifyTake(pdTRUE, wait);
+            now = esp_timer_get_time();
+            elapsed_us = now - last_pub_us;
+        }
+
         float temp    = read_temperature();
-        bool  motion  = gpio_get_level(GPIO_MOTION_PIN) == 1;
-        bool  contact = gpio_get_level(GPIO_CONTACT_PIN) == 0;  // LOW = closed
+        bool  motion  = s_has_motion  ? (gpio_get_level(GPIO_MOTION_PIN)  == 1) : false;
+        bool  contact = s_has_contact ? (gpio_get_level(GPIO_CONTACT_PIN) == 0) : false;
 
         STATE_LOCK();
         if (temp > -99.0f) g_device_state.current_temp = temp;
@@ -298,7 +321,15 @@ static void sensor_task(void *pvParam) {
 
         char buf[512];
         build_telemetry(buf, sizeof(buf));
-        DSGV_mqtt_publish_telemetry(buf);
+
+        // Change-detect: publish only when values differ from last snapshot,
+        // or when the full heartbeat interval has elapsed (keepalive / app sync).
+        bool heartbeat = elapsed_us >= (int64_t)DSGV_TELEMETRY_INTERVAL_MS * 1000;
+        if (heartbeat || strcmp(buf, last_telemetry) != 0) {
+            DSGV_mqtt_publish_telemetry(buf);
+            strlcpy(last_telemetry, buf, sizeof(last_telemetry));
+            last_pub_us = now;
+        }
     }
 }
 
@@ -358,21 +389,33 @@ void DSGV_gpio_init(void) {
     }
 
     // ── Motion sensor input (PIR, HIGH-active) ────────────────────────────
-    gpio_config_t in = {
-        .pin_bit_mask = (1ULL << GPIO_MOTION_PIN),
-        .mode         = GPIO_MODE_INPUT,
-        .pull_up_en   = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,  // use external pull-down
-        .intr_type    = GPIO_INTR_ANYEDGE,
-    };
-    gpio_config(&in);
+    // Only configured when the device SKU declares the "motion" capability.
+    // On switch/dimmer/etc. the pin is unconnected; registering an ANYEDGE
+    // ISR on a floating pin causes a publish storm (~100 msg/s on ESP32).
+    s_has_motion = strstr(g_device_config.capabilities, "\"motion\"") != NULL;
+    if (s_has_motion) {
+        gpio_config_t motion_in = {
+            .pin_bit_mask = (1ULL << GPIO_MOTION_PIN),
+            .mode         = GPIO_MODE_INPUT,
+            .pull_up_en   = GPIO_PULLUP_DISABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,  // use external pull-down
+            .intr_type    = GPIO_INTR_ANYEDGE,
+        };
+        gpio_config(&motion_in);
+    }
 
     // ── Contact sensor input (reed switch, LOW-active = closed) ──────────
-    in.pin_bit_mask = (1ULL << GPIO_CONTACT_PIN);
-    in.pull_up_en   = GPIO_PULLUP_DISABLE;   // use external pull-up
-    in.pull_down_en = GPIO_PULLDOWN_DISABLE;
-    in.intr_type    = GPIO_INTR_ANYEDGE;
-    gpio_config(&in);
+    s_has_contact = strstr(g_device_config.capabilities, "\"contact\"") != NULL;
+    if (s_has_contact) {
+        gpio_config_t contact_in = {
+            .pin_bit_mask = (1ULL << GPIO_CONTACT_PIN),
+            .mode         = GPIO_MODE_INPUT,
+            .pull_up_en   = GPIO_PULLUP_DISABLE,   // use external pull-up
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+            .intr_type    = GPIO_INTR_ANYEDGE,
+        };
+        gpio_config(&contact_in);
+    }
 
     // ── ADC NTC (temperature fallback) ───────────────────────────────────
     adc_init();
@@ -394,9 +437,9 @@ void DSGV_gpio_init(void) {
     // is always valid when the first interrupt fires.
     xTaskCreate(sensor_task, "DSGV_sensors", 4096, NULL, 2, &s_sensor_task_handle);
 
-    // Attach ISR handlers now that the task handle is valid
-    gpio_isr_handler_add(GPIO_MOTION_PIN,  motion_isr_handler,  NULL);
-    gpio_isr_handler_add(GPIO_CONTACT_PIN, contact_isr_handler, NULL);
+    // Attach ISR handlers only for capabilities this device actually has.
+    if (s_has_motion)  gpio_isr_handler_add(GPIO_MOTION_PIN,  motion_isr_handler,  NULL);
+    if (s_has_contact) gpio_isr_handler_add(GPIO_CONTACT_PIN, contact_isr_handler, NULL);
 
     ESP_LOGI(TAG, "GPIO ready (relay[0]=%d cnt=%u LED=%d dim=%d warm=%d cool=%d "
              "R=%d G=%d B=%d motion=%d contact=%d)",

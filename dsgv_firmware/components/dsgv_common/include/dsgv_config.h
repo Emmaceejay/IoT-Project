@@ -63,7 +63,8 @@
 #define MQTT_CFG_NVS_NS          "mqtt_cfg"
 
 // ── Telemetry ─────────────────────────────────────────────────────────────────
-#define DSGV_TELEMETRY_INTERVAL_MS  30000
+#define DSGV_TELEMETRY_INTERVAL_MS      30000   // heartbeat: publish every 30 s
+#define DSGV_TELEMETRY_MIN_INTERVAL_MS    500   // rate cap: never faster than 500 ms
 
 // ── Local HTTP Server ─────────────────────────────────────────────────────────
 #define HTTP_SERVER_PORT         80
