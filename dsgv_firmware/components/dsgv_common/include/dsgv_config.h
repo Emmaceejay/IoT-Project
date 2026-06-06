@@ -37,13 +37,14 @@
 // How long (ms) to wait for a Firebase response before falling back to NVS cache
 #define FIREBASE_TIMEOUT_MS      10000
 
-// ── MQTT Broker (factory default — overridden by Firebase config fetch) ───────
-// Must match MqttConfig.factoryDefault.host in mqtt_config.dart
-// and FACTORY_CONFIG.broker_host in functions/index.js
-#define MQTT_CLOUD_HOST          "mqtt.dsgv.io"
-#define MQTT_CLOUD_PORT          8883
-#define MQTT_LOCAL_HOST          "192.168.1.1"
-#define MQTT_LOCAL_PORT          1883
+// ── MQTT Broker (factory default — user can override via handle_config) ───────
+// TEST PHASE: HiveMQ public broker — free, no auth required.
+// PRODUCTION:  Replace with a private broker (HiveMQ Cloud, AWS IoT, etc.)
+//              that enforces authentication and TLS client certificates.
+// Must match MqttConfig.factoryDefault.host in mqtt_config.dart.
+#define MQTT_CLOUD_HOST          "broker.hivemq.com"
+#define MQTT_CLOUD_PORT          1883
+#define MQTT_CLOUD_TLS           false   // set true when using a production broker with cert
 #define MQTT_KEEPALIVE_SEC       60
 #define MQTT_QOS_AT_LEAST_ONCE   1
 #define MQTT_RECONNECT_DELAY_MS  5000

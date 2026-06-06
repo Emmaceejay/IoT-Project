@@ -1,9 +1,12 @@
 ﻿/**
  * DSGV_mqtt.c — DSGV Hub MQTT Client
  *
- * Dual-broker strategy (mirrors the Flutter app):
- *   1. Connect to MQTT_CLOUD_HOST (TLS, port 8883)
- *   2. On error → retry with MQTT_LOCAL_HOST (plain, port 1883)
+ * Single-broker MQTT client.  Default broker: MQTT_CLOUD_HOST (see dsgv_config.h).
+ * On connection error the SDK automatically retries every MQTT_RECONNECT_DELAY_MS.
+ * Local device control falls back to HTTP — no automatic broker switching.
+ * The user (via the DSGV Hub App) may change the broker at any time via the
+ * authenticated handle_config MQTT command.  A 60-second rollback watchdog reverts
+ * the change if the new broker never connects.
  *
  * On connect, publishes a device announcement so the DSGV Hub App
  * can populate the real device list (device_id, name, capabilities, local_ip).
@@ -55,7 +58,6 @@ SemaphoreHandle_t g_state_mutex = NULL;
 
 // ── Private state ─────────────────────────────────────────────────────────────
 static esp_mqtt_client_handle_t s_client = NULL;
-static bool s_using_local_broker = false;
 
 static char s_device_id[18];           // "AABBCCDDEEFF"
 static char s_device_name[32];         // auto-generated: "Switch_DDEEFF"
@@ -217,15 +219,13 @@ esp_err_t DSGV_mqtt_start(void) {
         nvs_close(hcfg);
     }
 
-    s_using_local_broker = false;
     if (has_nvs_cfg) {
         ESP_LOGI(TAG, "Connecting to user-configured broker %s:%d (TLS=%d)",
                  nvs_host, nvs_port, nvs_tls);
         return connect_to_broker(nvs_host, nvs_port, nvs_tls);
     }
-    ESP_LOGI(TAG, "Connecting to cloud broker %s:%d (TLS)",
-             MQTT_CLOUD_HOST, MQTT_CLOUD_PORT);
-    return connect_to_broker(MQTT_CLOUD_HOST, MQTT_CLOUD_PORT, true);
+    ESP_LOGI(TAG, "Connecting to broker %s:%d", MQTT_CLOUD_HOST, MQTT_CLOUD_PORT);
+    return connect_to_broker(MQTT_CLOUD_HOST, MQTT_CLOUD_PORT, MQTT_CLOUD_TLS);
 }
 
 // ── Event handler ─────────────────────────────────────────────────────────────
@@ -237,8 +237,7 @@ static void mqtt_event_handler(void *arg, esp_event_base_t base,
     switch (event->event_id) {
 
         case MQTT_EVENT_CONNECTED:
-            ESP_LOGI(TAG, "MQTT connected (%s). Device: %s",
-                     s_using_local_broker ? "local" : "cloud", s_device_id);
+            ESP_LOGI(TAG, "MQTT connected. Device: %s", s_device_id);
 
             // New broker confirmed reachable — cancel any pending rollback
             if (s_broker_rollback_timer &&
@@ -297,18 +296,10 @@ static void mqtt_event_handler(void *arg, esp_event_base_t base,
         }
 
         case MQTT_EVENT_ERROR:
-            ESP_LOGE(TAG, "MQTT error. Broker unreachable.");
-            if (!s_using_local_broker) {
-                // Cloud broker failed → fall back to local Mosquitto.
-                // MUST use the deferred task — calling esp_mqtt_client_destroy()
-                // from inside an MQTT event callback deadlocks the MQTT task and
-                // can starve the HTTP server and GPIO interrupt tasks.
-                s_using_local_broker = true;
-                ESP_LOGW(TAG, "Scheduling fallback to local broker %s:%d (plain)",
-                         MQTT_LOCAL_HOST, MQTT_LOCAL_PORT);
-                _schedule_broker_switch(MQTT_LOCAL_HOST, MQTT_LOCAL_PORT,
-                                        /*tls=*/false, /*is_rollback=*/false);
-            }
+            // The SDK will automatically reconnect after MQTT_RECONNECT_DELAY_MS.
+            // Local control falls back to HTTP — no broker switching needed here.
+            ESP_LOGE(TAG, "MQTT error. Broker unreachable. Reconnecting in %d ms…",
+                     MQTT_RECONNECT_DELAY_MS);
             break;
 
         default:
@@ -380,8 +371,11 @@ static void publish_announcement(void) {
  *  "current_temp":22.5,"target_temp":22.0,"mode":"auto"}
  */
 void DSGV_mqtt_publish_telemetry(const char *json_payload) {
-    if (!s_client) return;
-    esp_mqtt_client_publish(s_client, s_topic_telemetry,
+    // Snapshot the handle to avoid a TOCTOU race: _broker_switch_task can set
+    // s_client = NULL between our NULL check and the publish call.
+    esp_mqtt_client_handle_t client = s_client;
+    if (!client) return;
+    esp_mqtt_client_publish(client, s_topic_telemetry,
                              json_payload, strlen(json_payload),
                              MQTT_QOS_AT_LEAST_ONCE, /*retain=*/false);
     ESP_LOGI(TAG, "Telemetry → %s", s_topic_telemetry);
@@ -592,7 +586,6 @@ static void _broker_switch_task(void *arg) {
         esp_mqtt_client_destroy(s_client);
         s_client = NULL;
     }
-    s_using_local_broker = false;
     connect_to_broker(args->host, args->port, args->tls);
 
     if (args->is_rollback) {
@@ -709,7 +702,7 @@ static void handle_config(const char *payload, int len) {
             nvs_commit(hnvs);
             nvs_close(hnvs);
         }
-        _schedule_broker_switch(MQTT_CLOUD_HOST, MQTT_CLOUD_PORT, true,
+        _schedule_broker_switch(MQTT_CLOUD_HOST, MQTT_CLOUD_PORT, MQTT_CLOUD_TLS,
                                  /*is_rollback=*/false);
         return;
     }

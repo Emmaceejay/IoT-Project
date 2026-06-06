@@ -129,7 +129,5 @@ void dsgv_app_main(void)
              g_device_config.capabilities,
              g_device_config.relay_count);
     ESP_LOGI(TAG, "HTTP server: port %d", HTTP_SERVER_PORT);
-    ESP_LOGI(TAG, "MQTT broker: %s:%d (TLS) → %s:%d (fallback)",
-             MQTT_CLOUD_HOST, MQTT_CLOUD_PORT,
-             MQTT_LOCAL_HOST, MQTT_LOCAL_PORT);
+    ESP_LOGI(TAG, "MQTT broker: %s:%d", MQTT_CLOUD_HOST, MQTT_CLOUD_PORT);
 }
