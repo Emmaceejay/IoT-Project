@@ -30,9 +30,14 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
       appBar: AppBar(
         backgroundColor: const Color(0xFF0A0E1A),
         iconTheme: const IconThemeData(color: Colors.white),
-        title: Text(widget.device.deviceName,
+        title: Text(widget.device.displayName,
             style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.edit_outlined, color: Colors.white54),
+            tooltip: 'Rename Device',
+            onPressed: () => _showRenameDialog(context),
+          ),
           IconButton(
             icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
             tooltip: 'Remove Device',
@@ -113,6 +118,57 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
     );
   }
 
+  void _showRenameDialog(BuildContext context) {
+    final controller =
+        TextEditingController(text: widget.device.displayName);
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF121826),
+        title: const Text('Rename Device',
+            style: TextStyle(color: Colors.white)),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          style: const TextStyle(color: Colors.white),
+          decoration: InputDecoration(
+            hintText: widget.device.deviceName,
+            hintStyle: const TextStyle(color: Colors.white38),
+            helperText: 'Clear to revert to auto-generated name',
+            helperStyle: const TextStyle(color: Colors.white24, fontSize: 11),
+            enabledBorder: const UnderlineInputBorder(
+                borderSide: BorderSide(color: Colors.white24)),
+            focusedBorder: const UnderlineInputBorder(
+                borderSide: BorderSide(color: Color(0xFF00E5FF))),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel',
+                style: TextStyle(color: Colors.white54)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF00E5FF),
+              foregroundColor: Colors.black,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8)),
+            ),
+            onPressed: () {
+              Navigator.pop(ctx);
+              ref
+                  .read(deviceManagerProvider.notifier)
+                  .renameDevice(widget.device.uniqueDeviceId,
+                      controller.text.trim());
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _confirmAndDelete() async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -121,7 +177,7 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
         title: const Text('Remove Device?',
             style: TextStyle(color: Colors.white)),
         content: Text(
-          'Remove "${widget.device.deviceName}"? It can be re-added by re-pairing.',
+          'Remove "${widget.device.displayName}"? It can be re-added by re-pairing.',
           style: const TextStyle(
               color: Colors.white70, fontSize: 13, height: 1.5),
         ),

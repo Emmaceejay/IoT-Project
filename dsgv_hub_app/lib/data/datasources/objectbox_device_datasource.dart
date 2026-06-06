@@ -56,4 +56,15 @@ class ObjectBoxDeviceDatasource implements DeviceRepository {
     q.close();
     if (entity != null) _box.remove(entity.id);
   }
+
+  @override
+  Future<void> renameDevice(String deviceId, String customName) async {
+    final q =
+        _box.query(DeviceEntity_.uniqueDeviceId.equals(deviceId)).build();
+    final entity = q.findFirst();
+    q.close();
+    if (entity == null) return;
+    entity.customName = customName.trim().isEmpty ? null : customName.trim();
+    _box.put(entity);
+  }
 }

@@ -15,6 +15,13 @@ class MatterDevice {
   // Never transmitted over MQTT. Used to authenticate broker-change commands.
   final String? authToken;
 
+  // User-set label. Null = use auto-generated deviceName.
+  final String? customName;
+
+  /// What to show in the UI — user's custom label if set, firmware name otherwise.
+  String get displayName =>
+      (customName != null && customName!.isNotEmpty) ? customName! : deviceName;
+
   const MatterDevice({
     required this.uniqueDeviceId,
     required this.deviceName,
@@ -23,6 +30,7 @@ class MatterDevice {
     this.telemetry = const {},
     this.localIp,
     this.authToken,
+    this.customName,
   });
 
   /// Parses a capability-discovery JSON payload from a connecting device.
@@ -56,6 +64,7 @@ class MatterDevice {
     Map<String, dynamic>? telemetry,
     String? localIp,
     String? authToken,
+    Object? customName = _sentinel,
   }) {
     return MatterDevice(
       uniqueDeviceId: uniqueDeviceId,
@@ -65,8 +74,12 @@ class MatterDevice {
       telemetry: telemetry ?? this.telemetry,
       localIp: localIp ?? this.localIp,
       authToken: authToken ?? this.authToken,
+      customName: customName == _sentinel ? this.customName : customName as String?,
     );
   }
+
+  // Sentinel allows passing null explicitly to clear the custom name.
+  static const Object _sentinel = Object();
 
   Map<String, dynamic> toJson() => {
         'device_id': uniqueDeviceId,

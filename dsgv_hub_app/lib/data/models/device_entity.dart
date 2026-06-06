@@ -31,6 +31,10 @@ class DeviceEntity {
   /// Stored locally only — never transmitted over MQTT.
   String? authToken;
 
+  /// User-assigned display name. Null = show auto-generated deviceName.
+  /// Never overwritten by MQTT announce — only changed by explicit user action.
+  String? customName;
+
   // ── Conversions ───────────────────────────────────────────────────────────
 
   MatterDevice toDomain() => MatterDevice(
@@ -47,6 +51,7 @@ class DeviceEntity {
             : {},
         localIp: localIp,
         authToken: authToken,
+        customName: customName,
       );
 
   static DeviceEntity fromDomain(MatterDevice d) => DeviceEntity()
@@ -57,5 +62,6 @@ class DeviceEntity {
     ..telemetryJson =
         d.telemetry.isNotEmpty ? jsonEncode(d.telemetry) : '{}'
     ..localIp = d.localIp
-    ..authToken = d.authToken;
+    ..authToken = d.authToken
+    ..customName = d.customName;
 }

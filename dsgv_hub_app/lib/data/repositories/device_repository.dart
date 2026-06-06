@@ -17,4 +17,7 @@ abstract class DeviceRepository {
 
   /// Removes a device from the local registry.
   Future<void> removeDevice(String deviceId);
+
+  /// Persists a user-chosen display name. Pass empty string to clear.
+  Future<void> renameDevice(String deviceId, String customName);
 }

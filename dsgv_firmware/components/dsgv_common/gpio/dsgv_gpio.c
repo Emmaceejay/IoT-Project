@@ -466,21 +466,33 @@ void DSGV_gpio_apply_state(void) {
         gpio_set_level(g_device_config.relay_pins[i], s.relay_states[i] ? 1 : 0);
     }
     // Status LED mirrors gang 1 (primary relay)
-    gpio_set_level(GPIO_STATUS_LED_PIN, s.relay_states[0] ? 1 : 0);
-
-    // PWM outputs are gated by gang 1 (relay_states[0])
-    ledc_set_pct(LEDC_CH_DIMMER, s.relay_states[0] ? s.brightness : 0);
-
-    if (s.relay_states[0] && s.color_temp_k > 0) {
-        DSGV_gpio_ct_set(s.color_temp_k);
-    } else {
-        ledc_set_pct(LEDC_CH_WARM, 0);
-        ledc_set_pct(LEDC_CH_COOL, 0);
+    if (g_device_config.relay_count > 0) {
+        gpio_set_level(GPIO_STATUS_LED_PIN, s.relay_states[0] ? 1 : 0);
     }
 
-    if (s.relay_states[0]) {
-        DSGV_gpio_rgb_set(s.rgb_r, s.rgb_g, s.rgb_b);
-    } else {
-        DSGV_gpio_rgb_set(0, 0, 0);
+    // Guard every PWM output behind the device's capability string.
+    // A 1-gang switch has capabilities=["relay"] — none of the blocks below
+    // fire for it, so no spurious CCT/RGB log noise and no wasted PWM cycles.
+    const char *caps = g_device_config.capabilities;
+
+    if (strstr(caps, "\"brightness\"")) {
+        ledc_set_pct(LEDC_CH_DIMMER, s.relay_states[0] ? s.brightness : 0);
+    }
+
+    if (strstr(caps, "\"color_temp\"")) {
+        if (s.relay_states[0] && s.color_temp_k > 0) {
+            DSGV_gpio_ct_set(s.color_temp_k);
+        } else {
+            ledc_set_pct(LEDC_CH_WARM, 0);
+            ledc_set_pct(LEDC_CH_COOL, 0);
+        }
+    }
+
+    if (strstr(caps, "\"rgb\"")) {
+        if (s.relay_states[0]) {
+            DSGV_gpio_rgb_set(s.rgb_r, s.rgb_g, s.rgb_b);
+        } else {
+            DSGV_gpio_rgb_set(0, 0, 0);
+        }
     }
 }

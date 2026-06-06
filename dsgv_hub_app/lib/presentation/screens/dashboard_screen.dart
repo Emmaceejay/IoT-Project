@@ -145,7 +145,7 @@ class DashboardScreen extends ConsumerWidget {
           ],
         ),
       ),
-      confirmDismiss: (_) => _confirmDelete(context, d.deviceName),
+      confirmDismiss: (_) => _confirmDelete(context, d.displayName),
       onDismissed: (_) =>
           ref.read(deviceManagerProvider.notifier).removeDevice(d.uniqueDeviceId),
       child: DeviceCard(device: d),

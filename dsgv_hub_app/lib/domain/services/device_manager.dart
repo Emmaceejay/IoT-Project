@@ -113,6 +113,20 @@ class DeviceManager extends AsyncNotifier<List<MatterDevice>> {
     await _repository.updateDeviceState(deviceId, command);
   }
 
+  /// Persists a user-chosen display name for [deviceId].
+  /// Pass empty string to revert to the auto-generated firmware name.
+  Future<void> renameDevice(String deviceId, String newName) async {
+    await _repository.renameDevice(deviceId, newName);
+    final trimmed = newName.trim().isEmpty ? null : newName.trim();
+    state = AsyncValue.data(
+      (state.valueOrNull ?? []).map((d) {
+        if (d.uniqueDeviceId != deviceId) return d;
+        return d.copyWith(customName: trimmed);
+      }).toList(),
+    );
+    debugPrint('[DeviceManager] Device $deviceId renamed to "${trimmed ?? "<auto>"}"');
+  }
+
   /// Removes a device from the local registry and live state.
   Future<void> removeDevice(String deviceId) async {
     await _repository.removeDevice(deviceId);
@@ -184,6 +198,9 @@ class DeviceManager extends AsyncNotifier<List<MatterDevice>> {
       await _repository.provisionDevice(withToken);
       state = AsyncValue.data([...devices, withToken]);
     } else {
+      // Preserve the user-set custom name — MQTT announce must never wipe it.
+      final existingCustomName = devices[existingIndex].customName;
+
       state = AsyncValue.data(
         devices.map((d) {
           if (d.uniqueDeviceId != normalised) return d;
@@ -194,6 +211,7 @@ class DeviceManager extends AsyncNotifier<List<MatterDevice>> {
                 ? announced.capabilities
                 : d.capabilities,
             authToken: resolvedToken ?? d.authToken,
+            // customName left unchanged — copyWith sentinel keeps existing value
           );
         }).toList(),
       );
@@ -201,6 +219,7 @@ class DeviceManager extends AsyncNotifier<List<MatterDevice>> {
         withToken.copyWith(
           localIp: announced.localIp,
           authToken: resolvedToken,
+          customName: existingCustomName, // explicitly carry forward
         ),
       );
     }
