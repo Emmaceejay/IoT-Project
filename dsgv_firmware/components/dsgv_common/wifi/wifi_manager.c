@@ -40,6 +40,13 @@ esp_err_t wifi_manager_connect(void) {
     nvs_get_str(nvs, "password", password, &pass_len);
     nvs_close(nvs);
 
+    // Guard against a corrupt or partially-written NVS record where the key
+    // exists but the SSID value is empty — treat it the same as no credentials.
+    if (ssid[0] == '\0') {
+        ESP_LOGW(TAG, "NVS has a credential record but SSID is empty — treating as unprovisioned.");
+        return ESP_ERR_NOT_FOUND;
+    }
+
     // Initialise the Wi-Fi driver. Must be called once before any esp_wifi_*
     // function. WIFI_INIT_CONFIG_DEFAULT() sets conservative stack/buffer sizes
     // suitable for production; adjust via menuconfig if needed.

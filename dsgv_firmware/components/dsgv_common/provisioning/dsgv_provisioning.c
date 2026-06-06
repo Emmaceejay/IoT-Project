@@ -286,13 +286,25 @@ static const struct ble_gatt_svc_def s_gatt_svcs[] = {
 static int gap_event_cb(struct ble_gap_event *event, void *arg);
 
 static void do_advertise(void) {
-    // Primary ad: flags + service UUID — UUID in the primary packet ensures apps that
-    // filter by service UUID find the device even with passive scanning.
+    // Primary advertisement packet (31-byte hard limit):
+    //   3  bytes  — Flags
+    //  18  bytes  — Complete 128-bit Service UUID  (required for filtered BLE scan)
+    //   9  bytes  — Shortened Local Name "DSGVHub" (AD type 0x08, 7 chars)
+    //  ──────────
+    //  30  bytes  (1 spare)
+    //
+    // The shortened brand name in the primary ad ensures the device is visible in
+    // the OS Bluetooth settings on both iOS and Android even when the OS uses
+    // passive scanning (no SCAN_REQ sent). The full "DSGVHub_XXXXXX" name with the
+    // MAC suffix goes in the scan response for active scanners (flutter_blue_plus).
     struct ble_hs_adv_fields fields = {0};
     fields.flags                = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
     fields.uuids128             = &s_svc_uuid;
     fields.num_uuids128         = 1;
     fields.uuids128_is_complete = 1;
+    fields.name                 = (const uint8_t *)"DSGVHub";
+    fields.name_len             = 7;
+    fields.name_is_complete     = 0; // 0 = Shortened Local Name (AD type 0x08)
 
     int rc = ble_gap_adv_set_fields(&fields);
     if (rc != 0) {
@@ -300,7 +312,8 @@ static void do_advertise(void) {
         return;
     }
 
-    // Scan response: device name (returned on active scan / connection for display)
+    // Scan response: full device name with MAC suffix for identification.
+    // Received by active scanners (flutter_blue_plus, nRF Connect, etc.).
     struct ble_hs_adv_fields rsp = {0};
     rsp.name             = (const uint8_t *)s_dev_name;
     rsp.name_len         = (uint8_t)strlen(s_dev_name);
@@ -324,8 +337,7 @@ static void do_advertise(void) {
         return;
     }
 
-    ESP_LOGI(TAG, "BLE advertising: %s", s_dev_name);
-    ESP_LOGI(TAG, "Provision QR  : dsgv://provision?name=%s", s_dev_name);
+    ESP_LOGI(TAG, "BLE advertising started: %s", s_dev_name);
 }
 
 static int gap_event_cb(struct ble_gap_event *event, void *arg) {
@@ -404,6 +416,17 @@ esp_err_t DSGV_provisioning_start(void) {
     // the app connects; no polling or notification timing required.
     strlcpy(s_wifi_scan_json, "[]", sizeof(s_wifi_scan_json));
     wifi_manager_scan_networks(s_wifi_scan_json, sizeof(s_wifi_scan_json));
+
+    // Print the provisioning banner BEFORE starting NimBLE so it always appears
+    // in the monitor regardless of NimBLE task scheduling. Copy the QR URL into
+    // your barcode generator (e.g. qr.io) to create the pairing label.
+    ESP_LOGI(TAG, "");
+    ESP_LOGI(TAG, "================================================");
+    ESP_LOGI(TAG, "  PROVISIONING MODE");
+    ESP_LOGI(TAG, "  BLE Name : %s", s_dev_name);
+    ESP_LOGI(TAG, "  QR URL   : dsgv://provision?name=%s", s_dev_name);
+    ESP_LOGI(TAG, "================================================");
+    ESP_LOGI(TAG, "");
 
     ESP_LOGI(TAG, "Initialising BLE provisioning (%s)…", s_dev_name);
 
