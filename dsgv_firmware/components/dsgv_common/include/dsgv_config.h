@@ -45,7 +45,7 @@
 #define MQTT_CLOUD_HOST          "broker.hivemq.com"
 #define MQTT_CLOUD_PORT          1883
 #define MQTT_CLOUD_TLS           false   // set true when using a production broker with cert
-#define MQTT_KEEPALIVE_SEC       60
+#define MQTT_KEEPALIVE_SEC       15   // broker publishes LWT after ~22 s (1.5×)
 #define MQTT_QOS_AT_LEAST_ONCE   1
 #define MQTT_RECONNECT_DELAY_MS  5000
 
