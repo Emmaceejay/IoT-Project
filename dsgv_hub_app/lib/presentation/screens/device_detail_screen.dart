@@ -98,21 +98,26 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
               ),
               onPressed: isOnline
                   ? () async {
-                      // TODO(production): Replace with a real firmware manifest fetch.
-                      // The URL must be a signed HTTPS link to the .bin file,
-                      // and the hash must be the SHA-256 hex digest of that binary.
-                      // Never hardcode these values in production builds.
-                      const firmwareUrl = String.fromEnvironment('OTA_FIRMWARE_URL');
-                      const expectedHash = String.fromEnvironment('OTA_FIRMWARE_HASH');
-                      assert(firmwareUrl.isNotEmpty,
-                          'Set OTA_FIRMWARE_URL via --dart-define=OTA_FIRMWARE_URL=https://...');
-                      assert(expectedHash.isNotEmpty,
-                          'Set OTA_FIRMWARE_HASH via --dart-define=OTA_FIRMWARE_HASH=sha256...');
+                      final otaConfig = ref.read(otaConfigProvider);
+                      if (!otaConfig.isConfigured) {
+                        if (!mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                              'No firmware configured. Go to Settings → '
+                              'Firmware Update and paste the URL and hash first.',
+                            ),
+                            backgroundColor: Colors.orangeAccent,
+                            behavior: SnackBarBehavior.floating,
+                          ),
+                        );
+                        return;
+                      }
                       setState(() => _otaTriggered = true);
                       await otaService.triggerUpdate(
                         deviceId: device.uniqueDeviceId,
-                        firmwareUrl: firmwareUrl,
-                        expectedHash: expectedHash,
+                        firmwareUrl: otaConfig.firmwareUrl,
+                        expectedHash: otaConfig.firmwareHash,
                       );
                     }
                   : null,

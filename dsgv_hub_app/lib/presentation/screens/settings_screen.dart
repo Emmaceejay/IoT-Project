@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../domain/models/mqtt_config.dart';
 import '../../domain/services/device_manager.dart';
 import '../../domain/services/mqtt_service.dart';
+import '../../domain/services/ota_service.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
@@ -20,6 +21,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   final _clientIdCtrl = TextEditingController();
   // Advanced
   final _timeoutCtrl = TextEditingController();
+  // OTA firmware
+  final _otaUrlCtrl = TextEditingController();
+  final _otaHashCtrl = TextEditingController();
+  bool _otaSaved = false;
 
   bool _useTls = false;
   bool _enableLocalHttp = true;
@@ -45,6 +50,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         _configInitialized = true;
         _populateFromConfig(config);
       }
+      // Pre-fill OTA fields from persisted values (may be empty on first launch).
+      final otaCfg = ref.read(otaConfigProvider);
+      _otaUrlCtrl.text = otaCfg.firmwareUrl;
+      _otaHashCtrl.text = otaCfg.firmwareHash;
     });
   }
 
@@ -56,6 +65,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     _passwordCtrl.dispose();
     _clientIdCtrl.dispose();
     _timeoutCtrl.dispose();
+    _otaUrlCtrl.dispose();
+    _otaHashCtrl.dispose();
     super.dispose();
   }
 
@@ -169,6 +180,25 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     setState(() => _saved = true);
     Future.delayed(const Duration(seconds: 2), () {
       if (mounted) setState(() => _saved = false);
+    });
+  }
+
+  Future<void> _saveOtaConfig() async {
+    final url = _otaUrlCtrl.text.trim();
+    final hash = _otaHashCtrl.text.trim();
+    if (url.isEmpty || hash.isEmpty) {
+      _showError('Both firmware URL and hash are required.');
+      return;
+    }
+    if (!url.startsWith('http')) {
+      _showError('Firmware URL must start with http:// or https://');
+      return;
+    }
+    await ref.read(otaConfigProvider.notifier).save(url, hash);
+    if (!mounted) return;
+    setState(() => _otaSaved = true);
+    Future.delayed(const Duration(seconds: 2), () {
+      if (mounted) setState(() => _otaSaved = false);
     });
   }
 
@@ -550,6 +580,17 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             inProgress: _brokerSyncInProgress,
             onPush: _onPushBrokerTapped,
             onRevert: _onRevertToFactoryTapped,
+          ),
+          const SizedBox(height: 32),
+
+          // ── Firmware Update ────────────────────────────────────────────
+          _sectionHeader('Firmware Update'),
+          _OtaConfigSection(
+            urlCtrl: _otaUrlCtrl,
+            hashCtrl: _otaHashCtrl,
+            saved: _otaSaved,
+            onSave: _saveOtaConfig,
+            currentConfig: ref.watch(otaConfigProvider),
           ),
           const SizedBox(height: 32),
 
@@ -1000,6 +1041,140 @@ class _BrokerSyncSection extends StatelessWidget {
           onPressed: (!hasDevices || inProgress) ? null : onRevert,
           icon: const Icon(Icons.restore, size: 18),
           label: const Text('Restore factory broker'),
+        ),
+      ],
+    );
+  }
+}
+
+// ── OTA Config Section ────────────────────────────────────────────────────────
+
+class _OtaConfigSection extends StatelessWidget {
+  final TextEditingController urlCtrl;
+  final TextEditingController hashCtrl;
+  final bool saved;
+  final VoidCallback onSave;
+  final OtaConfig currentConfig;
+
+  const _OtaConfigSection({
+    required this.urlCtrl,
+    required this.hashCtrl,
+    required this.saved,
+    required this.onSave,
+    required this.currentConfig,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // Status chip — shows whether a firmware is already configured.
+        if (currentConfig.isConfigured)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            margin: const EdgeInsets.only(bottom: 12),
+            decoration: BoxDecoration(
+              color: Colors.greenAccent.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.greenAccent.withValues(alpha: 0.35)),
+            ),
+            child: const Row(
+              children: [
+                Icon(Icons.check_circle_outline,
+                    color: Colors.greenAccent, size: 16),
+                SizedBox(width: 8),
+                Text(
+                  'Firmware configured — ready to push from device page',
+                  style: TextStyle(color: Colors.greenAccent, fontSize: 12),
+                ),
+              ],
+            ),
+          )
+        else
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            margin: const EdgeInsets.only(bottom: 12),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.04),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.white12),
+            ),
+            child: const Row(
+              children: [
+                Icon(Icons.info_outline, color: Colors.white38, size: 16),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'No firmware set. Paste the URL and hash below, then tap Save.',
+                    style: TextStyle(color: Colors.white38, fontSize: 12, height: 1.4),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+        // URL field
+        TextField(
+          controller: urlCtrl,
+          style: const TextStyle(color: Colors.white, fontSize: 13),
+          autocorrect: false,
+          keyboardType: TextInputType.url,
+          decoration: InputDecoration(
+            labelText: 'Firmware URL',
+            hintText: 'https://github.com/.../firmware.bin',
+            hintStyle: const TextStyle(color: Colors.white24, fontSize: 11),
+            labelStyle: const TextStyle(color: Colors.white38),
+            prefixIcon: const Icon(Icons.link, color: Color(0xFF00E5FF)),
+            filled: true,
+            fillColor: const Color(0xFF121826),
+            border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide.none),
+            focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: Color(0xFF00E5FF))),
+          ),
+        ),
+        const SizedBox(height: 12),
+
+        // Hash field
+        TextField(
+          controller: hashCtrl,
+          style: const TextStyle(color: Colors.white, fontSize: 13),
+          autocorrect: false,
+          decoration: InputDecoration(
+            labelText: 'SHA-256 Hash',
+            hintText: 'e.g. a3f1c2...',
+            hintStyle: const TextStyle(color: Colors.white24, fontSize: 11),
+            labelStyle: const TextStyle(color: Colors.white38),
+            prefixIcon: const Icon(Icons.tag, color: Color(0xFF00E5FF)),
+            helperText: 'Run: Get-FileHash firmware.bin -Algorithm SHA256   (Windows PowerShell)',
+            helperStyle: const TextStyle(color: Colors.white24, fontSize: 10, height: 1.4),
+            filled: true,
+            fillColor: const Color(0xFF121826),
+            border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide.none),
+            focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: Color(0xFF00E5FF))),
+          ),
+        ),
+        const SizedBox(height: 16),
+
+        ElevatedButton.icon(
+          style: ElevatedButton.styleFrom(
+            backgroundColor:
+                saved ? Colors.greenAccent : const Color(0xFF00E5FF),
+            foregroundColor: Colors.black,
+            padding: const EdgeInsets.symmetric(vertical: 14),
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12)),
+          ),
+          onPressed: onSave,
+          icon: Icon(saved ? Icons.check : Icons.save_outlined),
+          label: Text(saved ? 'Saved!' : 'Save Firmware Settings'),
         ),
       ],
     );

@@ -1,8 +1,52 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'mqtt_service.dart';
 import 'telemetry_service.dart';
+
+// ── OTA Runtime Configuration ─────────────────────────────────────────────────
+
+/// Holds the user-supplied firmware URL and SHA-256 hash, persisted across
+/// sessions in encrypted storage.  Both fields are empty on first install.
+class OtaConfig {
+  final String firmwareUrl;
+  final String firmwareHash;
+
+  const OtaConfig({this.firmwareUrl = '', this.firmwareHash = ''});
+
+  bool get isConfigured =>
+      firmwareUrl.trim().isNotEmpty && firmwareHash.trim().isNotEmpty;
+}
+
+class OtaConfigNotifier extends StateNotifier<OtaConfig> {
+  static const _storage = FlutterSecureStorage(
+    aOptions: AndroidOptions(encryptedSharedPreferences: true),
+  );
+
+  OtaConfigNotifier() : super(const OtaConfig()) {
+    _load();
+  }
+
+  Future<void> _load() async {
+    final url = await _storage.read(key: 'ota_firmware_url') ?? '';
+    final hash = await _storage.read(key: 'ota_firmware_hash') ?? '';
+    state = OtaConfig(firmwareUrl: url, firmwareHash: hash);
+  }
+
+  Future<void> save(String url, String hash) async {
+    final trimUrl = url.trim();
+    final trimHash = hash.trim();
+    state = OtaConfig(firmwareUrl: trimUrl, firmwareHash: trimHash);
+    await _storage.write(key: 'ota_firmware_url', value: trimUrl);
+    await _storage.write(key: 'ota_firmware_hash', value: trimHash);
+  }
+}
+
+final otaConfigProvider =
+    StateNotifierProvider<OtaConfigNotifier, OtaConfig>((ref) {
+  return OtaConfigNotifier();
+});
 
 /// OTA Orchestrator Service
 ///
