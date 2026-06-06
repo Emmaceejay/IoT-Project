@@ -3,11 +3,13 @@
 class MqttConfig {
   // ── Factory Default ──────────────────────────────────────────────────────
   // Pre-configured manufacturer broker. Never shown in the UI.
-  // Update this constant when deploying to production.
+  // TEST PHASE: HiveMQ public broker — no authentication required.
+  // PRODUCTION:  Change host/port/useTls to a private authenticated broker
+  //              and keep this in sync with MQTT_CLOUD_HOST in dsgv_config.h.
   static const factoryDefault = MqttConfig(
-    host: 'mqtt.dsgv.io',
-    port: 8883,
-    useTls: true,
+    host: 'broker.hivemq.com',
+    port: 1883,
+    useTls: false,
     clientId: 'dsgv_hub_client',
     connectTimeoutSeconds: 10,
     enableLocalHttp: true,
