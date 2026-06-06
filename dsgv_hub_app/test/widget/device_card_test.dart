@@ -19,6 +19,10 @@ class _StubRepository implements DeviceRepository {
   Future<void> provisionDevice(MatterDevice device) async {}
   @override
   Future<void> removeDevice(String id) async {}
+  @override
+  Future<void> renameDevice(String id, String name) async {}
+  @override
+  Future<void> updateDeviceStatus(String id, DeviceStatus status) async {}
 }
 
 Widget _wrap(Widget child, {List<MatterDevice> devices = const []}) {

@@ -146,6 +146,18 @@ class DeviceManager extends AsyncNotifier<List<MatterDevice>> {
     await refresh();
   }
 
+  /// Marks a device as online — triggered by MQTT status="online" messages.
+  Future<void> markDeviceOnline(String deviceId) async {
+    state = AsyncValue.data(
+      (state.valueOrNull ?? []).map((d) {
+        if (d.uniqueDeviceId != deviceId) return d;
+        return d.copyWith(status: DeviceStatus.online);
+      }).toList(),
+    );
+    await _repository.updateDeviceStatus(deviceId, DeviceStatus.online);
+    debugPrint('[DeviceManager] Device $deviceId is online.');
+  }
+
   /// Marks a device as offline — triggered by MQTT LWT messages.
   Future<void> markDeviceOffline(String deviceId) async {
     state = AsyncValue.data(
@@ -154,7 +166,8 @@ class DeviceManager extends AsyncNotifier<List<MatterDevice>> {
         return d.copyWith(status: DeviceStatus.offline);
       }).toList(),
     );
-    await _repository.updateDeviceState(deviceId, {'_status': 'offline'});
+    await _repository.updateDeviceStatus(deviceId, DeviceStatus.offline);
+    debugPrint('[DeviceManager] Device $deviceId went offline (LWT).');
   }
 
   /// Applies live telemetry payload from MQTT to the matching device.
@@ -204,8 +217,10 @@ class DeviceManager extends AsyncNotifier<List<MatterDevice>> {
       state = AsyncValue.data(
         devices.map((d) {
           if (d.uniqueDeviceId != normalised) return d;
+          // Do NOT set status here. The devices/{id}/status topic is the sole
+          // authority for online/offline to prevent a retained announce message
+          // from overriding a retained LWT offline message on reconnect.
           return d.copyWith(
-            status: DeviceStatus.online,
             localIp: announced.localIp ?? d.localIp,
             capabilities: announced.capabilities.isNotEmpty
                 ? announced.capabilities

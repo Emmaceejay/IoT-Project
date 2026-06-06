@@ -15,6 +15,10 @@ class _StubRepository implements DeviceRepository {
   Future<void> provisionDevice(MatterDevice device) async {}
   @override
   Future<void> removeDevice(String id) async {}
+  @override
+  Future<void> renameDevice(String id, String name) async {}
+  @override
+  Future<void> updateDeviceStatus(String id, DeviceStatus status) async {}
 }
 
 Widget _wrap(MatterDevice device) {
@@ -46,24 +50,24 @@ void main() {
       expect(find.text('Switch 1'), findsOneWidget);
     });
 
-    testWidgets('dimmer capability renders a Slider', (tester) async {
+    testWidgets('brightness capability renders a Slider', (tester) async {
       const device = MatterDevice(
         uniqueDeviceId: 'S-002',
         deviceName: 'Dimmer',
         status: DeviceStatus.online,
-        capabilities: ['dimmer'],
+        capabilities: ['brightness'],
         telemetry: {'brightness': 50},
       );
       await tester.pumpWidget(_wrap(device));
       expect(find.byType(Slider), findsOneWidget);
     });
 
-    testWidgets('temperature_sensor shows read-only value', (tester) async {
+    testWidgets('temperature capability shows read-only value', (tester) async {
       const device = MatterDevice(
         uniqueDeviceId: 'S-003',
         deviceName: 'Sensor',
         status: DeviceStatus.online,
-        capabilities: ['temperature_sensor'],
+        capabilities: ['temperature'],
         telemetry: {'current_temp': 23.5},
       );
       await tester.pumpWidget(_wrap(device));
@@ -124,12 +128,12 @@ void main() {
         uniqueDeviceId: 'S-007',
         deviceName: 'Multi',
         status: DeviceStatus.online,
-        capabilities: ['relay', 'dimmer', 'color_temperature'],
+        capabilities: ['relay', 'brightness', 'color_temp'],
         telemetry: {'power': true, 'brightness': 70, 'color_temp': 4000},
       );
       await tester.pumpWidget(_wrap(device));
       expect(find.byType(Switch), findsOneWidget);
-      // Two sliders: dimmer + color_temperature
+      // Two sliders: brightness + color_temp
       expect(find.byType(Slider), findsNWidgets(2));
     });
   });

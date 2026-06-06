@@ -183,6 +183,7 @@ class MqttConnectivityService extends StateNotifier<MqttConnectionStatus>
     _client = MqttServerClient.withPort(config.host, effectiveClientId, config.port)
       ..keepAlivePeriod = 60
       ..onDisconnected = _onDisconnected
+      ..onAutoReconnected = _onAutoReconnected
       ..autoReconnect = true
       ..logging(on: false);
 
@@ -276,7 +277,8 @@ class MqttConnectivityService extends StateNotifier<MqttConnectionStatus>
       case 'status':
         if (payload == 'offline') {
           _ref.read(deviceManagerProvider.notifier).markDeviceOffline(deviceId);
-          debugPrint('[MQTT] Device $deviceId went offline (LWT).');
+        } else if (payload == 'online') {
+          _ref.read(deviceManagerProvider.notifier).markDeviceOnline(deviceId);
         }
 
       case 'telemetry':
@@ -318,6 +320,14 @@ class MqttConnectivityService extends StateNotifier<MqttConnectionStatus>
     }
     final builder = MqttClientPayloadBuilder()..addString(payloadJson);
     _client!.publishMessage(topic, MqttQos.atLeastOnce, builder.payload!);
+  }
+
+  /// Called by the mqtt_client library after it successfully auto-reconnects.
+  /// Clean-session (startClean) discards server-side subscriptions on every
+  /// disconnect, so we must re-subscribe here to restore the fleet topic set.
+  void _onAutoReconnected() {
+    debugPrint('[MQTT] Auto-reconnected — re-subscribing to fleet topics.');
+    _subscribeToFleet();
   }
 
   void _onDisconnected() {

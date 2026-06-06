@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../domain/models/matter_device.dart';
 import '../../domain/services/device_manager.dart';
 import '../../domain/services/ota_service.dart';
+import 'device_settings_screen.dart';
 
 /// Device Detail Screen
 ///
@@ -22,21 +23,34 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Watch the live device record so status, telemetry, and name update
+    // reactively without depending on the navigation-time snapshot.
+    final device = ref.watch(deviceManagerProvider).valueOrNull
+            ?.firstWhere(
+              (d) => d.uniqueDeviceId == widget.device.uniqueDeviceId,
+              orElse: () => widget.device,
+            ) ??
+        widget.device;
+
     final otaService = ref.watch(otaServiceProvider);
-    final isOnline = widget.device.status == DeviceStatus.online;
+    final isOnline = device.status == DeviceStatus.online;
 
     return Scaffold(
       backgroundColor: const Color(0xFF0A0E1A),
       appBar: AppBar(
         backgroundColor: const Color(0xFF0A0E1A),
         iconTheme: const IconThemeData(color: Colors.white),
-        title: Text(widget.device.displayName,
+        title: Text(device.displayName,
             style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
         actions: [
           IconButton(
-            icon: const Icon(Icons.edit_outlined, color: Colors.white54),
-            tooltip: 'Rename Device',
-            onPressed: () => _showRenameDialog(context),
+            icon: const Icon(Icons.settings_outlined, color: Colors.white54),
+            tooltip: 'Device Settings',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => DeviceSettingsScreen(device: device),
+              ),
+            ),
           ),
           IconButton(
             icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
@@ -49,7 +63,7 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
         padding: const EdgeInsets.all(20),
         children: [
           // ── Device Info Card ──────────────────────────────────────
-          _infoCard(isOnline),
+          _infoCard(isOnline, device),
 
           const SizedBox(height: 20),
 
@@ -58,11 +72,11 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
           Card(
             child: Padding(
               padding: const EdgeInsets.all(16),
-              child: widget.device.telemetry.isEmpty
+              child: device.telemetry.isEmpty
                   ? const Text('No telemetry yet.',
                       style: TextStyle(color: Colors.white38))
                   : Column(
-                      children: widget.device.telemetry.entries
+                      children: device.telemetry.entries
                           .map((e) => _telemetryRow(e.key, e.value.toString()))
                           .toList(),
                     ),
@@ -96,7 +110,7 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
                           'Set OTA_FIRMWARE_HASH via --dart-define=OTA_FIRMWARE_HASH=sha256...');
                       setState(() => _otaTriggered = true);
                       await otaService.triggerUpdate(
-                        deviceId: widget.device.uniqueDeviceId,
+                        deviceId: device.uniqueDeviceId,
                         firmwareUrl: firmwareUrl,
                         expectedHash: expectedHash,
                       );
@@ -107,63 +121,12 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
             )
           else
             StreamBuilder<OtaUpdateState>(
-              stream: otaService.watchUpdate(widget.device.uniqueDeviceId),
+              stream: otaService.watchUpdate(device.uniqueDeviceId),
               builder: (context, snap) {
                 final state = snap.data ?? OtaUpdateState.idle(widget.device.uniqueDeviceId);
                 return _OtaProgressWidget(state: state);
               },
             ),
-        ],
-      ),
-    );
-  }
-
-  void _showRenameDialog(BuildContext context) {
-    final controller =
-        TextEditingController(text: widget.device.displayName);
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF121826),
-        title: const Text('Rename Device',
-            style: TextStyle(color: Colors.white)),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          style: const TextStyle(color: Colors.white),
-          decoration: InputDecoration(
-            hintText: widget.device.deviceName,
-            hintStyle: const TextStyle(color: Colors.white38),
-            helperText: 'Clear to revert to auto-generated name',
-            helperStyle: const TextStyle(color: Colors.white24, fontSize: 11),
-            enabledBorder: const UnderlineInputBorder(
-                borderSide: BorderSide(color: Colors.white24)),
-            focusedBorder: const UnderlineInputBorder(
-                borderSide: BorderSide(color: Color(0xFF00E5FF))),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel',
-                style: TextStyle(color: Colors.white54)),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF00E5FF),
-              foregroundColor: Colors.black,
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8)),
-            ),
-            onPressed: () {
-              Navigator.pop(ctx);
-              ref
-                  .read(deviceManagerProvider.notifier)
-                  .renameDevice(widget.device.uniqueDeviceId,
-                      controller.text.trim());
-            },
-            child: const Text('Save'),
-          ),
         ],
       ),
     );
@@ -209,7 +172,7 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
     navigator.pop();
   }
 
-  Widget _infoCard(bool isOnline) {
+  Widget _infoCard(bool isOnline, MatterDevice device) {
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -240,8 +203,8 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
               ],
             ),
             const SizedBox(height: 12),
-            _infoRow('Device ID', widget.device.uniqueDeviceId),
-            _infoRow('Capabilities', widget.device.capabilities.join(', ')),
+            _infoRow('Device ID', device.uniqueDeviceId),
+            _infoRow('Capabilities', device.capabilities.join(', ')),
           ],
         ),
       ),

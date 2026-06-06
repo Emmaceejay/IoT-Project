@@ -23,63 +23,28 @@ class DeviceCard extends ConsumerStatefulWidget {
 class _DeviceCardState extends ConsumerState<DeviceCard> {
   bool _expanded = false;
 
+  // Pending toggle values prevent Riverpod optimistic updates from restarting
+  // the Switch slide animation mid-gesture (same fix as _RelaySwitch /
+  // _ValueSlider in schema_driven_ui_builder.dart).
+  final Map<String, bool> _pendingToggles = {};
+
+  bool _switchValue(String key) =>
+      _pendingToggles.containsKey(key)
+          ? _pendingToggles[key]!
+          : (widget.device.telemetry[key] as bool? ?? false);
+
+  @override
+  void didUpdateWidget(DeviceCard old) {
+    super.didUpdateWidget(old);
+    // Clear a pending value once the server state has caught up.
+    _pendingToggles.removeWhere(
+        (key, local) => (widget.device.telemetry[key] as bool? ?? false) == local);
+  }
+
   /// True when every capability is a relay gang — simple on/off device.
   bool get _isRelayOnly =>
       widget.device.capabilities.isNotEmpty &&
       widget.device.capabilities.every((c) => c.startsWith('relay'));
-
-  // ── Rename dialog ──────────────────────────────────────────────────────────
-
-  void _showRenameDialog(BuildContext context) {
-    final controller =
-        TextEditingController(text: widget.device.displayName);
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF121826),
-        title: const Text('Rename Device',
-            style: TextStyle(color: Colors.white)),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          style: const TextStyle(color: Colors.white),
-          decoration: InputDecoration(
-            hintText: widget.device.deviceName,
-            hintStyle: const TextStyle(color: Colors.white38),
-            helperText: 'Clear to revert to auto-generated name',
-            helperStyle: const TextStyle(color: Colors.white24, fontSize: 11),
-            enabledBorder: const UnderlineInputBorder(
-                borderSide: BorderSide(color: Colors.white24)),
-            focusedBorder: const UnderlineInputBorder(
-                borderSide: BorderSide(color: Color(0xFF00E5FF))),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel',
-                style: TextStyle(color: Colors.white54)),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF00E5FF),
-              foregroundColor: Colors.black,
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8)),
-            ),
-            onPressed: () {
-              Navigator.pop(ctx);
-              ref
-                  .read(deviceManagerProvider.notifier)
-                  .renameDevice(widget.device.uniqueDeviceId,
-                      controller.text.trim());
-            },
-            child: const Text('Save'),
-          ),
-        ],
-      ),
-    );
-  }
 
   // ── Inline relay toggles (relay-only devices) ──────────────────────────────
 
@@ -100,8 +65,6 @@ class _DeviceCardState extends ConsumerState<DeviceCard> {
           'relay_4' => '4',
           _         => '',
         };
-        final isOn =
-            widget.device.telemetry[telemetryKey] as bool? ?? false;
 
         return Row(
           mainAxisSize: MainAxisSize.min,
@@ -114,12 +77,15 @@ class _DeviceCardState extends ConsumerState<DeviceCard> {
                         color: Colors.white38, fontSize: 11)),
               ),
             Switch.adaptive(
-              value: isOn,
+              value: _switchValue(telemetryKey),
               onChanged: isOnline
-                  ? (_) => ref
-                      .read(deviceManagerProvider.notifier)
-                      .sendCommand(widget.device.uniqueDeviceId,
-                          {telemetryKey: !isOn})
+                  ? (newVal) {
+                      setState(() => _pendingToggles[telemetryKey] = newVal);
+                      ref
+                          .read(deviceManagerProvider.notifier)
+                          .sendCommand(widget.device.uniqueDeviceId,
+                              {telemetryKey: newVal});
+                    }
                   : null,
             ),
           ],
@@ -176,30 +142,18 @@ class _DeviceCardState extends ConsumerState<DeviceCard> {
                   ),
                   const SizedBox(width: 12),
 
-                  // Name + status + rename icon
+                  // Name + status
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Row(
-                          children: [
-                            Flexible(
-                              child: Text(
-                                widget.device.displayName,
-                                style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w600),
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                            const SizedBox(width: 6),
-                            GestureDetector(
-                              onTap: () => _showRenameDialog(context),
-                              child: const Icon(Icons.edit_outlined,
-                                  size: 14, color: Colors.white24),
-                            ),
-                          ],
+                        Text(
+                          widget.device.displayName,
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600),
+                          overflow: TextOverflow.ellipsis,
                         ),
                         const SizedBox(height: 2),
                         Text(

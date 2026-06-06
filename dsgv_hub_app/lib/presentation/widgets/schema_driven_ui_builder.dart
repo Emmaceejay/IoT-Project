@@ -43,11 +43,11 @@ class SchemaDrivenUiBuilder extends ConsumerWidget {
         return _CapabilityTile(
           icon: isOn ? Icons.power : Icons.power_off,
           label: 'Switch 1',
-          child: Switch.adaptive(
-            value: isOn,
-            onChanged: (_) => ref
+          child: _RelaySwitch(
+            serverValue: isOn,
+            onChanged: (v) => ref
                 .read(deviceManagerProvider.notifier)
-                .sendCommand(device.uniqueDeviceId, {'power': !isOn}),
+                .sendCommand(device.uniqueDeviceId, {'power': v}),
           ),
         );
 
@@ -57,11 +57,11 @@ class SchemaDrivenUiBuilder extends ConsumerWidget {
         return _CapabilityTile(
           icon: isOn2 ? Icons.power : Icons.power_off,
           label: 'Switch 2',
-          child: Switch.adaptive(
-            value: isOn2,
-            onChanged: (_) => ref
+          child: _RelaySwitch(
+            serverValue: isOn2,
+            onChanged: (v) => ref
                 .read(deviceManagerProvider.notifier)
-                .sendCommand(device.uniqueDeviceId, {'power_2': !isOn2}),
+                .sendCommand(device.uniqueDeviceId, {'power_2': v}),
           ),
         );
 
@@ -71,11 +71,11 @@ class SchemaDrivenUiBuilder extends ConsumerWidget {
         return _CapabilityTile(
           icon: isOn3 ? Icons.power : Icons.power_off,
           label: 'Switch 3',
-          child: Switch.adaptive(
-            value: isOn3,
-            onChanged: (_) => ref
+          child: _RelaySwitch(
+            serverValue: isOn3,
+            onChanged: (v) => ref
                 .read(deviceManagerProvider.notifier)
-                .sendCommand(device.uniqueDeviceId, {'power_3': !isOn3}),
+                .sendCommand(device.uniqueDeviceId, {'power_3': v}),
           ),
         );
 
@@ -85,11 +85,11 @@ class SchemaDrivenUiBuilder extends ConsumerWidget {
         return _CapabilityTile(
           icon: isOn4 ? Icons.power : Icons.power_off,
           label: 'Switch 4',
-          child: Switch.adaptive(
-            value: isOn4,
-            onChanged: (_) => ref
+          child: _RelaySwitch(
+            serverValue: isOn4,
+            onChanged: (v) => ref
                 .read(deviceManagerProvider.notifier)
-                .sendCommand(device.uniqueDeviceId, {'power_4': !isOn4}),
+                .sendCommand(device.uniqueDeviceId, {'power_4': v}),
           ),
         );
 
@@ -300,6 +300,61 @@ class SchemaDrivenUiBuilder extends ConsumerWidget {
               style: TextStyle(color: Colors.grey, fontSize: 12)),
         );
     }
+  }
+}
+
+/// Switch that owns its own animation state so Riverpod rebuilds triggered by
+/// the optimistic update never restart the slide animation mid-gesture.
+///
+/// Without this, the Switch's AnimationController receives two forward() calls
+/// in the same frame (once from the gesture handler, once from didUpdateWidget
+/// reacting to the Riverpod state change), causing a visible stutter.
+class _RelaySwitch extends StatefulWidget {
+  final bool serverValue;
+  final ValueChanged<bool> onChanged;
+
+  const _RelaySwitch({
+    required this.serverValue,
+    required this.onChanged,
+  });
+
+  @override
+  State<_RelaySwitch> createState() => _RelaySwitchState();
+}
+
+class _RelaySwitchState extends State<_RelaySwitch> {
+  late bool _local;
+  bool _pending = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _local = widget.serverValue;
+  }
+
+  @override
+  void didUpdateWidget(_RelaySwitch old) {
+    super.didUpdateWidget(old);
+    // Accept the server value only when idle or when the server has caught up
+    // with our local change. While _pending is true, we own the value.
+    if (!_pending || widget.serverValue == _local) {
+      _local = widget.serverValue;
+      _pending = false;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Switch.adaptive(
+      value: _local,
+      onChanged: (newVal) {
+        setState(() {
+          _local = newVal;
+          _pending = true;
+        });
+        widget.onChanged(newVal);
+      },
+    );
   }
 }
 

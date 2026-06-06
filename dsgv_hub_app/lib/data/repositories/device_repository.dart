@@ -20,4 +20,9 @@ abstract class DeviceRepository {
 
   /// Persists a user-chosen display name. Pass empty string to clear.
   Future<void> renameDevice(String deviceId, String customName);
+
+  /// Directly updates the persisted online/offline status for a device.
+  /// Preferred over [updateDeviceState] for status changes because it writes
+  /// [DeviceEntity.statusName] rather than patching telemetryJson.
+  Future<void> updateDeviceStatus(String deviceId, DeviceStatus status);
 }

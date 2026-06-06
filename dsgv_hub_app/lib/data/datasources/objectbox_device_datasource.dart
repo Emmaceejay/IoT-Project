@@ -67,4 +67,15 @@ class ObjectBoxDeviceDatasource implements DeviceRepository {
     entity.customName = customName.trim().isEmpty ? null : customName.trim();
     _box.put(entity);
   }
+
+  @override
+  Future<void> updateDeviceStatus(String deviceId, DeviceStatus status) async {
+    final q =
+        _box.query(DeviceEntity_.uniqueDeviceId.equals(deviceId)).build();
+    final entity = q.findFirst();
+    q.close();
+    if (entity == null) return;
+    entity.statusName = status.name;
+    _box.put(entity);
+  }
 }

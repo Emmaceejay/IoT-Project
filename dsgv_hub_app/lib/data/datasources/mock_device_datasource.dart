@@ -62,4 +62,19 @@ class MockDeviceDatasource implements DeviceRepository {
   Future<void> removeDevice(String deviceId) async {
     _devices.removeWhere((d) => d.uniqueDeviceId == deviceId);
   }
+
+  @override
+  Future<void> renameDevice(String deviceId, String customName) async {
+    final index = _devices.indexWhere((d) => d.uniqueDeviceId == deviceId);
+    if (index == -1) return;
+    final trimmed = customName.trim().isEmpty ? null : customName.trim();
+    _devices[index] = _devices[index].copyWith(customName: trimmed);
+  }
+
+  @override
+  Future<void> updateDeviceStatus(String deviceId, DeviceStatus status) async {
+    final index = _devices.indexWhere((d) => d.uniqueDeviceId == deviceId);
+    if (index == -1) return;
+    _devices[index] = _devices[index].copyWith(status: status);
+  }
 }
