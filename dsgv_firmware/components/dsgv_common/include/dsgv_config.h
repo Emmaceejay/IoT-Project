@@ -204,5 +204,9 @@
 // Toggle gang 0's wall switch DSGV_RESET_TOGGLE_COUNT times within
 // DSGV_RESET_WINDOW_MS milliseconds to erase Wi-Fi credentials and reboot
 // into BLE provisioning mode.
+//
+// Latch-switch safety: 5 flips within 3 s is a deliberate gesture that cannot
+// happen in normal use. The old 10 s window allowed casual toggling across
+// 10 s to accidentally trigger a factory reset.
 #define DSGV_RESET_TOGGLE_COUNT   5
-#define DSGV_RESET_WINDOW_MS      10000
+#define DSGV_RESET_WINDOW_MS      3000
