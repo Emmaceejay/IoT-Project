@@ -29,6 +29,7 @@
 #include "esp_mac.h"
 #include "esp_netif.h"
 #include "esp_app_desc.h"
+#include "esp_system.h"
 #include "cJSON.h"
 #include "freertos/timers.h"
 #include <stdio.h>
@@ -695,8 +696,12 @@ static void broker_rollback_timer_cb(TimerHandle_t timer) {
  * Handles authenticated broker-reconfiguration commands from the DSGV Hub App.
  *
  * Payload variants:
- *   Normal change:   {"auth_token":"<32hex>","mqtt_host":"host","mqtt_port":8883,"mqtt_use_tls":true}
- *   Factory revert:  {"auth_token":"<32hex>","revert_to_factory":true}
+ *   Broker change:   {"auth_token":"<32hex>","mqtt_host":"host","mqtt_port":8883,"mqtt_use_tls":true}
+ *   Broker revert:   {"auth_token":"<32hex>","revert_to_factory":true}
+ *   WiFi change:     {"auth_token":"<32hex>","wifi_ssid":"NewNet","wifi_password":"newpass"}
+ *   Re-provision:    {"auth_token":"<32hex>","reprovision":true}
+ *                    (clears only WiFi creds; device config, relay state, and broker
+ *                     settings are all preserved — device reboots into BLE provisioning)
  *
  * Security: token verified by constant-time memcmp. Token never appears in MQTT
  * traffic outbound — it arrives here via the app's MQTT publish, which already
@@ -743,7 +748,45 @@ static void handle_config(const char *payload, int len) {
         return;
     }
 
-    // ── 3. Parse new broker parameters ───────────────────────────────────────
+    // ── 3. Re-provision without factory reset ─────────────────────────────────
+    // Erases only the wifi_creds NVS namespace — device config, relay state,
+    // and MQTT broker settings are all preserved.  On reboot the device finds no
+    // credentials and enters BLE provisioning so new WiFi details can be supplied.
+    // Use this when the network is gone (new router, moved location, etc.) and the
+    // device cannot be reached by wifi_ssid change below.
+    // Payload: {"auth_token":"<32hex>","reprovision":true}
+    const cJSON *j_reprov = cJSON_GetObjectItemCaseSensitive(root, "reprovision");
+    if (cJSON_IsTrue(j_reprov)) {
+        cJSON_Delete(root);
+        ESP_LOGI(TAG, "Config: reprovision — erasing WiFi creds only, rebooting into BLE provisioning");
+        wifi_manager_factory_reset();   // erases wifi_creds NVS + esp_restart()
+        return;
+    }
+
+    // ── 4. WiFi credential change ─────────────────────────────────────────────
+    // Overwrites the stored SSID/password and reboots.  All other NVS data
+    // (device config, relay state, MQTT broker settings) is untouched.
+    // Use when the router password changed or you are migrating to a new network
+    // but the device is still reachable on the current one.
+    // Payload: {"auth_token":"<32hex>","wifi_ssid":"NewNet","wifi_password":"newpass"}
+    // wifi_password may be omitted or "" for open networks.
+    const cJSON *j_ssid = cJSON_GetObjectItemCaseSensitive(root, "wifi_ssid");
+    const cJSON *j_wpass = cJSON_GetObjectItemCaseSensitive(root, "wifi_password");
+    if (cJSON_IsString(j_ssid) && j_ssid->valuestring && j_ssid->valuestring[0]) {
+        char new_ssid[64];
+        char new_pass[128];
+        strlcpy(new_ssid, j_ssid->valuestring, sizeof(new_ssid));
+        strlcpy(new_pass,
+                (cJSON_IsString(j_wpass) && j_wpass->valuestring) ? j_wpass->valuestring : "",
+                sizeof(new_pass));
+        cJSON_Delete(root);
+        wifi_manager_save_credentials(new_ssid, new_pass);
+        ESP_LOGI(TAG, "Config: WiFi credentials updated (SSID: %s). Rebooting…", new_ssid);
+        esp_restart();
+        return;
+    }
+
+    // ── 5. Parse new broker parameters ───────────────────────────────────────
     const cJSON *j_host = cJSON_GetObjectItemCaseSensitive(root, "mqtt_host");
     const cJSON *j_port = cJSON_GetObjectItemCaseSensitive(root, "mqtt_port");
     const cJSON *j_tls  = cJSON_GetObjectItemCaseSensitive(root, "mqtt_use_tls");
@@ -767,7 +810,7 @@ static void handle_config(const char *payload, int len) {
 
     cJSON_Delete(root);
 
-    // ── 4. Copy current broker to rollback store ──────────────────────────────
+    // ── 6. Copy current broker to rollback store ──────────────────────────────
     nvs_handle_t hprev;
     if (nvs_open("prev_mqtt_cfg", NVS_READWRITE, &hprev) == ESP_OK) {
         char    cur_host[65] = {0};
@@ -789,7 +832,7 @@ static void handle_config(const char *payload, int len) {
         nvs_close(hprev);
     }
 
-    // ── 5. Write new broker to mqtt_cfg ──────────────────────────────────────
+    // ── 7. Write new broker to mqtt_cfg ──────────────────────────────────────
     nvs_handle_t hnew;
     if (nvs_open(MQTT_CFG_NVS_NS, NVS_READWRITE, &hnew) == ESP_OK) {
         nvs_set_str(hnew, "host", new_host);
@@ -799,7 +842,7 @@ static void handle_config(const char *payload, int len) {
         nvs_close(hnew);
     }
 
-    // ── 6. Start 60-second rollback watchdog ─────────────────────────────────
+    // ── 8. Start 60-second rollback watchdog ─────────────────────────────────
     if (!s_broker_rollback_timer) {
         s_broker_rollback_timer = xTimerCreate(
             "broker_rb", pdMS_TO_TICKS(60000), pdFALSE,
@@ -810,7 +853,7 @@ static void handle_config(const char *payload, int len) {
         xTimerStart(s_broker_rollback_timer, 0);
     }
 
-    // ── 7. Graceful reconnect (one-shot task — relays stay energised) ─────────
+    // ── 9. Graceful reconnect (one-shot task — relays stay energised) ─────────
     ESP_LOGI(TAG, "Config: broker change accepted → %s:%d (TLS=%d). Reconnecting…",
              new_host, new_port, new_tls);
     _schedule_broker_switch(new_host, new_port, new_tls, /*is_rollback=*/false);
