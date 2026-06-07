@@ -284,6 +284,56 @@ class BleProvisioningService {
     }
   }
 
+  // ── Nearby device discovery (Option 2 — device picker) ─────────────────────
+
+  /// Scans for all nearby DSGV devices advertising the provisioning service.
+  /// Returns a list of (device, platformName) pairs sorted by RSSI descending
+  /// (strongest signal first) so the user can easily identify the closest one.
+  ///
+  /// Never throws — returns an empty list on any failure.
+  static Future<List<BluetoothDevice>> discoverNearbyDevices() async {
+    try {
+      await _ensurePermissions();
+      if (!await FlutterBluePlus.isSupported) return [];
+
+      final found = <String, BluetoothDevice>{};
+
+      // Include already-connected DSGV devices
+      for (final d in FlutterBluePlus.connectedDevices) {
+        if (_isDSGVDevice(d.platformName, null)) {
+          found[d.remoteId.str] = d;
+        }
+      }
+
+      final sub = FlutterBluePlus.onScanResults.listen((results) {
+        for (final r in results) {
+          if (_isDSGVDevice(r.device.platformName, null)) {
+            found[r.device.remoteId.str] = r.device;
+          }
+        }
+      });
+
+      try {
+        await FlutterBluePlus.startScan(timeout: _kScanTimeout);
+        // Wait for the scan to finish (startScan returns immediately)
+        await FlutterBluePlus.isScanning
+            .where((scanning) => !scanning)
+            .first
+            .timeout(_kScanTimeout + const Duration(seconds: 2));
+      } on TimeoutException {
+        // Scan timed out with no results — return what we have
+      } finally {
+        await sub.cancel();
+        await FlutterBluePlus.stopScan();
+      }
+
+      return found.values.toList();
+    } catch (e) {
+      debugPrint('[BLE Prov] discoverNearbyDevices failed: $e');
+      return [];
+    }
+  }
+
   // ── Pre-provisioning data fetch ──────────────────────────────────────────────
 
   /// Opens a single BLE connection to [deviceName], reads the device identity

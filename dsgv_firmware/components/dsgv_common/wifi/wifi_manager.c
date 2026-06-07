@@ -8,14 +8,17 @@
 #include <string.h>
 
 static const char *TAG = "wifi_manager";
-static bool s_connected = false;
+static bool s_connected      = false;
+static bool s_stop_reconnect = false;
 
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                                 int32_t event_id, void *event_data) {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        ESP_LOGW(TAG, "Wi-Fi disconnected. Retrying...");
         s_connected = false;
-        esp_wifi_connect();
+        if (!s_stop_reconnect) {
+            ESP_LOGW(TAG, "Wi-Fi disconnected. Retrying...");
+            esp_wifi_connect();
+        }
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
         ESP_LOGI(TAG, "Got IP: " IPSTR, IP2STR(&event->ip_info.ip));
@@ -95,6 +98,45 @@ esp_err_t wifi_manager_factory_reset(void) {
 
 bool wifi_manager_is_connected(void) {
     return s_connected;
+}
+
+void wifi_manager_stop_reconnect(void) {
+    s_stop_reconnect = true;
+    esp_wifi_disconnect();   // triggers STA_DISCONNECTED, but flag prevents retry
+    ESP_LOGI(TAG, "Reconnect loop stopped.");
+}
+
+esp_err_t wifi_manager_start_ap(void) {
+    uint8_t mac[6];
+    esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP);
+
+    // Stop STA driver cleanly before switching to AP mode
+    s_stop_reconnect = true;
+    esp_wifi_disconnect();
+    esp_wifi_stop();
+
+    char ssid[32];
+    snprintf(ssid, sizeof(ssid), "DSGV_Setup_%02X%02X%02X",
+             mac[3], mac[4], mac[5]);
+
+    wifi_config_t ap_cfg = {
+        .ap = {
+            .channel         = 1,
+            .authmode        = WIFI_AUTH_OPEN,
+            .max_connection  = 4,
+            .beacon_interval = 100,
+        }
+    };
+    strlcpy((char *)ap_cfg.ap.ssid, ssid, sizeof(ap_cfg.ap.ssid));
+    ap_cfg.ap.ssid_len = (uint8_t)strlen(ssid);
+
+    esp_err_t err;
+    err = esp_wifi_set_mode(WIFI_MODE_AP);      if (err != ESP_OK) return err;
+    err = esp_wifi_set_config(WIFI_IF_AP, &ap_cfg); if (err != ESP_OK) return err;
+    err = esp_wifi_start();                     if (err != ESP_OK) return err;
+
+    ESP_LOGI(TAG, "Setup AP started — SSID: %s  IP: 192.168.4.1", ssid);
+    return ESP_OK;
 }
 
 // ── Provisioning-time Wi-Fi scan ──────────────────────────────────────────────

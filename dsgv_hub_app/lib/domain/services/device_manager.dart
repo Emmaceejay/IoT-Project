@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../../core/objectbox_store_provider.dart';
 import '../../data/datasources/objectbox_device_datasource.dart';
 import '../../data/repositories/device_repository.dart';
@@ -32,9 +33,19 @@ final deviceRepositoryProvider = Provider<DeviceRepository>((ref) {
 class DeviceManager extends AsyncNotifier<List<MatterDevice>> {
   late DeviceRepository _repository;
 
+  // Persists BLE device names (e.g. "DSGVHub_A1B2C3") keyed by device_id so
+  // the app can re-provision a device via BLE without a QR scan.
+  static const _storage = FlutterSecureStorage(
+    aOptions: AndroidOptions(encryptedSharedPreferences: true),
+  );
+  static String _bleNameKey(String deviceId) => 'ble_name_${deviceId.toUpperCase()}';
+
   // Holds tokens received from BLE provisioning until the device's MQTT
   // announce message arrives and confirms the device_id (WiFi MAC).
-  final _pendingTokens = <String, String>{};
+  final _pendingTokens   = <String, String>{};
+
+  // Holds BLE names from provisioning until the MQTT announce arrives.
+  final _pendingBleNames = <String, String>{};
 
   @override
   Future<List<MatterDevice>> build() async {
@@ -47,6 +58,34 @@ class DeviceManager extends AsyncNotifier<List<MatterDevice>> {
   void setPendingToken(String deviceId, String token) {
     _pendingTokens[deviceId.toUpperCase()] = token;
     debugPrint('[DeviceManager] Pending token stored for $deviceId');
+  }
+
+  /// Stores the BLE device name (e.g. "DSGVHub_A1B2C3") for a just-provisioned
+  /// device.  Persisted to secure storage once the MQTT announce arrives so the
+  /// app can reconnect via BLE without a QR scan when WiFi needs to change.
+  void setPendingBleName(String deviceId, String bleName) {
+    _pendingBleNames[deviceId.toUpperCase()] = bleName;
+    debugPrint('[DeviceManager] Pending BLE name stored for $deviceId: $bleName');
+  }
+
+  /// Returns the persisted BLE name for [deviceId], or null if unknown.
+  /// Used by the settings screen to reconnect offline devices via BLE.
+  Future<String?> getBleNameForDevice(String deviceId) async {
+    return _storage.read(key: _bleNameKey(deviceId));
+  }
+
+  /// Sends an authenticated WiFi credential change command to a device via MQTT.
+  /// The device saves the new credentials and reboots onto the new network.
+  /// All other device config (relay state, MQTT broker, power restore) is preserved.
+  Future<void> changeDeviceWifi(
+      String deviceId, String authToken, String ssid, String password) async {
+    final payload = jsonEncode({
+      'auth_token': authToken,
+      'wifi_ssid': ssid,
+      'wifi_password': password,
+    });
+    await ref.read(mqttServiceProvider.notifier).publishConfig(deviceId, payload);
+    debugPrint('[DeviceManager] WiFi change command sent to $deviceId (SSID: $ssid)');
   }
 
   /// Refreshes the full device list from the Isar cache.
@@ -241,7 +280,15 @@ class DeviceManager extends AsyncNotifier<List<MatterDevice>> {
   Future<void> handleAnnounce(MatterDevice announced) async {
     final devices = state.value ?? [];
     final normalised = announced.uniqueDeviceId.toUpperCase();
-    final pendingToken = _pendingTokens.remove(normalised);
+    final pendingToken   = _pendingTokens.remove(normalised);
+
+    // Persist BLE name when it arrives from provisioning so future WiFi
+    // recovery can reconnect without QR scan.
+    final pendingBleName = _pendingBleNames.remove(normalised);
+    if (pendingBleName != null) {
+      await _storage.write(key: _bleNameKey(normalised), value: pendingBleName);
+      debugPrint('[DeviceManager] BLE name persisted for $normalised: $pendingBleName');
+    }
 
     // Merge token: prefer pending (freshly provisioned) over existing stored value
     final resolvedToken = pendingToken ??

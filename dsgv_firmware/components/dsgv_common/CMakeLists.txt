@@ -4,6 +4,7 @@ idf_component_register(
         "config/dsgv_device_config.c"
         "gpio/dsgv_gpio.c"
         "http/dsgv_http_server.c"
+        "http/dsgv_captive_portal.c"
         "mqtt/dsgv_mqtt.c"
         "ota/dsgv_ota.c"
         "provisioning/dsgv_provisioning.c"

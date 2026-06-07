@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../domain/models/matter_device.dart';
+import '../../domain/services/ble_provisioning_service.dart';
 import '../../domain/services/device_manager.dart';
 
 /// Device Settings Screen
@@ -20,6 +21,13 @@ class DeviceSettingsScreen extends ConsumerStatefulWidget {
 
 class _DeviceSettingsScreenState extends ConsumerState<DeviceSettingsScreen> {
   late final TextEditingController _nameController;
+  final _wifiSsidCtrl  = TextEditingController();
+  final _wifiPassCtrl  = TextEditingController();
+
+  bool _wifiObscure       = true;
+  bool _wifiChanging      = false;
+  bool _wifiSuccess       = false;
+  String? _wifiStatus;
 
   /// True when the device has at least one relay — power restore only applies
   /// to output devices, not pure sensors.
@@ -36,6 +44,8 @@ class _DeviceSettingsScreenState extends ConsumerState<DeviceSettingsScreen> {
   @override
   void dispose() {
     _nameController.dispose();
+    _wifiSsidCtrl.dispose();
+    _wifiPassCtrl.dispose();
     super.dispose();
   }
 
@@ -52,6 +62,99 @@ class _DeviceSettingsScreenState extends ConsumerState<DeviceSettingsScreen> {
         .read(deviceManagerProvider.notifier)
         .setPowerRestoreMode(widget.device.uniqueDeviceId, mode);
   }
+
+  Future<void> _changeWifi() async {
+    final ssid = _wifiSsidCtrl.text.trim();
+    if (ssid.isEmpty) {
+      setState(() => _wifiStatus = 'Enter the network name (SSID).');
+      return;
+    }
+
+    final device = ref.read(deviceManagerProvider).valueOrNull?.firstWhere(
+          (d) => d.uniqueDeviceId == widget.device.uniqueDeviceId,
+          orElse: () => widget.device,
+        ) ??
+        widget.device;
+
+    if (device.authToken == null) {
+      setState(() => _wifiStatus =
+          'Auth token not found for this device. Re-provision it to restore the token.');
+      return;
+    }
+
+    setState(() { _wifiChanging = true; _wifiStatus = null; _wifiSuccess = false; });
+
+    final manager = ref.read(deviceManagerProvider.notifier);
+
+    if (device.status == DeviceStatus.online) {
+      // ── Device is online: send via authenticated MQTT command ─────────────
+      await manager.changeDeviceWifi(
+        device.uniqueDeviceId,
+        device.authToken!,
+        ssid,
+        _wifiPassCtrl.text,
+      );
+      if (!mounted) return;
+      setState(() {
+        _wifiChanging = false;
+        _wifiSuccess  = true;
+        _wifiStatus   = 'Change sent. The device will reboot and reconnect to "$ssid". '
+            'It will appear online again within ~30 seconds.';
+      });
+    } else {
+      // ── Device is offline: reconnect via BLE using the stored device name ──
+      final bleName = await manager.getBleNameForDevice(device.uniqueDeviceId);
+      if (!mounted) return;
+
+      if (bleName == null) {
+        setState(() {
+          _wifiChanging = false;
+          _wifiStatus   = 'Device is offline and its Bluetooth name is not stored.\n\n'
+              'Option A: Connect your phone to the "DSGV_Setup_*" Wi-Fi network '
+              'the device created, then enter new credentials in your browser.\n\n'
+              'Option B: Scan the QR code on the device to re-provision it.';
+        });
+        return;
+      }
+
+      // Run BLE provisioning using the stored device name — no QR scan needed.
+      setState(() => _wifiStatus = 'Connecting to device via Bluetooth…');
+
+      final stream = BleProvisioningService.provision(
+        deviceName: bleName,
+        ssid:       ssid,
+        password:   _wifiPassCtrl.text,
+      );
+
+      await for (final status in stream) {
+        if (!mounted) return;
+        setState(() => _wifiStatus = status.message ?? _stepLabel(status.step));
+        if (status.isTerminal) {
+          setState(() {
+            _wifiChanging = false;
+            _wifiSuccess  = status.step == ProvisioningStep.success;
+            if (_wifiSuccess) {
+              _wifiStatus = 'Done! Device is connecting to "$ssid". '
+                  'Reconnect your phone to your home Wi-Fi — '
+                  'the device will reappear in the app within ~30 seconds.';
+            }
+          });
+          break;
+        }
+      }
+    }
+  }
+
+  String _stepLabel(ProvisioningStep step) => switch (step) {
+        ProvisioningStep.requestingPermissions => 'Requesting Bluetooth permissions…',
+        ProvisioningStep.scanningForDevice     => 'Scanning for device…',
+        ProvisioningStep.connecting            => 'Connecting…',
+        ProvisioningStep.discoveringServices   => 'Discovering services…',
+        ProvisioningStep.sendingCredentials    => 'Sending new Wi-Fi credentials…',
+        ProvisioningStep.waitingForDevice      => 'Waiting for device to connect…',
+        ProvisioningStep.success               => 'Connected successfully!',
+        ProvisioningStep.failed                => 'Failed.',
+      };
 
   @override
   Widget build(BuildContext context) {
@@ -187,6 +290,153 @@ class _DeviceSettingsScreenState extends ConsumerState<DeviceSettingsScreen> {
               ),
             ),
           ],
+
+          const SizedBox(height: 24),
+
+          // ── Change Wi-Fi ─────────────────────────────────────────────
+          _section('Wi-Fi Network'),
+          _card(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  device.status == DeviceStatus.online
+                      ? 'Device is online. Enter new credentials below and tap Change '
+                        '— the device will reboot and reconnect automatically.'
+                      : 'Device is offline. Enter new credentials and tap Change to '
+                        'reconnect via Bluetooth (no QR scan needed).',
+                  style: const TextStyle(
+                      color: Colors.white54, fontSize: 12, height: 1.5),
+                ),
+                const SizedBox(height: 14),
+                TextField(
+                  controller: _wifiSsidCtrl,
+                  style: const TextStyle(color: Colors.white, fontSize: 15),
+                  decoration: InputDecoration(
+                    labelText: 'New network name (SSID)',
+                    labelStyle: const TextStyle(color: Colors.white38),
+                    prefixIcon: const Icon(Icons.wifi,
+                        color: Color(0xFF00E5FF), size: 20),
+                    filled: true,
+                    fillColor: const Color(0xFF0A0E1A),
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: BorderSide.none),
+                    focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide:
+                            const BorderSide(color: Color(0xFF00E5FF))),
+                  ),
+                  onChanged: (_) => setState(() {}),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: _wifiPassCtrl,
+                  obscureText: _wifiObscure,
+                  style: const TextStyle(color: Colors.white, fontSize: 15),
+                  decoration: InputDecoration(
+                    labelText: 'Password (leave blank if open network)',
+                    labelStyle: const TextStyle(color: Colors.white38),
+                    prefixIcon: const Icon(Icons.lock_outline,
+                        color: Color(0xFF00E5FF), size: 20),
+                    suffixIcon: IconButton(
+                      icon: Icon(
+                        _wifiObscure
+                            ? Icons.visibility_off
+                            : Icons.visibility,
+                        color: Colors.white38,
+                        size: 20,
+                      ),
+                      onPressed: () =>
+                          setState(() => _wifiObscure = !_wifiObscure),
+                    ),
+                    filled: true,
+                    fillColor: const Color(0xFF0A0E1A),
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: BorderSide.none),
+                    focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide:
+                            const BorderSide(color: Color(0xFF00E5FF))),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF00E5FF),
+                      foregroundColor: Colors.black,
+                      disabledBackgroundColor:
+                          const Color(0xFF00E5FF).withValues(alpha: 0.35),
+                      padding: const EdgeInsets.symmetric(vertical: 13),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10)),
+                    ),
+                    onPressed: (_wifiChanging ||
+                            _wifiSsidCtrl.text.trim().isEmpty)
+                        ? null
+                        : _changeWifi,
+                    icon: _wifiChanging
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: Colors.black))
+                        : Icon(
+                            device.status == DeviceStatus.online
+                                ? Icons.wifi
+                                : Icons.bluetooth_searching,
+                            size: 18),
+                    label: Text(
+                      _wifiChanging
+                          ? 'Changing…'
+                          : device.status == DeviceStatus.online
+                              ? 'Change Wi-Fi'
+                              : 'Reconnect via Bluetooth',
+                    ),
+                  ),
+                ),
+                if (_wifiStatus != null) ...[
+                  const SizedBox(height: 12),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(
+                        _wifiSuccess
+                            ? Icons.check_circle_outline
+                            : _wifiChanging
+                                ? Icons.info_outline
+                                : Icons.error_outline,
+                        size: 15,
+                        color: _wifiSuccess
+                            ? const Color(0xFF00E5FF)
+                            : _wifiChanging
+                                ? Colors.white54
+                                : Colors.orangeAccent,
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          _wifiStatus!,
+                          style: TextStyle(
+                            color: _wifiSuccess
+                                ? const Color(0xFF00E5FF)
+                                : _wifiChanging
+                                    ? Colors.white54
+                                    : Colors.orangeAccent,
+                            fontSize: 12,
+                            height: 1.5,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ],
+            ),
+          ),
 
           const SizedBox(height: 24),
 

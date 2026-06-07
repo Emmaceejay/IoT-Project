@@ -32,6 +32,7 @@
 #include "wifi_manager.h"
 #include "dsgv_http_server.h"
 #include "dsgv_provisioning.h"
+#include "dsgv_captive_portal.h"
 
 esp_err_t DSGV_mqtt_start(void);
 void      DSGV_gpio_init(void);
@@ -105,7 +106,22 @@ void dsgv_app_main(void)
     }
 
     if (!wifi_manager_is_connected()) {
-        ESP_LOGE(TAG, "Wi-Fi failed to connect within 15 s. Halting.");
+        // Credentials exist but the network is unreachable (wrong password,
+        // router replaced, etc.).  Stop the reconnect loop so it does not
+        // interfere with the AP radio, then start a setup Access Point and
+        // serve the captive portal so the user can supply new credentials
+        // from any phone browser — no factory reset, no app required.
+        wifi_manager_stop_reconnect();
+        ESP_LOGW(TAG, "Wi-Fi failed to connect within 15 s.");
+        ESP_LOGW(TAG, "Starting setup AP + captive portal for credential recovery.");
+        if (wifi_manager_start_ap()         == ESP_OK &&
+            DSGV_captive_portal_start()     == ESP_OK) {
+            ESP_LOGI(TAG, "Connect your phone to the 'DSGV_Setup_*' Wi-Fi network,");
+            ESP_LOGI(TAG, "then open a browser — the setup page will appear automatically.");
+        } else {
+            ESP_LOGE(TAG, "Failed to start setup AP. Device cannot recover without reboot.");
+        }
+        vTaskSuspend(NULL);
         return;
     }
 

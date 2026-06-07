@@ -1,5 +1,7 @@
 ﻿import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import '../../domain/services/ble_provisioning_service.dart';
@@ -80,6 +82,14 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
   bool _isLoadingDeviceInfo = false;
   bool _manualSsidEntry = false; // user opted to type SSID instead of picking
 
+  // ── Option 1: manual pair-code entry ─────────────────────────────────────
+  final _pairCodeCtrl = TextEditingController();
+  bool _showManualEntry = false;
+
+  // ── Option 2: BLE device picker ──────────────────────────────────────────
+  bool _isScanning = false;
+  List<BluetoothDevice> _nearbyDevices = [];
+
   // ── Lifecycle ─────────────────────────────────────────────────────────────
 
   @override
@@ -87,6 +97,7 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
     _nameCtrl.dispose();
     _ssidCtrl.dispose();
     _passwordCtrl.dispose();
+    _pairCodeCtrl.dispose();
     _scannerCtrl.dispose();
     super.dispose();
   }
@@ -156,6 +167,57 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
     });
   }
 
+  // ── Option 1: manual pair-code entry ─────────────────────────────────────
+
+  void _submitManualCode() {
+    final code = _pairCodeCtrl.text.trim().toUpperCase();
+    if (code.length != 6) {
+      setState(() => _statusMessage = 'Enter the 6-character pair code from the device label.');
+      return;
+    }
+    final deviceName = 'DSGVHub_$code';
+    _scannerCtrl.stop();
+    setState(() {
+      _parsedQr      = _ParsedQr.dsgv('manual:$deviceName', deviceName);
+      _scannerActive = false;
+      _showManualEntry = false;
+      _nearbyDevices = [];
+      _statusMessage = 'Device code accepted: $deviceName\n'
+          'Enter a name and your Wi-Fi credentials, then tap Provision.';
+    });
+    _loadProvisioningData(deviceName);
+  }
+
+  // ── Option 2: BLE device picker ──────────────────────────────────────────
+
+  Future<void> _scanNearbyDevices() async {
+    setState(() { _isScanning = true; _nearbyDevices = []; _statusMessage = null; });
+    final found = await BleProvisioningService.discoverNearbyDevices();
+    if (!mounted) return;
+    if (found.isEmpty) {
+      setState(() {
+        _isScanning = false;
+        _statusMessage = 'No DSGV devices found nearby. Make sure the device is '
+            'powered on and in provisioning mode.';
+      });
+      return;
+    }
+    setState(() { _isScanning = false; _nearbyDevices = found; });
+  }
+
+  void _selectNearbyDevice(BluetoothDevice device) {
+    final deviceName = device.platformName;
+    setState(() {
+      _parsedQr      = _ParsedQr.dsgv('picker:$deviceName', deviceName);
+      _scannerActive = false;
+      _nearbyDevices = [];
+      _showManualEntry = false;
+      _statusMessage = 'Selected: $deviceName\n'
+          'Enter a name and your Wi-Fi credentials, then tap Provision.';
+    });
+    _loadProvisioningData(deviceName);
+  }
+
   // ── Action handlers ───────────────────────────────────────────────────────
 
   Future<void> _startAction() async {
@@ -219,6 +281,15 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
             status.provisionedDeviceId!,
             status.authToken!,
           );
+
+          // Persist BLE name so the app can re-provision this device via BLE
+          // (without QR scan) if WiFi needs to change in the future.
+          if (_parsedQr?.dsgvDeviceName != null) {
+            manager.setPendingBleName(
+              status.provisionedDeviceId!,
+              _parsedQr!.dsgvDeviceName!,
+            );
+          }
 
           // Register device in Firebase — creates its config entry so the
           // firmware can fetch the broker via HTTPS on first boot
@@ -317,6 +388,12 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
           children: [
             // ── QR Scanner / Preview ─────────────────────────────────────
             _buildScannerSection(),
+
+            // ── Fallback options (damaged QR / no QR) ────────────────────
+            if (_parsedQr == null) ...[
+              const SizedBox(height: 16),
+              _buildFallbackOptions(),
+            ],
 
             const SizedBox(height: 28),
 
@@ -766,6 +843,166 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
       case 1:  return Colors.orangeAccent;
       default: return Colors.redAccent;
     }
+  }
+
+  // ── Fallback provisioning options (Option 1 + Option 2) ──────────────────
+
+  Widget _buildFallbackOptions() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // ── Option 1: Manual pair-code entry ─────────────────────────────
+        _buildSectionDivider("Can't scan the QR code?"),
+        const SizedBox(height: 10),
+
+        AnimatedCrossFade(
+          duration: const Duration(milliseconds: 200),
+          crossFadeState: _showManualEntry
+              ? CrossFadeState.showSecond
+              : CrossFadeState.showFirst,
+          firstChild: OutlinedButton.icon(
+            style: OutlinedButton.styleFrom(
+              foregroundColor: const Color(0xFF00E5FF),
+              side: const BorderSide(color: Color(0xFF00E5FF), width: 1),
+              padding: const EdgeInsets.symmetric(vertical: 13),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10)),
+            ),
+            icon: const Icon(Icons.keyboard, size: 18),
+            label: const Text('Enter pair code manually'),
+            onPressed: () => setState(() => _showManualEntry = true),
+          ),
+          secondChild: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(children: [
+                Expanded(
+                  child: TextField(
+                    controller: _pairCodeCtrl,
+                    textCapitalization: TextCapitalization.characters,
+                    maxLength: 6,
+                    inputFormatters: [
+                      FilteringTextInputFormatter.allow(RegExp(r'[A-Fa-f0-9]')),
+                    ],
+                    style: const TextStyle(
+                        color: Colors.white,
+                        letterSpacing: 4,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w600),
+                    decoration: InputDecoration(
+                      labelText: 'Pair code (6 characters from label)',
+                      labelStyle: const TextStyle(color: Colors.white38, fontSize: 12),
+                      hintText: 'A1B2C3',
+                      hintStyle: const TextStyle(color: Colors.white24),
+                      prefixText: 'DSGVHub_  ',
+                      prefixStyle: const TextStyle(color: Colors.white38, fontSize: 13),
+                      counterText: '',
+                      filled: true,
+                      fillColor: const Color(0xFF121826),
+                      border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide.none),
+                      focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: const BorderSide(color: Color(0xFF00E5FF))),
+                    ),
+                    onChanged: (_) => setState(() {}),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF00E5FF),
+                    foregroundColor: Colors.black,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 16),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10)),
+                  ),
+                  onPressed: _pairCodeCtrl.text.trim().length == 6
+                      ? _submitManualCode
+                      : null,
+                  child: const Text('Find',
+                      style: TextStyle(fontWeight: FontWeight.w600)),
+                ),
+              ]),
+              const SizedBox(height: 4),
+              TextButton(
+                onPressed: () => setState(() => _showManualEntry = false),
+                child: const Text('Cancel',
+                    style: TextStyle(color: Colors.white38, fontSize: 12)),
+              ),
+            ],
+          ),
+        ),
+
+        // ── Option 2: BLE device picker ───────────────────────────────────
+        const SizedBox(height: 12),
+        _buildSectionDivider('or'),
+        const SizedBox(height: 10),
+
+        OutlinedButton.icon(
+          style: OutlinedButton.styleFrom(
+            foregroundColor: const Color(0xFF00E5FF),
+            side: const BorderSide(color: Color(0xFF00E5FF), width: 1),
+            padding: const EdgeInsets.symmetric(vertical: 13),
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10)),
+          ),
+          icon: _isScanning
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: Color(0xFF00E5FF)))
+              : const Icon(Icons.bluetooth_searching, size: 18),
+          label: Text(_isScanning
+              ? 'Scanning for nearby devices…'
+              : 'Scan for nearby DSGV devices'),
+          onPressed: _isScanning ? null : _scanNearbyDevices,
+        ),
+
+        // Results list
+        if (_nearbyDevices.isNotEmpty) ...[
+          const SizedBox(height: 10),
+          Container(
+            decoration: BoxDecoration(
+              color: const Color(0xFF121826),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                  color: const Color(0xFF00E5FF).withValues(alpha: 0.2)),
+            ),
+            child: Column(
+              children: _nearbyDevices.map((device) {
+                return ListTile(
+                  leading: const Icon(Icons.bluetooth,
+                      color: Color(0xFF00E5FF), size: 20),
+                  title: Text(
+                    device.platformName,
+                    style: const TextStyle(color: Colors.white, fontSize: 14),
+                  ),
+                  trailing: const Icon(Icons.chevron_right,
+                      color: Colors.white38, size: 20),
+                  onTap: () => _selectNearbyDevice(device),
+                );
+              }).toList(),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildSectionDivider(String label) {
+    return Row(children: [
+      const Expanded(child: Divider(color: Colors.white12)),
+      Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        child: Text(label,
+            style: const TextStyle(color: Colors.white24, fontSize: 12)),
+      ),
+      const Expanded(child: Divider(color: Colors.white12)),
+    ]);
   }
 
   Widget _buildFooter() {

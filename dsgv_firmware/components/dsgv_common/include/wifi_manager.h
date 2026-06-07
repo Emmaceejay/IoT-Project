@@ -34,6 +34,23 @@ esp_err_t wifi_manager_factory_reset(void);
 bool wifi_manager_is_connected(void);
 
 /**
+ * @brief Stop automatic reconnection attempts and disconnect from Wi-Fi.
+ *        Call before entering BLE provisioning or AP setup mode so the
+ *        reconnect loop does not interfere with BLE/WiFi radio coexistence.
+ *        Safe to call even if Wi-Fi was never connected.
+ */
+void wifi_manager_stop_reconnect(void);
+
+/**
+ * @brief Stop STA mode and start a setup Access Point named "DSGV_Setup_XXXXXX"
+ *        (last 3 bytes of SoftAP MAC).  The AP is open (no password) so any
+ *        nearby phone can connect.  Call DSGV_captive_portal_start() after this
+ *        to serve the credential entry page at 192.168.4.1.
+ * @return ESP_OK on success.
+ */
+esp_err_t wifi_manager_start_ap(void);
+
+/**
  * @brief Scan for nearby Wi-Fi networks and serialise results as a JSON array.
  *        Initialises the Wi-Fi driver in STA mode if it has not been started yet.
  *        Intended for use during BLE provisioning so the app can present a
