@@ -33,6 +33,15 @@ class MatterDevice {
   /// Power restore preference for relay devices. Synced to/from firmware via MQTT.
   final PowerRestoreMode powerRestoreMode;
 
+  /// Model identifier matching the firmware manifest key, e.g. "1gang_switch".
+  /// Populated from the "device_type" field in the MQTT announce message.
+  /// Empty string means the device is running firmware older than the manifest feature.
+  final String deviceType;
+
+  /// Firmware version string reported by the device, e.g. "1.0.0".
+  /// Populated from the "firmware" field in the MQTT announce message.
+  final String firmwareVersion;
+
   /// What to show in the UI — user's custom label if set, firmware name otherwise.
   String get displayName =>
       (customName != null && customName!.isNotEmpty) ? customName! : deviceName;
@@ -47,6 +56,8 @@ class MatterDevice {
     this.authToken,
     this.customName,
     this.powerRestoreMode = PowerRestoreMode.off,
+    this.deviceType = '',
+    this.firmwareVersion = '',
   });
 
   /// Parses a capability-discovery JSON payload from a connecting device.
@@ -59,6 +70,8 @@ class MatterDevice {
       telemetry: json['telemetry'] as Map<String, dynamic>? ?? {},
       localIp: json['local_ip'] as String?,
       powerRestoreMode: _parseRestoreMode(json['power_restore'] as String?),
+      deviceType: json['device_type'] as String? ?? '',
+      firmwareVersion: json['firmware'] as String? ?? '',
     );
   }
 
@@ -83,6 +96,8 @@ class MatterDevice {
     String? authToken,
     Object? customName = _sentinel,
     PowerRestoreMode? powerRestoreMode,
+    String? deviceType,
+    String? firmwareVersion,
   }) {
     return MatterDevice(
       uniqueDeviceId: uniqueDeviceId,
@@ -94,6 +109,8 @@ class MatterDevice {
       authToken: authToken ?? this.authToken,
       customName: customName == _sentinel ? this.customName : customName as String?,
       powerRestoreMode: powerRestoreMode ?? this.powerRestoreMode,
+      deviceType: deviceType ?? this.deviceType,
+      firmwareVersion: firmwareVersion ?? this.firmwareVersion,
     );
   }
 

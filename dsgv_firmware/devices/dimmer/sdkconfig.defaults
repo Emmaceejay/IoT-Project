@@ -5,7 +5,7 @@
 #   idf.py -DIDF_TARGET=esp32s3 build   (ESP32-S3)
 #   idf.py -DIDF_TARGET=esp32   build   (ESP32 classic)
 # ─────────────────────────────────────────────────────────────────────────────
-CONFIG_DSGV_DEVICE_TYPE="Dimmer"
+CONFIG_DSGV_DEVICE_TYPE="dimmer"
 CONFIG_DSGV_DEVICE_CAPABILITIES="[\"relay\",\"brightness\"]"
 CONFIG_DSGV_RELAY_COUNT=1
 

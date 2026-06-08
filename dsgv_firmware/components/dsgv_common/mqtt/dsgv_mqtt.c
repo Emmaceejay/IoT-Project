@@ -340,11 +340,12 @@ static void publish_announcement(void) {
     strlcpy(ip_copy, g_device_state.local_ip, sizeof(ip_copy));
     STATE_UNLOCK();
 
-    char payload[384];
+    char payload[512];
     snprintf(payload, sizeof(payload),
         "{"
         "\"device_id\":\"%s\","
         "\"name\":\"%s\","
+        "\"device_type\":\"%s\","
         "\"capabilities\":%s,"
         "\"local_ip\":\"%s\","
         "\"firmware\":\"%s\","
@@ -352,6 +353,7 @@ static void publish_announcement(void) {
         "}",
         s_device_id,
         s_device_name,
+        CONFIG_DSGV_DEVICE_TYPE,          /* compile-time constant — always matches the binary */
         g_device_config.capabilities,
         ip_copy,
         esp_app_get_description()->version

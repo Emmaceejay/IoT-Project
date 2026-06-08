@@ -1,0 +1,18 @@
+{
+  "version": "1.0.0",
+  "release_date": "2026-06-08",
+  "notes": "Initial OTA-enabled release. Adds device_type and firmware version reporting in MQTT announce.",
+  "devices": {
+    "1gang_switch": { "url": "", "hash": "" },
+    "2gang_switch": { "url": "", "hash": "" },
+    "3gang_switch": { "url": "", "hash": "" },
+    "4gang_switch": { "url": "", "hash": "" },
+    "dimmer":       { "url": "", "hash": "" },
+    "colour_temp":  { "url": "", "hash": "" },
+    "rgb_light":    { "url": "", "hash": "" },
+    "temp_sensor":  { "url": "", "hash": "" },
+    "motion_sensor":{ "url": "", "hash": "" },
+    "contact_sensor":{ "url": "", "hash": "" },
+    "thermostat":   { "url": "", "hash": "" }
+  }
+}

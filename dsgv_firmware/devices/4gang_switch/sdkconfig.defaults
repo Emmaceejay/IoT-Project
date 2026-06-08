@@ -5,7 +5,7 @@
 #   idf.py -DIDF_TARGET=esp32s3 build   (ESP32-S3)
 #   idf.py -DIDF_TARGET=esp32   build   (ESP32 classic)
 # ─────────────────────────────────────────────────────────────────────────────
-CONFIG_DSGV_DEVICE_TYPE="Switch"
+CONFIG_DSGV_DEVICE_TYPE="4gang_switch"
 CONFIG_DSGV_DEVICE_CAPABILITIES="[\"relay\",\"relay_2\",\"relay_3\",\"relay_4\"]"
 CONFIG_DSGV_RELAY_COUNT=4
 

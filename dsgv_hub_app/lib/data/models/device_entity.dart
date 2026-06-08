@@ -38,6 +38,12 @@ class DeviceEntity {
   /// Power restore preference stored as its enum name: "off" | "restore" | "on".
   String powerRestoreModeStr = 'off';
 
+  /// Model identifier matching the firmware manifest key, e.g. "1gang_switch".
+  String deviceType = '';
+
+  /// Firmware version last reported by the device, e.g. "1.0.0".
+  String firmwareVersion = '';
+
   // ── Conversions ───────────────────────────────────────────────────────────
 
   MatterDevice toDomain() => MatterDevice(
@@ -59,6 +65,8 @@ class DeviceEntity {
           (m) => m.name == powerRestoreModeStr,
           orElse: () => PowerRestoreMode.off,
         ),
+        deviceType: deviceType,
+        firmwareVersion: firmwareVersion,
       );
 
   static DeviceEntity fromDomain(MatterDevice d) => DeviceEntity()
@@ -71,5 +79,7 @@ class DeviceEntity {
     ..localIp = d.localIp
     ..authToken = d.authToken
     ..customName = d.customName
-    ..powerRestoreModeStr = d.powerRestoreMode.name;
+    ..powerRestoreModeStr = d.powerRestoreMode.name
+    ..deviceType = d.deviceType
+    ..firmwareVersion = d.firmwareVersion;
 }

@@ -1,64 +1,104 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:http/http.dart' as http;
 import 'mqtt_service.dart';
 import 'telemetry_service.dart';
 
-// ── OTA Runtime Configuration ─────────────────────────────────────────────────
+// ── Firmware Manifest ─────────────────────────────────────────────────────────
 
-/// Holds the user-supplied firmware URL and SHA-256 hash, persisted across
-/// sessions in encrypted storage.  Both fields are empty on first install.
-class OtaConfig {
-  final String firmwareUrl;
-  final String firmwareHash;
+/// Permanent URL for the firmware manifest JSON file hosted on GitHub.
+/// Update this only if the repo or file path changes — never per-release.
+const _kManifestUrl =
+    'https://raw.githubusercontent.com/Emmaceejay/IoT-Project/main/firmware_manifest.json';
 
-  const OtaConfig({this.firmwareUrl = '', this.firmwareHash = ''});
-
-  bool get isConfigured =>
-      firmwareUrl.trim().isNotEmpty && firmwareHash.trim().isNotEmpty;
+/// Per-device entry inside the manifest: the .bin download URL and its SHA-256.
+class ManifestEntry {
+  final String url;
+  final String hash;
+  const ManifestEntry({required this.url, required this.hash});
 }
 
-class OtaConfigNotifier extends StateNotifier<OtaConfig> {
-  static const _storage = FlutterSecureStorage(
-    aOptions: AndroidOptions(encryptedSharedPreferences: true),
-  );
+/// Top-level manifest parsed from [_kManifestUrl].
+class FirmwareManifest {
+  final String version;
+  final String releaseDate;
+  final String notes;
 
-  OtaConfigNotifier() : super(const OtaConfig()) {
-    _load();
+  /// Keyed by device-type string, e.g. "1gang_switch", "rgb_light".
+  final Map<String, ManifestEntry> devices;
+
+  const FirmwareManifest({
+    required this.version,
+    required this.releaseDate,
+    required this.notes,
+    required this.devices,
+  });
+
+  factory FirmwareManifest.fromJson(Map<String, dynamic> json) {
+    final devicesJson = json['devices'] as Map<String, dynamic>? ?? {};
+    final devices = devicesJson.map((key, value) {
+      final v = value as Map<String, dynamic>;
+      return MapEntry(
+        key,
+        ManifestEntry(
+          url: v['url'] as String? ?? '',
+          hash: v['hash'] as String? ?? '',
+        ),
+      );
+    });
+    return FirmwareManifest(
+      version: json['version'] as String? ?? '',
+      releaseDate: json['release_date'] as String? ?? '',
+      notes: json['notes'] as String? ?? '',
+      devices: devices,
+    );
   }
 
-  Future<void> _load() async {
-    final url = await _storage.read(key: 'ota_firmware_url') ?? '';
-    final hash = await _storage.read(key: 'ota_firmware_hash') ?? '';
-    state = OtaConfig(firmwareUrl: url, firmwareHash: hash);
-  }
-
-  Future<void> save(String url, String hash) async {
-    final trimUrl = url.trim();
-    final trimHash = hash.trim();
-    state = OtaConfig(firmwareUrl: trimUrl, firmwareHash: trimHash);
-    await _storage.write(key: 'ota_firmware_url', value: trimUrl);
-    await _storage.write(key: 'ota_firmware_hash', value: trimHash);
-  }
+  /// Returns the [ManifestEntry] for the given device type, or null if absent.
+  ManifestEntry? entryFor(String deviceType) => devices[deviceType];
 }
 
-final otaConfigProvider =
-    StateNotifierProvider<OtaConfigNotifier, OtaConfig>((ref) {
-  return OtaConfigNotifier();
-});
-
-/// OTA Orchestrator Service
+/// Fetches the firmware manifest from GitHub.
 ///
-/// Coordinates firmware update campaigns across the device fleet.
-/// Uses MQTT as the orchestration channel (lightweight trigger)
-/// and HTTPS as the actual binary delivery mechanism on the device.
+/// Starts as `AsyncData(null)` — meaning "not yet checked".
+/// Call [fetch()] to populate. The UI watches this provider and reacts to
+/// the three states: null (initial), loading, data/error.
+class ManifestNotifier extends AsyncNotifier<FirmwareManifest?> {
+  @override
+  Future<FirmwareManifest?> build() async => null;
+
+  Future<void> fetch() async {
+    state = const AsyncLoading();
+    state = await AsyncValue.guard(() async {
+      final response = await http
+          .get(Uri.parse(_kManifestUrl))
+          .timeout(const Duration(seconds: 15));
+      if (response.statusCode != 200) {
+        throw Exception(
+            'Server returned HTTP ${response.statusCode}. Check your internet connection.');
+      }
+      final json = jsonDecode(response.body) as Map<String, dynamic>;
+      return FirmwareManifest.fromJson(json);
+    });
+  }
+}
+
+final manifestProvider =
+    AsyncNotifierProvider<ManifestNotifier, FirmwareManifest?>(
+        ManifestNotifier.new);
+
+// ── OTA Orchestrator ──────────────────────────────────────────────────────────
+
+/// Coordinates OTA firmware updates across the device fleet.
+/// Uses MQTT as the orchestration channel; device fetches the binary over HTTPS.
 ///
 /// Flow:
-/// 1. Developer uploads signed .bin to S3/GCS.
-/// 2. This service sends a Pre-Signed URL via MQTT to the target device.
-/// 3. Device validates signature, fetches binary over HTTPS, flashes dual-bank.
-/// 4. Device reboots and re-publishes telemetry — OTA confirmed.
+///  1. App fetches manifest → [ManifestNotifier.fetch()]
+///  2. User taps "Update" on a device → [triggerUpdate()] publishes URL + hash
+///     to devices/{id}/ota-trigger via MQTT
+///  3. Device validates hash, downloads .bin over HTTPS, flashes dual-bank
+///  4. Device reboots and re-publishes telemetry — update confirmed
 class OtaOrchestratorService {
   final Ref _ref;
   final Map<String, OtaUpdateState> _activeUpdates = {};
@@ -71,11 +111,6 @@ class OtaOrchestratorService {
     });
   }
 
-  /// Initiates an OTA campaign for a given device.
-  ///
-  /// Publishes a signed URL and expected SHA-256 hash to the device's
-  /// `devices/{deviceId}/ota-trigger` MQTT topic. The device firmware
-  /// handles download, signature verification, and dual-bank flashing.
   Future<void> triggerUpdate({
     required String deviceId,
     required String firmwareUrl,
@@ -93,9 +128,8 @@ class OtaOrchestratorService {
           .read(mqttServiceProvider.notifier)
           .publish('devices/$deviceId/ota-trigger', payload);
 
-      // Poll for progress — in production the device publishes back on
-      // devices/{id}/telemetry with {"ota_progress": 0..100}.
-      // Here we simulate progress until real telemetry replaces it.
+      // Simulate progress feedback until the device echoes back real telemetry
+      // (devices/{id}/telemetry with {"ota_progress": 0..100}).
       for (int p = 10; p <= 100; p += 10) {
         await Future.delayed(const Duration(milliseconds: 500));
         _activeUpdates[deviceId] = OtaUpdateState.inProgress(deviceId, p);
@@ -119,9 +153,7 @@ class OtaOrchestratorService {
     }
   }
 
-  void dispose() {
-    _activeUpdates.clear();
-  }
+  void dispose() => _activeUpdates.clear();
 }
 
 /// Value class representing OTA state for a specific device.
@@ -145,12 +177,10 @@ class OtaUpdateState {
           deviceId: id,
           status: OtaStatus.inProgress,
           progressPercent: progress);
-  factory OtaUpdateState.complete(String id) =>
-      OtaUpdateState._(
-          deviceId: id, status: OtaStatus.complete, progressPercent: 100);
-  factory OtaUpdateState.failed(String id, String msg) =>
-      OtaUpdateState._(
-          deviceId: id, status: OtaStatus.failed, errorMessage: msg);
+  factory OtaUpdateState.complete(String id) => OtaUpdateState._(
+      deviceId: id, status: OtaStatus.complete, progressPercent: 100);
+  factory OtaUpdateState.failed(String id, String msg) => OtaUpdateState._(
+      deviceId: id, status: OtaStatus.failed, errorMessage: msg);
 }
 
 enum OtaStatus { idle, inProgress, complete, failed }

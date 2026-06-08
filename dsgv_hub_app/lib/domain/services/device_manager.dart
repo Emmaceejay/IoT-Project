@@ -322,6 +322,12 @@ class DeviceManager extends AsyncNotifier<List<MatterDevice>> {
                 ? announced.capabilities
                 : d.capabilities,
             authToken: resolvedToken ?? d.authToken,
+            deviceType: announced.deviceType.isNotEmpty
+                ? announced.deviceType
+                : d.deviceType,
+            firmwareVersion: announced.firmwareVersion.isNotEmpty
+                ? announced.firmwareVersion
+                : d.firmwareVersion,
             // customName left unchanged — copyWith sentinel keeps existing value
           );
         }).toList(),
@@ -331,6 +337,8 @@ class DeviceManager extends AsyncNotifier<List<MatterDevice>> {
           localIp: announced.localIp,
           authToken: resolvedToken,
           customName: existingCustomName, // explicitly carry forward
+          deviceType: announced.deviceType.isNotEmpty ? announced.deviceType : null,
+          firmwareVersion: announced.firmwareVersion.isNotEmpty ? announced.firmwareVersion : null,
         ),
       );
     }

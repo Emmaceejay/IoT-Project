@@ -5,7 +5,7 @@
 #   idf.py -DIDF_TARGET=esp32s3 build   (ESP32-S3)
 #   idf.py -DIDF_TARGET=esp32   build   (ESP32 classic)
 # ─────────────────────────────────────────────────────────────────────────────
-CONFIG_DSGV_DEVICE_TYPE="Thermostat"
+CONFIG_DSGV_DEVICE_TYPE="thermostat"
 CONFIG_DSGV_DEVICE_CAPABILITIES="[\"temperature\",\"hvac_mode\"]"
 CONFIG_DSGV_RELAY_COUNT=0
 
