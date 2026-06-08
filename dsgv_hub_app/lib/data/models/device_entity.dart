@@ -36,10 +36,7 @@ class DeviceEntity {
   IoTDevice toDomain() => IoTDevice(
         uniqueDeviceId: uniqueDeviceId,
         deviceName: deviceName,
-        status: DeviceStatus.values.firstWhere(
-          (s) => s.name == statusName,
-          orElse: () => DeviceStatus.offline,
-        ),
+        status: DeviceStatus.offline, // always; real-time events (MQTT/mDNS) flip to online
         capabilities:
             List<String>.from(jsonDecode(capabilitiesJson) as List),
         telemetry: telemetryJson.isNotEmpty

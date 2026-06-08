@@ -162,14 +162,24 @@ class DeviceManager extends AsyncNotifier<List<IoTDevice>> {
   }
 
   /// Marks a device as offline — triggered by MQTT LWT messages.
-  Future<void> markDeviceOffline(String deviceId) async {
+  void markDeviceOffline(String deviceId) {
     state = AsyncValue.data(
       (state.valueOrNull ?? []).map((d) {
         if (d.uniqueDeviceId != deviceId) return d;
         return d.copyWith(status: DeviceStatus.offline);
       }).toList(),
     );
-    await _repository.updateDeviceState(deviceId, {'_status': 'offline'});
+  }
+
+  /// Resets every device to offline — called when the MQTT connection drops.
+  /// Real-time events (announce / telemetry / mDNS) re-signal online status
+  /// once connectivity is restored.
+  void markAllDevicesOffline() {
+    state = AsyncValue.data(
+      (state.valueOrNull ?? [])
+          .map((d) => d.copyWith(status: DeviceStatus.offline))
+          .toList(),
+    );
   }
 
   /// Applies live telemetry payload from MQTT to the matching device.

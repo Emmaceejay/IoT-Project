@@ -326,6 +326,7 @@ class MqttConnectivityService extends StateNotifier<MqttConnectionStatus>
         HubConnectionState.disconnected,
         'Connection lost. Will reconnect automatically.',
       );
+      _ref.read(deviceManagerProvider.notifier).markAllDevicesOffline();
     }
     debugPrint('[MQTT] Disconnected.');
   }
