@@ -213,25 +213,23 @@ class DeviceManager extends AsyncNotifier<List<IoTDevice>> {
       await _repository.provisionDevice(withToken);
       state = AsyncValue.data([...devices, withToken]);
     } else {
-      state = AsyncValue.data(
-        devices.map((d) {
-          if (d.uniqueDeviceId != normalised) return d;
-          return d.copyWith(
-            status: DeviceStatus.online,
-            localIp: announced.localIp ?? d.localIp,
-            capabilities: announced.capabilities.isNotEmpty
-                ? announced.capabilities
-                : d.capabilities,
-            authToken: resolvedToken ?? d.authToken,
-          );
-        }).toList(),
-      );
-      await _repository.provisionDevice(
-        withToken.copyWith(
-          localIp: announced.localIp,
-          authToken: resolvedToken,
-        ),
-      );
+      IoTDevice? merged;
+      final updatedDevices = devices.map((d) {
+        if (d.uniqueDeviceId != normalised) return d;
+        merged = d.copyWith(
+          status: DeviceStatus.online,
+          localIp: announced.localIp ?? d.localIp,
+          capabilities: announced.capabilities.isNotEmpty
+              ? announced.capabilities
+              : d.capabilities,
+          authToken: resolvedToken ?? d.authToken,
+        );
+        return merged!;
+      }).toList();
+      state = AsyncValue.data(updatedDevices);
+      if (merged != null) {
+        await _repository.provisionDevice(merged!);
+      }
     }
   }
 
