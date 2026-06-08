@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+import '../../domain/models/mqtt_config.dart';
 import '../../domain/services/ble_provisioning_service.dart';
 import '../../domain/services/device_manager.dart';
 
@@ -187,8 +188,8 @@ class _DevicePairingScreenState extends ConsumerState<DevicePairingScreen> {
 
     // BleProvisioningService.provision() is a stream that yields progress
     // steps as it connects to the device over Bluetooth, sends Wi-Fi
-    // credentials, and waits for the device to reboot and confirm.
-    // Each ProvisioningStatus carries a step enum and optional message string.
+    // credentials (plus the factory broker config silently), and waits for
+    // the device to reboot and confirm.
     final stream = BleProvisioningService.provision(
       deviceName:   _parsedQr!.dsgvDeviceName,
       ssid:         _ssidCtrl.text.trim(),
@@ -196,6 +197,10 @@ class _DevicePairingScreenState extends ConsumerState<DevicePairingScreen> {
       deviceType:   _selectedPreset.deviceType,
       capabilities: _selectedPreset.capabilities,
       relayCount:   _selectedPreset.relayCount,
+      // The factory broker config is embedded silently — the user never sees
+      // it.  If the user later switches to a custom broker in Settings, the
+      // "Push broker to all devices" button will update this device too.
+      brokerConfig: MqttConfig.factoryDefault,
     );
 
     await for (final status in stream) {

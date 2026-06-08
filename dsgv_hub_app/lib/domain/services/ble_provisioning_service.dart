@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
+import '../models/mqtt_config.dart';
 
 // ── Protocol constants ────────────────────────────────────────────────────────
 // Must match DSGV_provisioning.c on the firmware side.
@@ -75,6 +76,11 @@ class BleProvisioningService {
     String? deviceType,
     List<String>? capabilities,
     int? relayCount,
+    // Broker config is packed silently into the BLE payload so the device
+    // connects to the right MQTT server from its first boot.  The caller
+    // passes MqttConfig.factoryDefault (or the user's custom config if one
+    // has been set) — the end user never sees or enters these values.
+    MqttConfig? brokerConfig,
   }) async* {
     BluetoothDevice? device;
 
@@ -162,15 +168,31 @@ class BleProvisioningService {
       final statusUpdates = statusChar.onValueReceived
           .map((bytes) => utf8.decode(bytes, allowMalformed: true));
 
-      // ── Step 5: Write credentials (+ optional device config) ──────────────
+      // ── Step 5: Write credentials (+ device config + broker) ────────────────
       yield const ProvisioningStatus(ProvisioningStep.sendingCredentials);
       final Map<String, dynamic> payloadMap = {'ssid': ssid, 'password': password};
       if (deviceType != null)   payloadMap['device_type']  = deviceType;
       if (capabilities != null) payloadMap['capabilities'] = capabilities;
       if (relayCount != null)   payloadMap['relay_count']  = relayCount;
+
+      // Silently include the MQTT broker config so the device connects to the
+      // right server from its very first boot — no Firebase lookup needed.
+      // The end user never sees or enters these values; they are manufacturer
+      // constants (MqttConfig.factoryDefault) embedded in the app.
+      final cfg = brokerConfig ?? MqttConfig.factoryDefault;
+      if (cfg.isConfigured) {
+        payloadMap['mqtt_host'] = cfg.host;
+        payloadMap['mqtt_port'] = cfg.port;
+        payloadMap['mqtt_tls']  = cfg.useTls ? 1 : 0;
+        if (cfg.hasCredentials) {
+          payloadMap['mqtt_user'] = cfg.username;
+          payloadMap['mqtt_pass'] = cfg.password;
+        }
+      }
+
       final payload = jsonEncode(payloadMap);
       await credChar.write(utf8.encode(payload), withoutResponse: false);
-      debugPrint('[BLE Prov] Credentials sent for SSID: $ssid (type=$deviceType relays=$relayCount)');
+      debugPrint('[BLE Prov] Credentials sent — SSID: $ssid | type: $deviceType | broker: ${cfg.host}');
 
       // ── Step 6: Race three signals for the device's final response ──────────
       // The firmware sends "success:<token>:<mac>" and then IMMEDIATELY reboots
