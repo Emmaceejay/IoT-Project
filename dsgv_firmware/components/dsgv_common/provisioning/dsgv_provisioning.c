@@ -16,7 +16,6 @@
 #include "dsgv_device_config.h"
 #include "wifi_manager.h"
 
-#include "nvs.h"           // nvs_open / nvs_set_* / nvs_commit / nvs_close
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_system.h"
@@ -170,60 +169,6 @@ static int credential_write_cb(uint16_t conn_handle, uint16_t attr_handle,
         } else {
             ESP_LOGI(TAG, "Device config saved: type=%s caps=%s relays=%u",
                      cfg.device_type, cfg.capabilities, cfg.relay_count);
-        }
-    }
-
-    // ── Optional MQTT broker config (sent silently by the app) ───────────────
-    // Embedding the broker in the provisioning payload lets the device connect
-    // to the right MQTT server from its very first boot without needing a
-    // separate Firebase "getDeviceConfig" HTTP call.  Falls back to the
-    // compile-time MQTT_CLOUD_HOST constant if this field is absent.
-    const cJSON *mqtt_host_j = cJSON_GetObjectItemCaseSensitive(root, "mqtt_host");
-    if (cJSON_IsString(mqtt_host_j) && mqtt_host_j->valuestring &&
-        mqtt_host_j->valuestring[0] != '\0') {
-
-        const cJSON *mqtt_port_j = cJSON_GetObjectItemCaseSensitive(root, "mqtt_port");
-        const cJSON *mqtt_tls_j  = cJSON_GetObjectItemCaseSensitive(root, "mqtt_tls");
-        const cJSON *mqtt_user_j = cJSON_GetObjectItemCaseSensitive(root, "mqtt_user");
-        const cJSON *mqtt_pass_j = cJSON_GetObjectItemCaseSensitive(root, "mqtt_pass");
-
-        nvs_handle_t mqtt_nvs;
-        esp_err_t nvs_err = nvs_open("mqtt_cfg", NVS_READWRITE, &mqtt_nvs);
-        if (nvs_err == ESP_OK) {
-            nvs_set_str(mqtt_nvs, "host", mqtt_host_j->valuestring);
-
-            // Port — defaults to 8883 if not present
-            if (cJSON_IsNumber(mqtt_port_j)) {
-                nvs_set_i32(mqtt_nvs, "port", (int32_t)mqtt_port_j->valuedouble);
-            }
-
-            // TLS flag — accepts integer (1/0) or JSON boolean
-            uint8_t tls_val = 0;
-            if (cJSON_IsNumber(mqtt_tls_j)) {
-                tls_val = (uint8_t)(mqtt_tls_j->valuedouble != 0.0);
-            } else if (cJSON_IsBool(mqtt_tls_j)) {
-                tls_val = cJSON_IsTrue(mqtt_tls_j) ? 1 : 0;
-            }
-            nvs_set_u8(mqtt_nvs, "tls", tls_val);
-
-            // Optional MQTT credentials — only stored if the broker requires them
-            if (cJSON_IsString(mqtt_user_j) && mqtt_user_j->valuestring[0] != '\0') {
-                nvs_set_str(mqtt_nvs, "username", mqtt_user_j->valuestring);
-            }
-            if (cJSON_IsString(mqtt_pass_j) && mqtt_pass_j->valuestring[0] != '\0') {
-                nvs_set_str(mqtt_nvs, "password", mqtt_pass_j->valuestring);
-            }
-
-            nvs_commit(mqtt_nvs);
-            nvs_close(mqtt_nvs);
-
-            ESP_LOGI(TAG, "Broker config provisioned: host=%s port=%d tls=%u",
-                     mqtt_host_j->valuestring,
-                     cJSON_IsNumber(mqtt_port_j) ? (int)mqtt_port_j->valuedouble : 8883,
-                     tls_val);
-        } else {
-            // Non-fatal — device will fall back to the hardcoded MQTT_CLOUD_HOST
-            ESP_LOGW(TAG, "mqtt_cfg NVS open failed (%d) — using compile-time default", nvs_err);
         }
     }
 
