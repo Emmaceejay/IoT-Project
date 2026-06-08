@@ -46,7 +46,7 @@ class DashboardScreen extends ConsumerWidget {
           ),
           // Pair new device button
           IconButton(
-            icon: const Icon(Icons.qr_code_scanner, color: Color(0xFF00E5FF)),
+            icon: const Icon(Icons.add, color: Color(0xFF00E5FF)),
             tooltip: 'Pair New Device',
             onPressed: () => _launchDevicePairing(context),
           ),

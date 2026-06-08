@@ -97,7 +97,7 @@ class _DevicePairingScreenState extends ConsumerState<DevicePairingScreen> {
 
   // ── State ─────────────────────────────────────────────────────────────────
   _ParsedQr?      _parsedQr;
-  bool            _scannerActive    = true;
+  bool            _scannerActive    = false;
   bool            _obscurePassword  = true;
   _DevicePreset   _selectedPreset   = _kDevicePresets.first;
   bool            _inProgress       = false;
@@ -145,9 +145,10 @@ class _DevicePairingScreenState extends ConsumerState<DevicePairingScreen> {
   }
 
   void _resetScanner() {
+    _scannerCtrl.stop();
     setState(() {
       _parsedQr       = null;
-      _scannerActive  = true;
+      _scannerActive  = false;
       _statusMessage  = null;
       _isSuccess      = false;
       _inProgress     = false;
@@ -156,7 +157,6 @@ class _DevicePairingScreenState extends ConsumerState<DevicePairingScreen> {
       _result         = _ProvisionResult.none;
       _resultMessage  = '';
     });
-    _scannerCtrl.start();
   }
 
   // ── BLE provisioning ──────────────────────────────────────────────────────
@@ -592,33 +592,56 @@ class _DevicePairingScreenState extends ConsumerState<DevicePairingScreen> {
                   ),
                 ),
               ])
-            : Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(Icons.bluetooth_searching,
-                      size: 48, color: Color(0xFF00E5FF)),
-                  const SizedBox(height: 8),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: Text(
-                      _parsedQr!.dsgvDeviceName,
-                      textAlign: TextAlign.center,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style:
-                          const TextStyle(color: Colors.white70, fontSize: 12),
-                    ),
+            : _parsedQr != null
+                ? Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Icon(Icons.bluetooth_searching,
+                          size: 48, color: Color(0xFF00E5FF)),
+                      const SizedBox(height: 8),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: Text(
+                          _parsedQr!.dsgvDeviceName,
+                          textAlign: TextAlign.center,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              color: Colors.white70, fontSize: 12),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      TextButton.icon(
+                        onPressed: _resetScanner,
+                        icon: const Icon(Icons.refresh,
+                            color: Color(0xFF00E5FF), size: 16),
+                        label: const Text('Rescan',
+                            style: TextStyle(color: Color(0xFF00E5FF))),
+                      ),
+                    ],
+                  )
+                : Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Icon(Icons.qr_code_scanner,
+                          size: 52, color: Color(0xFF00E5FF)),
+                      const SizedBox(height: 12),
+                      ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF1E2A3A),
+                          foregroundColor: const Color(0xFF00E5FF),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10)),
+                        ),
+                        onPressed: () {
+                          _scannerCtrl.start();
+                          setState(() => _scannerActive = true);
+                        },
+                        icon: const Icon(Icons.camera_alt, size: 18),
+                        label: const Text('Scan QR'),
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 12),
-                  TextButton.icon(
-                    onPressed: _resetScanner,
-                    icon: const Icon(Icons.refresh,
-                        color: Color(0xFF00E5FF), size: 16),
-                    label: const Text('Rescan',
-                        style: TextStyle(color: Color(0xFF00E5FF))),
-                  ),
-                ],
-              ),
       ),
     );
   }
