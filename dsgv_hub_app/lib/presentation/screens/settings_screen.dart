@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../domain/models/iot_device.dart';
 import '../../domain/models/mqtt_config.dart';
 import '../../domain/services/device_manager.dart';
 import '../../domain/services/mqtt_service.dart';
+import '../../domain/services/ota_service.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
@@ -553,6 +555,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ),
           const SizedBox(height: 32),
 
+          // ── Firmware Update ─────────────────────────────────────────────
+          // Factory firmware URL + hash are baked into the app binary at build
+          // time via --dart-define.  The user never sees or enters these values.
+          // A developer "custom firmware" section is available in advanced mode.
+          _sectionHeader('Firmware Update'),
+          const _FirmwareUpdateSection(),
+          const SizedBox(height: 32),
+
           // ── App Info ───────────────────────────────────────────────────
           const Center(
             child: Text(
@@ -1076,6 +1086,359 @@ class _StatusBadge extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// ── Firmware Update Section ───────────────────────────────────────────────────
+// Factory firmware URL + hash are baked into the app at build time via
+// --dart-define and are NEVER shown in the UI.  The user just sees a button
+// to push the manufacturer update to all online devices — the same UX pattern
+// as the "manufacturer server" MQTT tile above.
+//
+// Developers who need to test custom firmware can expand the "Advanced" section.
+
+class _FirmwareUpdateSection extends ConsumerStatefulWidget {
+  const _FirmwareUpdateSection();
+
+  @override
+  ConsumerState<_FirmwareUpdateSection> createState() =>
+      _FirmwareUpdateSectionState();
+}
+
+class _FirmwareUpdateSectionState
+    extends ConsumerState<_FirmwareUpdateSection> {
+  // Custom firmware controllers — only active when the advanced section is open
+  final _urlCtrl  = TextEditingController();
+  final _hashCtrl = TextEditingController();
+  bool _showAdvanced = false;
+  bool _inProgress   = false;
+
+  @override
+  void dispose() {
+    _urlCtrl.dispose();
+    _hashCtrl.dispose();
+    super.dispose();
+  }
+
+  // Returns IDs of provisioned devices that are currently online.
+  List<String> _onlineDeviceIds() {
+    final devices = ref.read(deviceManagerProvider).valueOrNull ?? [];
+    return devices
+        .where((d) =>
+            d.authToken != null && d.status == DeviceStatus.online)
+        .map((d) => d.uniqueDeviceId)
+        .toList();
+  }
+
+  // Reactive count for button labels (rebuilt on provider change).
+  int get _onlineCount {
+    final devices =
+        ref.watch(deviceManagerProvider).valueOrNull ?? [];
+    return devices
+        .where((d) =>
+            d.authToken != null && d.status == DeviceStatus.online)
+        .length;
+  }
+
+  // Sends the factory firmware (URL + hash baked into this build) to all
+  // online provisioned devices via MQTT.  No user-entered values involved.
+  Future<void> _pushFactoryFirmware() async {
+    final ids = _onlineDeviceIds();
+    if (ids.isEmpty) return;
+
+    setState(() => _inProgress = true);
+    try {
+      final count = await ref.read(otaServiceProvider).triggerFleetUpdate(
+            deviceIds: ids,
+            // firmwareUrl / expectedHash default to factory constants inside
+            // triggerFleetUpdate when not provided.
+          );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(
+            'Firmware update sent to $count device(s). '
+            'Devices will verify and reboot automatically.'),
+        backgroundColor: Colors.greenAccent.shade700,
+        behavior: SnackBarBehavior.floating,
+      ));
+    } finally {
+      if (mounted) setState(() => _inProgress = false);
+    }
+  }
+
+  // Sends a developer-supplied URL + hash to all online devices.
+  // Only reachable from the "Advanced" section; never shown by default.
+  Future<void> _pushCustomFirmware() async {
+    final url  = _urlCtrl.text.trim();
+    final hash = _hashCtrl.text.trim();
+    if (url.isEmpty || hash.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Enter both a firmware URL and SHA-256 hash.'),
+        backgroundColor: Colors.redAccent,
+        behavior: SnackBarBehavior.floating,
+      ));
+      return;
+    }
+
+    final ids = _onlineDeviceIds();
+    if (ids.isEmpty) return;
+
+    setState(() => _inProgress = true);
+    try {
+      final count = await ref.read(otaServiceProvider).triggerFleetUpdate(
+            deviceIds: ids,
+            firmwareUrl: url,
+            expectedHash: hash,
+          );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Custom firmware sent to $count device(s).'),
+        backgroundColor: Colors.greenAccent.shade700,
+        behavior: SnackBarBehavior.floating,
+      ));
+    } finally {
+      if (mounted) setState(() => _inProgress = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final hasFactory = OtaOrchestratorService.hasFactoryFirmware;
+    final count      = _onlineCount;
+    final hasDevices = count > 0;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // ── Factory firmware status card ─────────────────────────────────
+        // Mirrors the style of the "Manufacturer" MQTT broker tile.
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: const Color(0xFF121826),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: hasFactory
+                  ? const Color(0xFF00E5FF).withValues(alpha: 0.25)
+                  : Colors.white12,
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Manufacturer badge + optional version label
+              Row(children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: (hasFactory
+                            ? const Color(0xFF00E5FF)
+                            : Colors.white24)
+                        .withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        hasFactory
+                            ? Icons.verified_outlined
+                            : Icons.info_outline,
+                        size: 13,
+                        color: hasFactory
+                            ? const Color(0xFF00E5FF)
+                            : Colors.white38,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        'Manufacturer',
+                        style: TextStyle(
+                          color: hasFactory
+                              ? const Color(0xFF00E5FF)
+                              : Colors.white38,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                if (hasFactory &&
+                    OtaOrchestratorService.factoryVersion.isNotEmpty) ...[
+                  const SizedBox(width: 8),
+                  Text(
+                    'v${OtaOrchestratorService.factoryVersion}',
+                    style: const TextStyle(
+                        color: Colors.white54, fontSize: 12),
+                  ),
+                ],
+              ]),
+              const SizedBox(height: 10),
+
+              Text(
+                hasFactory
+                    ? 'Manufacturer firmware is ready to deploy.'
+                    : 'No firmware configured for this build.',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                hasFactory
+                    ? 'Tap below to push the update to all online devices. '
+                        'Each device will verify the firmware integrity and '
+                        'reboot automatically once flashed.'
+                    : 'This is a development build. Set OTA_FIRMWARE_URL, '
+                        'OTA_FIRMWARE_HASH, and OTA_FIRMWARE_VERSION via '
+                        '--dart-define to enable over-the-air updates.',
+                style: const TextStyle(
+                    color: Colors.white38, fontSize: 12, height: 1.5),
+              ),
+            ],
+          ),
+        ),
+
+        const SizedBox(height: 12),
+
+        Text(
+          hasDevices
+              ? '$count online device(s) will receive this update.'
+              : 'No online provisioned devices found.',
+          style: TextStyle(
+              color: hasDevices ? Colors.white54 : Colors.white24,
+              fontSize: 12),
+        ),
+        const SizedBox(height: 12),
+
+        // Factory update button — disabled in dev builds or with no devices
+        ElevatedButton.icon(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFF00E5FF),
+            foregroundColor: Colors.black,
+            disabledBackgroundColor:
+                const Color(0xFF00E5FF).withValues(alpha: 0.25),
+            padding: const EdgeInsets.symmetric(vertical: 14),
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12)),
+          ),
+          onPressed:
+              (hasFactory && hasDevices && !_inProgress)
+                  ? _pushFactoryFirmware
+                  : null,
+          icon: _inProgress
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: Colors.black),
+                )
+              : const Icon(Icons.system_update_alt, size: 18),
+          label: Text(
+            _inProgress
+                ? 'Sending update…'
+                : !hasFactory
+                    ? 'No firmware in this build'
+                    : 'Push update to all devices ($count)',
+          ),
+        ),
+
+        // ── Advanced: custom firmware (collapsed, developers only) ──────
+        const SizedBox(height: 4),
+        Theme(
+          // Remove the default ExpansionTile dividers so it blends in.
+          data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+          child: ExpansionTile(
+            tilePadding: EdgeInsets.zero,
+            childrenPadding: const EdgeInsets.only(top: 12),
+            leading: const Icon(Icons.code, color: Colors.white24, size: 18),
+            title: const Text(
+              'Custom firmware  (advanced)',
+              style: TextStyle(color: Colors.white38, fontSize: 13),
+            ),
+            trailing: Icon(
+              _showAdvanced ? Icons.expand_less : Icons.expand_more,
+              color: Colors.white24,
+              size: 18,
+            ),
+            onExpansionChanged: (v) =>
+                setState(() => _showAdvanced = v),
+            children: [
+              _advancedField(
+                'Firmware URL',
+                _urlCtrl,
+                Icons.link,
+                hint: 'https://your-server.com/firmware.bin',
+              ),
+              const SizedBox(height: 10),
+              _advancedField(
+                'SHA-256 Hash',
+                _hashCtrl,
+                Icons.tag,
+                hint: '64-character lowercase hex string',
+              ),
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.orangeAccent,
+                  side: BorderSide(
+                      color: Colors.orangeAccent.withValues(alpha: 0.5)),
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                ),
+                onPressed: (!hasDevices || _inProgress)
+                    ? null
+                    : _pushCustomFirmware,
+                icon: const Icon(Icons.upload, size: 18),
+                label: Text('Push custom firmware ($count devices)'),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _advancedField(
+    String label,
+    TextEditingController ctrl,
+    IconData icon, {
+    String? hint,
+  }) {
+    return TextField(
+      controller: ctrl,
+      style: const TextStyle(color: Colors.white, fontSize: 13),
+      autocorrect: false,
+      decoration: InputDecoration(
+        labelText: label,
+        hintText: hint,
+        hintStyle:
+            const TextStyle(color: Colors.white24, fontSize: 11),
+        labelStyle:
+            const TextStyle(color: Colors.white38, fontSize: 13),
+        prefixIcon:
+            Icon(icon, color: Colors.white24, size: 18),
+        filled: true,
+        fillColor: const Color(0xFF0D1320),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: Colors.white12),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: Colors.white12),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide(
+              color: Colors.orangeAccent.withValues(alpha: 0.6)),
+        ),
       ),
     );
   }

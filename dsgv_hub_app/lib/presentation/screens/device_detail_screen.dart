@@ -73,32 +73,27 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF1E2A3A),
                 foregroundColor: const Color(0xFF00E5FF),
+                disabledForegroundColor: Colors.white24,
                 padding: const EdgeInsets.symmetric(vertical: 14),
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12)),
               ),
-              onPressed: isOnline
+              // Factory URL + hash come from OtaOrchestratorService (set at
+              // build time via --dart-define, never entered by the user).
+              onPressed: (isOnline && OtaOrchestratorService.hasFactoryFirmware)
                   ? () async {
-                      // TODO(production): Replace with a real firmware manifest fetch.
-                      // The URL must be a signed HTTPS link to the .bin file,
-                      // and the hash must be the SHA-256 hex digest of that binary.
-                      // Never hardcode these values in production builds.
-                      const firmwareUrl = String.fromEnvironment('OTA_FIRMWARE_URL');
-                      const expectedHash = String.fromEnvironment('OTA_FIRMWARE_HASH');
-                      assert(firmwareUrl.isNotEmpty,
-                          'Set OTA_FIRMWARE_URL via --dart-define=OTA_FIRMWARE_URL=https://...');
-                      assert(expectedHash.isNotEmpty,
-                          'Set OTA_FIRMWARE_HASH via --dart-define=OTA_FIRMWARE_HASH=sha256...');
                       setState(() => _otaTriggered = true);
                       await otaService.triggerUpdate(
                         deviceId: widget.device.uniqueDeviceId,
-                        firmwareUrl: firmwareUrl,
-                        expectedHash: expectedHash,
                       );
                     }
                   : null,
               icon: const Icon(Icons.system_update_alt),
-              label: const Text('Push Firmware Update'),
+              label: Text(
+                OtaOrchestratorService.hasFactoryFirmware
+                    ? 'Push Firmware Update'
+                    : 'No firmware in this build',
+              ),
             )
           else
             StreamBuilder<OtaUpdateState>(
