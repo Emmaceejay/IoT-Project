@@ -107,6 +107,9 @@
 #  define GPIO_CONTACT_PIN         GPIO_NUM_20
 #  define GPIO_STATUS_LED_PIN      GPIO_NUM_8
 #  define GPIO_BUTTON_PIN          GPIO_NUM_9
+// Wall switch inputs — latch switch, one pin per relay gang (edge = toggle relay)
+#  define GPIO_WALL_SWITCH_PINS_ALL \
+    { GPIO_NUM_9, GPIO_NUM_18, GPIO_NUM_19, GPIO_NUM_21 }
 
 #elif defined(CONFIG_IDF_TARGET_ESP32S3)
 // ESP32-S3 — Xtensa dual-core, 8 LEDC channels (LS only), NimBLE, 45 GPIOs ──
@@ -129,6 +132,9 @@
 #  define GPIO_CONTACT_PIN         GPIO_NUM_19
 #  define GPIO_STATUS_LED_PIN      GPIO_NUM_2
 #  define GPIO_BUTTON_PIN          GPIO_NUM_0
+// Wall switch inputs — latch switch, one pin per relay gang (edge = toggle relay)
+#  define GPIO_WALL_SWITCH_PINS_ALL \
+    { GPIO_NUM_0, GPIO_NUM_20, GPIO_NUM_21, GPIO_NUM_22 }
 
 #else
 // ESP32 (classic) — Xtensa dual-core, 16 LEDC channels (HS+LS), 34 GPIOs ────
@@ -152,6 +158,10 @@
 #  define GPIO_CONTACT_PIN         GPIO_NUM_36   // input-only (SENSOR_VP), ext pull-up
 #  define GPIO_STATUS_LED_PIN      GPIO_NUM_2
 #  define GPIO_BUTTON_PIN          GPIO_NUM_0
+// Wall switch inputs — latch switch, one pin per relay gang (edge = toggle relay)
+// ESP32 classic: gang 1 reuses the button pin; gangs 2-4 use free output-capable GPIOs.
+#  define GPIO_WALL_SWITCH_PINS_ALL \
+    { GPIO_NUM_0, GPIO_NUM_13, GPIO_NUM_15, GPIO_NUM_16 }
 #endif
 
 // ── LEDC PWM channels ─────────────────────────────────────────────────────────

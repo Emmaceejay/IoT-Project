@@ -23,6 +23,7 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/queue.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -45,7 +46,8 @@ static temperature_sensor_handle_t s_temp_sensor = NULL;
 static adc_oneshot_unit_handle_t s_adc1          = NULL;
 static bool                      s_adc_ready     = false;
 
-static TaskHandle_t s_sensor_task_handle = NULL;
+static TaskHandle_t  s_sensor_task_handle = NULL;
+static QueueHandle_t s_switch_queue       = NULL;
 
 // ── External symbols ──────────────────────────────────────────────────────────
 
@@ -212,6 +214,60 @@ static void IRAM_ATTR contact_isr_handler(void *arg) {
     portYIELD_FROM_ISR(higher);
 }
 
+// ── Wall switch ISR — runs in IRAM, no heap alloc ────────────────────────────
+// Sends the gang index (0-3) into s_switch_queue. Both edges (ON→OFF and
+// OFF→ON) enqueue an event so the relay toggles on every switch state change.
+static void IRAM_ATTR wall_switch_isr(void *arg) {
+    uint32_t gang = (uint32_t)(uintptr_t)arg;
+    BaseType_t higher = pdFALSE;
+    xQueueSendFromISR(s_switch_queue, &gang, &higher);
+    portYIELD_FROM_ISR(higher);
+}
+
+// ── Wall switch debounce + toggle task ───────────────────────────────────────
+// Waits for events from wall_switch_isr. On each event:
+//   1. Drains all additional edges that arrive within a 50 ms debounce window
+//      (contact bounce on mechanical latch switches).
+//   2. Toggles g_device_state.relay_states[gang].
+//   3. Drives all GPIO outputs via DSGV_gpio_apply_state().
+//   4. Publishes a telemetry message so the app sees the new state immediately.
+//
+// The relay state is intentionally independent of the switch position. Each
+// physical edge (in either direction) flips the relay once. App commands
+// (MQTT/HTTP) set the relay to any state; the next switch edge toggles from
+// wherever the app left it.
+static void switch_task(void *pvParam) {
+    (void)pvParam;
+    uint32_t gang;
+    for (;;) {
+        if (xQueueReceive(s_switch_queue, &gang, portMAX_DELAY) != pdTRUE) continue;
+        uint32_t triggered = gang;
+
+        // Drain bounce edges arriving within the 50 ms window
+        TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(50);
+        uint32_t bounce;
+        TickType_t rem;
+        while ((rem = deadline - xTaskGetTickCount()) > 0 &&
+               xQueueReceive(s_switch_queue, &bounce, rem) == pdTRUE);
+
+        if (triggered >= g_device_config.relay_count) continue;
+
+        STATE_LOCK();
+        g_device_state.relay_states[triggered] = !g_device_state.relay_states[triggered];
+        bool new_state = g_device_state.relay_states[triggered];
+        STATE_UNLOCK();
+
+        DSGV_gpio_apply_state();
+
+        char buf[512];
+        build_telemetry(buf, sizeof(buf));
+        DSGV_mqtt_publish_telemetry(buf);
+
+        ESP_LOGI(TAG, "Wall switch gang %u → relay %s",
+                 triggered, new_state ? "ON" : "OFF");
+    }
+}
+
 // ── Sensor + periodic telemetry task ─────────────────────────────────────────
 
 static void sensor_task(void *pvParam) {
@@ -303,6 +359,28 @@ void DSGV_gpio_init(void) {
     // Attach ISR handlers now that the task handle is valid
     gpio_isr_handler_add(GPIO_MOTION_PIN,  motion_isr_handler,  NULL);
     gpio_isr_handler_add(GPIO_CONTACT_PIN, contact_isr_handler, NULL);
+
+    // ── Wall switch inputs (latch switch, edge-triggered relay toggle) ────────
+    s_switch_queue = xQueueCreate(8, sizeof(uint32_t));
+    gpio_config_t sw = {
+        .mode         = GPIO_MODE_INPUT,
+        .pull_up_en   = GPIO_PULLUP_ENABLE,   // internal pull-up; switch pulls to GND
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type    = GPIO_INTR_ANYEDGE,    // both edges → debounce in switch_task
+    };
+    int sw_registered = 0;
+    for (int i = 0; i < (int)g_device_config.relay_count; i++) {
+        gpio_num_t pin = g_device_config.switch_pins[i];
+        if ((int)pin <= 0 || (int)pin >= GPIO_NUM_MAX) continue;
+        sw.pin_bit_mask = (1ULL << pin);
+        gpio_config(&sw);
+        gpio_isr_handler_add(pin, wall_switch_isr, (void *)(uintptr_t)i);
+        ESP_LOGI(TAG, "Wall switch gang %d → GPIO %d", i, (int)pin);
+        sw_registered++;
+    }
+    if (sw_registered > 0) {
+        xTaskCreate(switch_task, "DSGV_switch", 2048, NULL, 3, NULL);
+    }
 
     ESP_LOGI(TAG, "GPIO ready (relay[0]=%d cnt=%u LED=%d dim=%d warm=%d cool=%d "
              "R=%d G=%d B=%d motion=%d contact=%d)",

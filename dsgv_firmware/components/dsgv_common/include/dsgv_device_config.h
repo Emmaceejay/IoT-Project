@@ -38,6 +38,12 @@ typedef struct {
     // Unused entries (index >= relay_count) are ignored.
     gpio_num_t relay_pins[DSGV_MAX_RELAY_COUNT];
 
+    // GPIO input pin for the latching wall switch of each relay gang.
+    // On every state change (either edge) the corresponding relay toggles.
+    // The relay state is independent of switch position — only edges matter.
+    // Set to GPIO_NUM_NC (-1) to disable the wall switch for that gang.
+    gpio_num_t switch_pins[DSGV_MAX_RELAY_COUNT];
+
     // LEDC PWM output pins (used only when the matching capability is set)
     gpio_num_t dimmer_pin;
     gpio_num_t warm_pin;

@@ -47,6 +47,13 @@ esp_err_t DSGV_device_config_load(void) {
         g_device_config.relay_pins[i] = default_relay_pins[i];
     }
 
+    // Wall switch input pins — compile-time defaults; not stored in NVS
+    static const gpio_num_t default_switch_pins[DSGV_MAX_RELAY_COUNT] =
+        GPIO_WALL_SWITCH_PINS_ALL;
+    for (int i = 0; i < DSGV_MAX_RELAY_COUNT; i++) {
+        g_device_config.switch_pins[i] = default_switch_pins[i];
+    }
+
     g_device_config.dimmer_pin    = GPIO_DIMMER_PIN;
     g_device_config.warm_pin      = GPIO_WARM_PIN;
     g_device_config.cool_pin      = GPIO_COOL_PIN;
