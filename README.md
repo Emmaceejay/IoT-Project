@@ -174,7 +174,8 @@ IoT-Project/
 │   │       ├── mqtt/
 │   │       │   └── dsgv_mqtt.c            # MQTT connect, announce, telemetry, commands
 │   │       ├── http/
-│   │       │   └── dsgv_http_server.c     # LAN REST API (/status, /command, /ota)
+│   │       │   ├── dsgv_http_server.c     # LAN REST API (/status, /command, /ota)
+│   │       │   └── dsgv_captive_portal.c  # AP mode setup portal (192.168.4.1)
 │   │       ├── provisioning/
 │   │       │   └── dsgv_provisioning.c    # NimBLE GATT WiFi provisioning
 │   │       └── ota/
@@ -430,19 +431,34 @@ Go to **Settings** to verify the connection status shows "Connected · Manufactu
 
 ## 8. Provisioning a New Device
 
-Provisioning is the process of giving a fresh ESP32 its WiFi credentials and device type, then registering it in Firebase. It requires physical proximity (Bluetooth range) to the device.
+Provisioning gives a fresh ESP32 its WiFi credentials, registers it in Firebase,
+and makes it appear on the dashboard. Three entry methods are supported — all
+lead to the same BLE provisioning flow.
 
+### Method A — QR Code (standard)
 ```
 Step 1 — Flash firmware to the ESP32 (one time)
 Step 2 — Print or generate a QR code:
           dsgv://provision?name=DSGVHub_XXXXXX
-          (last 6 chars = last 3 bytes of WiFi MAC, uppercase hex)
-Step 3 — In the app: tap "Add Device" tab
-Step 4 — Point camera at the QR code
-Step 5 — Enter a device name (e.g. "Kitchen Switch")
-Step 6 — Select the device type preset (e.g. "2-Gang Switch")
-Step 7 — Enter your WiFi network SSID and password
-Step 8 — Tap "Provision Device"
+          (XXXXXX = last 3 bytes of WiFi MAC, uppercase hex)
+Step 3 — App → "Add Device" tab → point camera at QR
+Step 4 — Enter a device name, select your Wi-Fi network, enter password
+Step 5 — Tap "Provision Device"
+```
+
+### Method B — Manual pair code (QR damaged, label still readable)
+```
+Step 1 — App → "Add Device" → tap "Enter pair code manually"
+Step 2 — Type the 6-character code from the device label (e.g. A1B2C3)
+Step 3 — App connects to the device via BLE automatically
+Step 4 — Continue as above
+```
+
+### Method C — Device picker (label fully destroyed)
+```
+Step 1 — App → "Add Device" → tap "Scan for nearby DSGV devices"
+Step 2 — A list of all nearby DSGV devices appears — tap the right one
+Step 3 — Continue as above
 ```
 
 **What happens during provisioning:**
@@ -743,9 +759,13 @@ Use [MQTT Explorer](https://mqtt-explorer.com) (free desktop app) to:
 | `dsgv_mqtt.c` | MQTT connection, topic handling, telemetry, commands | Adding new MQTT features |
 | `dsgv_firebase.c` | HTTPS fetch from Firebase Cloud Function | Extending config fields (e.g. adding auth credentials) |
 | `dsgv_provisioning.c` | BLE GATT provisioning protocol | Changing provisioning payload fields |
+| `dsgv_captive_portal.c` | AP mode credential entry portal | Modifying the setup web page |
+| `wifi_manager.c` | Wi-Fi connection, AP mode, credential storage | Adding connection modes |
 | `FIREBASE_SETUP_GUIDE.md` | Step-by-step Firebase setup with verification | Reference only |
 | `FLASHING_GUIDE.md` | Wiring + flash commands per device type | Reference only |
 | `PRE_PRODUCTION_GUIDE.md` | Production readiness checklist | Before shipping hardware |
+| `BLE_PROVISIONING_AND_FIXES.md` | All firmware/app fixes + provisioning protocol detail | Reference only |
+| `TEST_CHECKLIST.md` | Hardware + app test checklist for all features | Before every release |
 
 ---
 

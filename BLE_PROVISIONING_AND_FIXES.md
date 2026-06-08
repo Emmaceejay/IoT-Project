@@ -14,12 +14,15 @@
 2. [BLE GATT Service Layout](#2-ble-gatt-service-layout)
 3. [Advertisement Structure](#3-advertisement-structure)
 4. [Provisioning Flow — Step by Step](#4-provisioning-flow--step-by-step)
-5. [Device Identity — Auto-Detection Design](#5-device-identity--auto-detection-design)
-6. [Wi-Fi Network Scan — How It Works](#6-wi-fi-network-scan--how-it-works)
-7. [Firmware Fixes Applied](#7-firmware-fixes-applied)
-8. [App Changes Applied](#8-app-changes-applied)
-9. [Build & Flash Reference](#9-build--flash-reference)
-10. [Troubleshooting](#10-troubleshooting)
+5. [Provisioning Fallbacks — No QR Code Required](#5-provisioning-fallbacks--no-qr-code-required)
+6. [Wi-Fi Recovery — Changing Network Without Factory Reset](#6-wi-fi-recovery--changing-network-without-factory-reset)
+7. [AP Captive Portal — Offline Recovery Without App or BLE](#7-ap-captive-portal--offline-recovery-without-app-or-ble)
+8. [Device Identity — Auto-Detection Design](#8-device-identity--auto-detection-design)
+9. [Wi-Fi Network Scan — How It Works](#9-wi-fi-network-scan--how-it-works)
+10. [Firmware Fixes Applied](#10-firmware-fixes-applied)
+11. [App Changes Applied](#11-app-changes-applied)
+12. [Build & Flash Reference](#12-build--flash-reference)
+13. [Troubleshooting](#13-troubleshooting)
 
 ---
 
@@ -154,7 +157,227 @@ failed:<reason>
 
 ---
 
-## 5. Device Identity — Auto-Detection Design
+---
+
+## 5. Provisioning Fallbacks — No QR Code Required
+
+Three entry methods now exist in the "Pair New Device" screen. All three lead to
+the identical BLE provisioning flow — only the discovery method differs.
+
+### Method A — QR Code (primary, unchanged)
+
+User scans the `dsgv://provision?name=DSGVHub_XXXXXX` QR code on the device label.
+The 6-character suffix is the last 3 bytes of the BT MAC address in uppercase hex.
+
+### Method B — Manual pair-code entry (Option 1)
+
+Triggered by tapping **"Enter pair code manually"** below the scanner.
+
+```
+DSGVHub_  [ A 1 B 2 C 3 ]   [Find]
+```
+
+- Field accepts only hex characters (`A-F`, `0-9`), max 6 characters
+- App constructs the full BLE name: `DSGVHub_` + entered code (uppercased)
+- Connects exactly as if the QR had been scanned
+- Use when the QR code is damaged but the device label is still readable
+
+### Method C — BLE device picker (Option 2)
+
+Triggered by tapping **"Scan for nearby DSGV devices"**.
+
+- App calls `BleProvisioningService.discoverNearbyDevices()` which scans for all
+  devices whose BLE name starts with `DSGVHub_`
+- Results are shown as a tappable list
+- Selecting a device proceeds to the credential form immediately
+- Use when the entire label is destroyed or the device is being re-provisioned
+  and the user has no visual reference
+
+### Which method to use
+
+| Situation | Method |
+|---|---|
+| New device, label intact | QR scan (Method A) |
+| QR torn/scratched, text readable | Manual code entry (Method B) |
+| Label fully destroyed | Device picker (Method C) |
+| Device already known to app, just changing WiFi | Settings → Change Wi-Fi (no pairing screen) |
+
+### BLE name persistence
+
+From the first provisioning, the app now **persists the BLE device name** to
+`flutter_secure_storage` (key: `ble_name_{DEVICE_ID}`). This means:
+
+- Subsequent Wi-Fi changes from Device Settings → Change Wi-Fi connect to the
+  device by its stored name — **no QR scan, no manual entry, no picker** needed
+- The stored name survives app restarts and device reboots
+- If the device is re-provisioned (factory reset + new QR or picker), the stored
+  name is refreshed automatically
+
+---
+
+## 6. Wi-Fi Recovery — Changing Network Without Factory Reset
+
+### Problem solved
+
+Previously the only way to change a device's Wi-Fi network was:
+1. Factory reset (5-flip wall switch) → wipes all NVS → full re-provisioning
+2. No in-app mechanism existed
+
+This destroyed relay state, power restore settings, MQTT broker config, and
+device config — all data the user had configured.
+
+### Solution
+
+Two independent recovery paths, selectable automatically based on device status.
+
+#### Path 1 — Device is online (router password changed, same SSID)
+
+**App flow:** Device Settings → Wi-Fi Network → enter new SSID + password → **Change Wi-Fi**
+
+The app publishes an authenticated MQTT command to `devices/{id}/config`:
+
+```json
+{
+  "auth_token": "<32-hex-token>",
+  "wifi_ssid":  "NewNetworkName",
+  "wifi_password": "newpassword"
+}
+```
+
+Firmware handler (`handle_config()` in `dsgv_mqtt.c`):
+- Verifies auth token via constant-time `memcmp`
+- Calls `wifi_manager_save_credentials()` — overwrites `wifi_creds` NVS namespace
+- Calls `esp_restart()`
+
+**Preserved:** relay states, power restore mode, MQTT broker config, device config.
+**Time to recover:** ~30 seconds (reboot + reconnect).
+
+#### Path 2 — Device is offline (new router, SSID changed)
+
+**App flow:** Device Settings → Wi-Fi Network → enter new SSID + password → **Reconnect via Bluetooth**
+
+App uses the stored BLE name to connect without QR scan:
+
+```dart
+BleProvisioningService.provision(
+  deviceName: storedBleName,  // "DSGVHub_A1B2C3" — from secure storage
+  ssid: newSsid,
+  password: newPassword,
+)
+```
+
+The firmware's BLE provisioning write handler only updates `wifi_creds` NVS — it
+does not alter `dsgv_device` (relay state, restore mode) or `mqtt_cfg` (broker).
+Device reboots and connects to the new network with all other config intact.
+
+**If BLE name is not stored** (device provisioned before this app version):
+The settings screen shows two fallback instructions:
+- Connect to the device's `DSGV_Setup_*` AP hotspot and use the browser form
+- Or scan the QR code on the device label in the pairing screen
+
+### Wi-Fi change vs factory reset comparison
+
+| | Old approach (factory reset) | New approach (Change Wi-Fi) |
+|---|---|---|
+| Relay state | Wiped | Preserved |
+| Power restore mode | Wiped | Preserved |
+| MQTT broker config | Wiped | Preserved |
+| Device config | Wiped | Preserved |
+| QR scan needed | Yes (re-provisioning) | No |
+| Physical access | Yes (press switch 5×) | No (online path) |
+
+---
+
+## 7. AP Captive Portal — Offline Recovery Without App or BLE
+
+### Problem solved
+
+Previously: if Wi-Fi credentials were wrong or the network was gone, the device
+would print `"Wi-Fi failed to connect within 15 s. Halting."` and freeze — requiring
+a power cycle that triggered the same failure again indefinitely.
+
+Now: instead of halting, the device automatically starts an **open Wi-Fi Access Point**
+and serves a credential entry web page. Any phone or laptop can connect and submit
+new credentials — no app, no Bluetooth, no QR code required.
+
+### Trigger condition
+
+The AP portal activates when:
+- Wi-Fi credentials exist in NVS (device has been provisioned before), AND
+- Wi-Fi fails to connect within 15 seconds
+
+**Not triggered** when there are no credentials — that path uses BLE provisioning.
+
+### Flow
+
+```
+Device boot
+  └── wifi_manager_connect() → credentials found → attempt to connect
+        └── 15-second timeout with no DHCP address
+              └── wifi_manager_stop_reconnect()   ← halt STA reconnect loop
+              └── wifi_manager_start_ap()          ← create "DSGV_Setup_XXXXXX" AP
+              └── DSGV_captive_portal_start()      ← start HTTP server on 192.168.4.1
+              └── vTaskSuspend(NULL)               ← main task sleeps; portal handles all I/O
+```
+
+### Portal AP details
+
+| Property | Value |
+|---|---|
+| SSID | `DSGV_Setup_XXXXXX` (last 3 bytes of SoftAP MAC) |
+| Security | Open (no password) — standard for setup portals |
+| Device IP | `192.168.4.1` (ESP-IDF softAP default) |
+| HTTP port | 80 |
+
+### Captive portal detection
+
+The HTTP server handles OS-level probes so the phone's browser opens automatically:
+
+| OS | Detection URL | Response |
+|---|---|---|
+| Android | `/generate_204` | 302 redirect to `/` |
+| iOS | `/hotspot-detect.html` | 302 redirect to `/` |
+| Windows | `/connecttest.txt`, `/ncsi.txt` | 302 redirect to `/` |
+| Linux | `/generate_204` | 302 redirect to `/` |
+
+### Credential submission
+
+The HTML form at `192.168.4.1/` accepts:
+- **SSID** (required, plain text)
+- **Password** (optional, for open networks)
+
+`POST /wifi` handler:
+1. URL-decodes the form-encoded body
+2. Calls `wifi_manager_save_credentials(ssid, pass)` — writes `wifi_creds` NVS
+3. Serves the success page (browser gets a response before device reboots)
+4. Spawns a FreeRTOS task to call `esp_restart()` after 1.2 seconds
+
+After reboot the device attempts to connect to the new network. If successful it
+enters normal operation. If it fails again, the portal starts again — no manual
+intervention needed.
+
+### What is preserved
+
+The portal only writes to the `wifi_creds` NVS namespace. All other namespaces
+are untouched:
+
+| NVS namespace | Contents | Preserved? |
+|---|---|---|
+| `wifi_creds` | SSID + password | Overwritten (intentional) |
+| `dsgv_device` | Relay state, power restore mode | ✓ Yes |
+| `mqtt_cfg` | MQTT broker host/port/TLS | ✓ Yes |
+| `dsgv_cfg` | Device type, capabilities, auth token | ✓ Yes |
+
+### Reconnect loop fix
+
+Before the portal can start, `wifi_manager_stop_reconnect()` sets `s_stop_reconnect = true`.
+This flag prevents `wifi_event_handler` from calling `esp_wifi_connect()` on disconnect —
+avoiding continuous reconnect attempts that would interfere with the AP radio on ESP32-C3/C6
+(BLE and WiFi share the same antenna on single-radio chips).
+
+---
+
+## 8. Device Identity — Auto-Detection Design
 
 ### Why the app no longer has a device type dropdown
 
@@ -203,7 +426,7 @@ device they are provisioning, with no opportunity to set it incorrectly.
 
 ---
 
-## 6. Wi-Fi Network Scan — How It Works
+## 9. Wi-Fi Network Scan — How It Works
 
 ### On the device (firmware)
 
@@ -245,7 +468,7 @@ a plain text field. The user can also tap "Type manually" at any time to overrid
 
 ---
 
-## 7. Firmware Fixes Applied
+## 10. Firmware Fixes Applied
 
 ### Fix 1 — Boot crash: `assert failed: xQueueSemaphoreTake` on NULL mutex
 
@@ -352,7 +575,7 @@ ble_gap_adv_rsp_set_fields(&rsp);
 
 ---
 
-## 8. App Changes Applied
+## 11. App Changes Applied
 
 ### `lib/domain/services/ble_provisioning_service.dart`
 
@@ -406,7 +629,7 @@ The `_runBleProvisioning()` method no longer sends `device_type`, `capabilities`
 
 ---
 
-## 9. Build & Flash Reference
+## 12. Build & Flash Reference
 
 ### Prerequisites (Windows)
 
@@ -487,7 +710,171 @@ adb install build\app\outputs\flutter-apk\app-release.apk
 
 ---
 
-## 10. Troubleshooting
+### Fix 6 — Accidental factory reset from latch wall switch
+
+**Root cause:** `DSGV_RESET_WINDOW_MS` was 10,000 ms. With `DSGV_RESET_TOGGLE_COUNT = 5`,
+a user who flipped the switch 5 times over 10 seconds — entirely normal for a latch switch
+(checking if the light works, kids playing) — triggered a factory reset.
+
+**Fix:** Reduced the window to 3,000 ms. All 5 flips must now land within 3 seconds — a
+deliberately rapid gesture that cannot happen accidentally.
+
+```c
+// dsgv_config.h
+#define DSGV_RESET_TOGGLE_COUNT   5
+#define DSGV_RESET_WINDOW_MS      3000   // was 10000
+```
+
+---
+
+### Fix 7 — Device halts permanently on Wi-Fi failure
+
+**Root cause:** `dsgv_app_main.c` called `return` when Wi-Fi failed to connect within 15 s.
+The FreeRTOS app_main task exiting leaves all GPIO, HTTP, and MQTT tasks dead — the device
+is inoperable until physically power-cycled, which causes the same failure.
+
+**Fix:** Instead of halting, stop the reconnect loop and start the AP captive portal:
+
+```c
+if (!wifi_manager_is_connected()) {
+    wifi_manager_stop_reconnect();
+    wifi_manager_start_ap();
+    DSGV_captive_portal_start();
+    vTaskSuspend(NULL);
+    return;
+}
+```
+
+See [Section 7](#7-ap-captive-portal--offline-recovery-without-app-or-ble) for full details.
+
+---
+
+### Fix 8 — WiFi reconnect loop interferes with AP radio
+
+**Root cause:** `wifi_event_handler` calls `esp_wifi_connect()` on every
+`WIFI_EVENT_STA_DISCONNECTED`. When the device needs to switch to AP mode, STA
+reconnect attempts continue in the background, competing for the radio on single-antenna
+chips (ESP32-C3, C6) and corrupting the AP beacons.
+
+**Fix:** Added `s_stop_reconnect` flag and `wifi_manager_stop_reconnect()`:
+
+```c
+static bool s_stop_reconnect = false;
+
+// In wifi_event_handler:
+if (!s_stop_reconnect) {
+    esp_wifi_connect();
+}
+
+// New public API:
+void wifi_manager_stop_reconnect(void) {
+    s_stop_reconnect = true;
+    esp_wifi_disconnect();
+}
+```
+
+---
+
+### Fix 9 — Wi-Fi change and re-provision commands added to MQTT config handler
+
+Two new authenticated commands added to `handle_config()` in `dsgv_mqtt.c`.
+Both are protected by the same `auth_token` constant-time `memcmp` as the
+existing broker-change command.
+
+**`wifi_ssid` + `wifi_password`** — changes Wi-Fi credentials and reboots:
+```json
+{"auth_token":"<32hex>","wifi_ssid":"NewNet","wifi_password":"newpass"}
+```
+
+**`reprovision: true`** — erases only `wifi_creds` and reboots into BLE provisioning:
+```json
+{"auth_token":"<32hex>","reprovision":true}
+```
+
+---
+
+## 11. App Changes Applied
+
+### `lib/domain/services/ble_provisioning_service.dart`
+
+**New method: `discoverNearbyDevices()`**
+
+Scans BLE for all devices whose name starts with `DSGVHub_` and returns a list.
+Used by the device picker in the pairing screen. Already-connected devices are
+included without scanning. Returns an empty list (never throws) on any failure.
+
+```dart
+static Future<List<BluetoothDevice>> discoverNearbyDevices() async { ... }
+```
+
+---
+
+### `lib/domain/services/device_manager.dart`
+
+**BLE name persistence**
+
+The `DeviceManager` now stores the BLE device name (e.g. `DSGVHub_A1B2C3`) to
+`flutter_secure_storage` when the MQTT announce arrives after first provisioning.
+
+```dart
+// Called from matter_pairing_screen on provisioning success:
+void setPendingBleName(String deviceId, String bleName) { ... }
+
+// Called from handleAnnounce() when MQTT confirm arrives:
+await _storage.write(key: 'ble_name_$normalised', value: pendingBleName);
+
+// Called from device_settings_screen for offline BLE recovery:
+Future<String?> getBleNameForDevice(String deviceId) async { ... }
+```
+
+**New method: `changeDeviceWifi()`**
+
+Publishes an authenticated Wi-Fi change command to the device's config MQTT topic.
+
+```dart
+Future<void> changeDeviceWifi(
+    String deviceId, String authToken, String ssid, String password) async {
+  final payload = jsonEncode({
+    'auth_token': authToken,
+    'wifi_ssid': ssid,
+    'wifi_password': password,
+  });
+  await ref.read(mqttServiceProvider.notifier).publishConfig(deviceId, payload);
+}
+```
+
+---
+
+### `lib/presentation/screens/matter_pairing_screen.dart`
+
+| Addition | Purpose |
+|---|---|
+| **Option 1** — manual pair-code field | 6-char hex input with `DSGVHub_` prefix; constructs and connects to BLE device directly |
+| **Option 2** — device picker | Calls `discoverNearbyDevices()`, shows tappable list of all nearby DSGV devices |
+| BLE name saved on success | `manager.setPendingBleName()` called alongside existing `setPendingToken()` |
+
+Both options appear only when the QR scanner has not yet produced a result
+(`_parsedQr == null`), so existing QR scan users see no change.
+
+---
+
+### `lib/presentation/screens/device_settings_screen.dart`
+
+**New section: Wi-Fi Network**
+
+Added between "Power Restore" and "Device Info" sections.
+
+| Device status | Button label | Action |
+|---|---|---|
+| Online | Change Wi-Fi | Sends `wifi_ssid` MQTT command → device reboots |
+| Offline + BLE name stored | Reconnect via Bluetooth | BLE re-provisioning with stored name |
+| Offline + no BLE name | Change Wi-Fi (disabled guidance) | Shows manual AP or QR instructions |
+
+Progress and error/success feedback is shown inline below the button.
+
+---
+
+## 13. Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
@@ -498,10 +885,18 @@ adb install build\app\outputs\flutter-apk\app-release.apk
 | HTTP / buttons stop working when MQTT fails | `ESP_ERROR_CHECK` on MQTT start | Fixed: MQTT is now best-effort (see Fix 3) |
 | Device connects to old Wi-Fi after reflash | NVS not erased | Use `erase-flash flash` or `flash_clean.ps1` |
 | Build error: "Failed to set target esp32" | Stale build directory after target change | Delete `devices/1gang_switch/build/` and rebuild |
-| `idf.py: command not found` in PowerShell | IDF environment not activated | Run the `export.ps1` line at the top of this section |
+| `idf.py: command not found` in PowerShell | IDF environment not activated | Run the `export.ps1` activation script |
 | App "Device not found" after fixing UUID | Old APK still installed | Rebuild and reinstall APK |
+| Device creates `DSGV_Setup_*` AP instead of connecting | Wrong Wi-Fi creds in NVS | Connect phone to AP → open browser → enter correct credentials |
+| Browser does not open on AP connect | Captive portal probe blocked | Navigate manually to `http://192.168.4.1` |
+| Settings "Change Wi-Fi" button stays grey | SSID field is empty | Enter the new network name first |
+| Offline path says "BLE name not stored" | Device provisioned before this app version | Use QR scan in pairing screen, or connect to device's `DSGV_Setup_*` AP |
+| BLE device picker finds no devices | Device not in provisioning mode | Factory reset the device (5 rapid flips) or power-cycle |
+| Manual pair code "not found" | Wrong code or device not in BLE range | Check 6-char code on device label; move closer |
+| Accidental factory reset still happening | Old firmware flashed | Flash updated firmware — window is now 5 flips in 3 s |
+| Portal form submits but device doesn't reconnect | Wrong SSID/password entered | Reconnect to `DSGV_Setup_*` again and re-enter credentials |
 
 ---
 
-*Document last updated: 2026-06-05*
-*Firmware: ESP-IDF v6.0.1 · Target: esp32 · App: Flutter with flutter_blue_plus v1.35.5*
+*Document last updated: 2026-06-08*
+*Firmware: ESP-IDF v5.4.4 · Target: esp32 / esp32c3 / esp32c6 / esp32s3 · App: Flutter with flutter_blue_plus*
