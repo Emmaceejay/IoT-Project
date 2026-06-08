@@ -145,7 +145,7 @@ class _DevicePairingScreenState extends ConsumerState<DevicePairingScreen> {
   }
 
   void _resetScanner() {
-    _scannerCtrl.stop();
+    if (_scannerActive) _scannerCtrl.stop();
     setState(() {
       _parsedQr       = null;
       _scannerActive  = false;
