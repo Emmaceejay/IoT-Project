@@ -246,32 +246,81 @@ class DeviceManager extends AsyncNotifier<List<MatterDevice>> {
   }
 
   /// Sends the user's power restore preference to the device and persists it.
-  /// The command is sent via MQTT. Local state and ObjectBox are updated
-  /// optimistically so the UI reflects the change even while the device is
-  /// processing the request.
+  ///
+  /// For the "on" and "off" modes we also immediately apply the relay state so
+  /// the switch button stays in sync with the selection:
+  ///   • Always ON  → relay(s) turn ON  now + NVS = on
+  ///   • Always OFF → relay(s) turn OFF now + NVS = off
+  ///   • Restore    → relay(s) unchanged  + NVS = restore
   Future<void> setPowerRestoreMode(
       String deviceId, PowerRestoreMode mode) async {
-    // 1. Optimistic local update
+    final devices = state.valueOrNull ?? [];
+    final device = devices.firstWhere(
+      (d) => d.uniqueDeviceId == deviceId,
+      orElse: () => MatterDevice(uniqueDeviceId: deviceId, deviceName: ''),
+    );
+
+    // Build the relay patch for on/off modes.
+    // Each relay gang has its own telemetry key: power, power_2, power_3, power_4.
+    Map<String, dynamic>? relayPatch;
+    if (mode == PowerRestoreMode.on || mode == PowerRestoreMode.off) {
+      final targetOn = mode == PowerRestoreMode.on;
+      relayPatch = <String, dynamic>{};
+      for (final cap in device.capabilities) {
+        switch (cap) {
+          case 'relay':
+            relayPatch['power'] = targetOn;
+          case 'relay_2':
+            relayPatch['power_2'] = targetOn;
+          case 'relay_3':
+            relayPatch['power_3'] = targetOn;
+          case 'relay_4':
+            relayPatch['power_4'] = targetOn;
+        }
+      }
+      if (relayPatch.isEmpty) relayPatch = null;
+    }
+
+    // 1. Optimistic local update — mode + relay state together so the switch
+    //    moves instantly without waiting for a telemetry echo.
     state = AsyncValue.data(
-      (state.valueOrNull ?? []).map((d) {
+      devices.map((d) {
         if (d.uniqueDeviceId != deviceId) return d;
-        return d.copyWith(powerRestoreMode: mode);
+        return d.copyWith(
+          powerRestoreMode: mode,
+          telemetry: relayPatch != null
+              ? {...d.telemetry, ...relayPatch}
+              : d.telemetry,
+        );
       }).toList(),
     );
 
-    // 2. MQTT command — device stores it in NVS and echoes back in telemetry
     final mqttStatus = ref.read(mqttServiceProvider);
     if (mqttStatus.isConnected) {
-      final payload =
-          jsonEncode({'device_id': deviceId, 'power_restore': mode.name});
-      await ref
-          .read(mqttServiceProvider.notifier)
-          .publishCommand(deviceId, payload);
+      // 2a. Power-restore NVS command — device stores mode and echoes in telemetry.
+      await ref.read(mqttServiceProvider.notifier).publishCommand(
+            deviceId,
+            jsonEncode({'device_id': deviceId, 'power_restore': mode.name}),
+          );
+
+      // 2b. For on/off modes, also send the relay command so the device turns
+      //     its output(s) on/off right now — not only on the next power cycle.
+      if (relayPatch != null) {
+        await ref.read(mqttServiceProvider.notifier).publishCommand(
+              deviceId,
+              jsonEncode({'device_id': deviceId, ...relayPatch}),
+            );
+      }
     }
 
     // 3. Persist to ObjectBox
     await _repository.updatePowerRestoreMode(deviceId, mode);
-    debugPrint('[DeviceManager] Device $deviceId power_restore → ${mode.name}');
+    if (relayPatch != null) {
+      await _repository.updateDeviceState(deviceId, relayPatch);
+    }
+
+    debugPrint('[DeviceManager] Device $deviceId power_restore → ${mode.name}'
+        '${relayPatch != null ? " + relay → $relayPatch" : ""}');
   }
 
   /// Handles a device announce message from MQTT.
