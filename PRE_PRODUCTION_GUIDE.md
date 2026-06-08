@@ -151,44 +151,67 @@ This writes all the correctly-sized icon files into `android/app/src/main/res/mi
 
 ## 3. OTA Firmware Hosting & Build-Time URL Injection
 
-The app's OTA trigger uses `String.fromEnvironment()` so the firmware URL is never hardcoded in the binary.
+The app's OTA system is centralised in `dsgv_hub_app/lib/domain/services/ota_service.dart` inside the `OtaOrchestratorService` class. Three constants are baked into the binary at build time via `--dart-define` so neither the URL, the hash, nor the version string is ever visible in the app's UI or editable by end users.
+
+| Constant | Purpose |
+|---|---|
+| `OTA_FIRMWARE_URL` | Full HTTPS URL to the `.bin` file on your CDN or server |
+| `OTA_FIRMWARE_HASH` | SHA-256 hex digest of that exact `.bin` file (64 lowercase hex chars) |
+| `OTA_FIRMWARE_VERSION` | Human-readable version string shown in the Settings badge (e.g. `1.2.3`) |
+
+`OtaOrchestratorService.hasFactoryFirmware` returns `true` only when both `OTA_FIRMWARE_URL` and `OTA_FIRMWARE_HASH` are non-empty. In development builds where no `--dart-define` is supplied, the button is automatically disabled and a message explains this is a dev build. No runtime guard needs to be added manually.
+
+### Where OTA controls appear in the UI
+
+| Location | What it does |
+|---|---|
+| **Settings → Firmware Update → "Push update to all devices (N)"** | Sends the factory firmware trigger via MQTT to all online provisioned devices simultaneously. End users just tap this button — they never see a URL or hash. |
+| **Device Detail → Firmware Update → "Push Firmware Update"** | Same factory constants, but targets a single device. Used for per-device updates or targeted testing. |
+| **Settings → Firmware Update → "Custom firmware (advanced)"** (collapsed) | Developer-only section — accepts a manually entered URL and hash. Only online provisioned devices receive the update. |
+
+> See **OTA_GUIDE.md** for the complete step-by-step walkthrough including Firebase Storage hosting, hash computation, and serial-monitor verification.
 
 ### Step 1 — Host the firmware binary
 
-Upload the compiled `dsgv_firmware/build/dsgv_firmware.bin` to a storage service that supports HTTPS:
+Upload the compiled `dsgv_firmware/build/dsgv_firmware.bin` to a storage service that supports HTTPS. Always use a version-tagged filename (e.g. `v1.2.3.bin`) and never overwrite an existing live URL — devices that have not yet completed their update may still be downloading it.
 
 | Option | Notes |
 |---|---|
-| AWS S3 + pre-signed URL | URL expires — good for controlled rollout |
-| Cloudflare R2 | S3-compatible, free egress |
-| GitHub Releases | Free, public — only for open-source |
-| Self-hosted NGINX/Caddy | Full control, requires TLS cert |
+| AWS S3 | Public read or pre-signed URL; standard choice for production |
+| Cloudflare R2 | S3-compatible, free egress — good cost-efficient option |
+| GitHub Releases | Free and public — only suitable for open-source firmware |
+| Self-hosted NGINX/Caddy | Full control; requires a valid TLS certificate |
 
-**The URL must be HTTPS.** The firmware's `esp_https_ota` will reject plain HTTP connections.
+**The URL must be HTTPS.** The firmware's `esp_https_ota` component will refuse plain HTTP connections.
 
 ### Step 2 — Compute the SHA-256 hash
+
+Compute the hash from the exact file you uploaded. If you re-upload or re-build, recompute.
 
 ```bash
 # Linux / macOS
 sha256sum dsgv_firmware/build/dsgv_firmware.bin
 
-# Windows PowerShell
-Get-FileHash "dsgv_firmware\build\dsgv_firmware.bin" -Algorithm SHA256
+# Windows PowerShell — outputs lowercase hash directly
+(Get-FileHash "dsgv_firmware\build\dsgv_firmware.bin" -Algorithm SHA256).Hash.ToLower()
 ```
 
-### Step 3 — Pass URL and hash at build time
+The output is a 64-character lowercase hex string. Copy it exactly — the device's hash check is case-sensitive and rejects any mismatch.
+
+### Step 3 — Pass all three constants at build time
 
 ```bash
 flutter build apk --release \
-  --dart-define=OTA_FIRMWARE_URL=https://your-bucket.s3.amazonaws.com/firmware/v1.0.0.bin \
-  --dart-define=OTA_FIRMWARE_HASH=abc123...sha256hex...
+  --dart-define=OTA_FIRMWARE_URL=https://your-bucket.s3.amazonaws.com/firmware/v1.2.3.bin \
+  --dart-define=OTA_FIRMWARE_HASH=a3f8c2d1e9b047560fa82c3e6a1d4b9c2f7e0a5d8b3c6f1e4a7d0b2c5e8f1a4 \
+  --dart-define=OTA_FIRMWARE_VERSION=1.2.3
 ```
 
-The app's assertions in `device_detail_screen.dart` will catch a missing or empty value at build time (only in debug/profile builds — in release, the button will be present but `triggerUpdate` will receive empty strings, so add a runtime guard before shipping if you want a hard block).
+All three values are read by `OtaOrchestratorService` in `ota_service.dart` using `String.fromEnvironment()`. Omitting `OTA_FIRMWARE_URL` or `OTA_FIRMWARE_HASH` sets `hasFactoryFirmware` to `false` and the "Push update" button remains disabled. Omitting `OTA_FIRMWARE_VERSION` simply leaves the version badge blank — the button still works.
 
-### Step 4 — Firmware version strategy
+### Step 4 — Firmware version and file naming strategy
 
-Keep firmware binary filenames version-tagged (`firmware/v1.0.0.bin`, `v1.1.0.bin`, etc.). Never overwrite a live URL — old devices may still be downloading it.
+Keep firmware binary filenames version-tagged (`firmware/v1.0.0.bin`, `v1.1.0.bin`, etc.). Never overwrite a live URL — old devices may still be downloading it. Maintain a `CHANGELOG.md` in the firmware directory and a mapping between app versions and the firmware version they embed.
 
 ---
 
@@ -420,7 +443,7 @@ Run through every item in this section before approving a device batch for shipp
 
 - [ ] `flutter analyze` returns zero issues
 - [ ] Release APK signed with production keystore (not debug key)
-- [ ] `String.fromEnvironment('OTA_FIRMWARE_URL')` injected at build time
+- [ ] `OTA_FIRMWARE_URL`, `OTA_FIRMWARE_HASH`, and `OTA_FIRMWARE_VERSION` injected via `--dart-define` at build time
 - [ ] BLE provisioning tested on a fresh device (no prior NVS data)
 - [ ] All 11 device presets verified in the UI
 - [ ] Dashboard, device detail, settings, and pairing screens tested on Android 10, 12, 14
@@ -448,33 +471,44 @@ Run through every item in this section before approving a device batch for shipp
 
 ## Quick Reference: Production Build Commands
 
-### App — Signed Release APK
+### App — Signed Release APK (with OTA)
 
 ```bash
 cd IoT-Project/dsgv_hub_app
 
 flutter build apk --release \
-  --dart-define=OTA_FIRMWARE_URL=https://your-bucket.s3.amazonaws.com/firmware/v1.0.0.bin \
-  --dart-define=OTA_FIRMWARE_HASH=<sha256-hex>
+  --dart-define=OTA_FIRMWARE_URL=https://your-bucket.s3.amazonaws.com/firmware/v1.2.3.bin \
+  --dart-define=OTA_FIRMWARE_HASH=<64-char-sha256-hex> \
+  --dart-define=OTA_FIRMWARE_VERSION=1.2.3
 ```
 
-### App — Play Store Bundle
+### App — Play Store Bundle (with OTA)
 
 ```bash
 flutter build appbundle --release \
-  --dart-define=OTA_FIRMWARE_URL=https://... \
-  --dart-define=OTA_FIRMWARE_HASH=...
+  --dart-define=OTA_FIRMWARE_URL=https://your-bucket.s3.amazonaws.com/firmware/v1.2.3.bin \
+  --dart-define=OTA_FIRMWARE_HASH=<64-char-sha256-hex> \
+  --dart-define=OTA_FIRMWARE_VERSION=1.2.3
 ```
 
-### Firmware — Production Flash
+### Compute SHA-256 hash before building
+
+```bash
+# Linux / macOS
+sha256sum dsgv_firmware/build/dsgv_firmware.bin
+
+# Windows PowerShell
+(Get-FileHash "dsgv_firmware\build\dsgv_firmware.bin" -Algorithm SHA256).Hash.ToLower()
+```
+
+### Firmware — Production Build & Flash
 
 ```bash
 cd IoT-Project/dsgv_firmware
 
-idf.py set-target esp32c3        # or esp32s3 / esp32c6 / esp32
-idf.py build
-idf.py -p COM5 flash             # replace COM5 with your port
-idf.py -p COM5 monitor           # verify boot logs
+make DEVICE=1gang_switch TARGET=esp32c3 build   # produces dsgv_firmware/build/dsgv_firmware.bin
+idf.py -p COM5 flash                             # replace COM5 with your port
+idf.py -p COM5 monitor                           # verify boot logs
 ```
 
 ---

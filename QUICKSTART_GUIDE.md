@@ -31,6 +31,16 @@ tests, Google Home / Alexa integration tests.
 
 ---
 
+## I need to push a firmware update to my devices
+
+→ **[OTA_GUIDE.md](./OTA_GUIDE.md)**
+
+Complete step-by-step: build firmware → compute SHA-256 hash → host on Firebase Storage
+→ bake URL and hash into the app build (`--dart-define`) → push from Settings.
+Includes troubleshooting, version strategy, and serial-monitor verification.
+
+---
+
 ## I am getting ready to ship to customers
 
 → **[PRE_PRODUCTION_GUIDE.md](./PRE_PRODUCTION_GUIDE.md)**
