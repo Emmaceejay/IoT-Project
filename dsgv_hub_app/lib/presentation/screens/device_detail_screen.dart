@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../domain/models/matter_device.dart';
+import '../../domain/models/smart_device.dart';
 import '../../domain/services/device_manager.dart';
 import '../../domain/services/ota_service.dart';
 import 'device_settings_screen.dart';
@@ -11,7 +11,7 @@ import 'device_settings_screen.dart';
 /// – Live telemetry
 /// – Manifest-driven OTA firmware update controls
 class DeviceDetailScreen extends ConsumerStatefulWidget {
-  final MatterDevice device;
+  final SmartDevice device;
   const DeviceDetailScreen({super.key, required this.device});
 
   @override
@@ -97,7 +97,7 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
   // ── OTA section ────────────────────────────────────────────────────────────
 
   Widget _buildOtaSection(
-    MatterDevice device,
+    SmartDevice device,
     bool isOnline,
     AsyncValue<FirmwareManifest?> manifestAsync,
     OtaOrchestratorService otaService,
@@ -150,7 +150,7 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
 
   Widget _manifestDataWidget(
     FirmwareManifest? manifest,
-    MatterDevice device,
+    SmartDevice device,
     bool isOnline,
     OtaOrchestratorService otaService,
   ) {
@@ -384,7 +384,7 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
     navigator.pop();
   }
 
-  Widget _infoCard(bool isOnline, MatterDevice device) {
+  Widget _infoCard(bool isOnline, SmartDevice device) {
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),

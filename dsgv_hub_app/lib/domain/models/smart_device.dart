@@ -12,16 +12,16 @@ enum PowerRestoreMode {
   on,
 }
 
-/// Represents a single Matter-compliant IoT Device in the ecosystem.
-/// The [capabilities] list is the Schema-Driven UI contract — the app
-/// reads this to decide which controls to render dynamically.
-class MatterDevice {
-  final String uniqueDeviceId; // e.g., MAC address or Matter Node ID
+/// A single DSGV IoT device.
+/// [capabilities] is the Schema-Driven UI contract — the app reads this to
+/// decide which controls to render dynamically.
+class SmartDevice {
+  final String uniqueDeviceId; // e.g., MAC address
   final String deviceName;
   final DeviceStatus status;
   final List<String> capabilities; // e.g., ['relay', 'dimmer', 'temperature']
-  final Map<String, dynamic> telemetry; // Latest known state payload
-  final String? localIp; // Direct HTTP transport (Tasmota-style, same LAN)
+  final Map<String, dynamic> telemetry; // latest known state payload
+  final String? localIp; // direct HTTP transport (same LAN)
 
   // 32-char hex token exchanged over BLE at first provisioning.
   // Never transmitted over MQTT. Used to authenticate broker-change commands.
@@ -34,19 +34,16 @@ class MatterDevice {
   final PowerRestoreMode powerRestoreMode;
 
   /// Model identifier matching the firmware manifest key, e.g. "1gang_switch".
-  /// Populated from the "device_type" field in the MQTT announce message.
-  /// Empty string means the device is running firmware older than the manifest feature.
   final String deviceType;
 
   /// Firmware version string reported by the device, e.g. "1.0.0".
-  /// Populated from the "firmware" field in the MQTT announce message.
   final String firmwareVersion;
 
   /// What to show in the UI — user's custom label if set, firmware name otherwise.
   String get displayName =>
       (customName != null && customName!.isNotEmpty) ? customName! : deviceName;
 
-  const MatterDevice({
+  const SmartDevice({
     required this.uniqueDeviceId,
     required this.deviceName,
     this.status = DeviceStatus.offline,
@@ -60,9 +57,8 @@ class MatterDevice {
     this.firmwareVersion = '',
   });
 
-  /// Parses a capability-discovery JSON payload from a connecting device.
-  factory MatterDevice.fromJson(Map<String, dynamic> json) {
-    return MatterDevice(
+  factory SmartDevice.fromJson(Map<String, dynamic> json) {
+    return SmartDevice(
       uniqueDeviceId: json['device_id'] as String,
       deviceName: json['name'] as String,
       status: _parseStatus(json['status'] as String?),
@@ -86,8 +82,7 @@ class MatterDevice {
     }
   }
 
-  /// Produces a new instance with updated fields. Keeps data immutable.
-  MatterDevice copyWith({
+  SmartDevice copyWith({
     String? deviceName,
     DeviceStatus? status,
     List<String>? capabilities,
@@ -99,7 +94,7 @@ class MatterDevice {
     String? deviceType,
     String? firmwareVersion,
   }) {
-    return MatterDevice(
+    return SmartDevice(
       uniqueDeviceId: uniqueDeviceId,
       deviceName: deviceName ?? this.deviceName,
       status: status ?? this.status,
@@ -136,5 +131,6 @@ class MatterDevice {
   }
 
   @override
-  String toString() => 'MatterDevice(id: $uniqueDeviceId, name: $deviceName, status: ${status.name})';
+  String toString() =>
+      'SmartDevice(id: $uniqueDeviceId, name: $deviceName, status: ${status.name})';
 }

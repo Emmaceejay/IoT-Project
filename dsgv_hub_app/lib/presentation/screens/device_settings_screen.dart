@@ -1,16 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../domain/models/matter_device.dart';
+import '../../domain/models/smart_device.dart';
+import '../../domain/models/room.dart';
 import '../../domain/services/ble_provisioning_service.dart';
 import '../../domain/services/device_manager.dart';
+import '../../domain/services/room_service.dart';
 
-/// Device Settings Screen
-///
-/// All per-device configuration lives here — rename, broker overrides, etc.
-/// Accessible only via the detail screen to prevent accidental edits from the
-/// dashboard.
 class DeviceSettingsScreen extends ConsumerStatefulWidget {
-  final MatterDevice device;
+  final SmartDevice device;
 
   const DeviceSettingsScreen({super.key, required this.device});
 
@@ -21,16 +18,14 @@ class DeviceSettingsScreen extends ConsumerStatefulWidget {
 
 class _DeviceSettingsScreenState extends ConsumerState<DeviceSettingsScreen> {
   late final TextEditingController _nameController;
-  final _wifiSsidCtrl  = TextEditingController();
-  final _wifiPassCtrl  = TextEditingController();
+  final _wifiSsidCtrl = TextEditingController();
+  final _wifiPassCtrl = TextEditingController();
 
-  bool _wifiObscure       = true;
-  bool _wifiChanging      = false;
-  bool _wifiSuccess       = false;
+  bool _wifiObscure  = true;
+  bool _wifiChanging = false;
+  bool _wifiSuccess  = false;
   String? _wifiStatus;
 
-  /// True when the device has at least one relay — power restore only applies
-  /// to output devices, not pure sensors.
   bool get _hasRelay => widget.device.capabilities
       .any((c) => c == 'relay' || c.startsWith('relay_'));
 
@@ -71,9 +66,9 @@ class _DeviceSettingsScreenState extends ConsumerState<DeviceSettingsScreen> {
     }
 
     final device = ref.read(deviceManagerProvider).valueOrNull?.firstWhere(
-          (d) => d.uniqueDeviceId == widget.device.uniqueDeviceId,
-          orElse: () => widget.device,
-        ) ??
+              (d) => d.uniqueDeviceId == widget.device.uniqueDeviceId,
+              orElse: () => widget.device,
+            ) ??
         widget.device;
 
     if (device.authToken == null) {
@@ -82,12 +77,15 @@ class _DeviceSettingsScreenState extends ConsumerState<DeviceSettingsScreen> {
       return;
     }
 
-    setState(() { _wifiChanging = true; _wifiStatus = null; _wifiSuccess = false; });
+    setState(() {
+      _wifiChanging = true;
+      _wifiStatus = null;
+      _wifiSuccess = false;
+    });
 
     final manager = ref.read(deviceManagerProvider.notifier);
 
     if (device.status == DeviceStatus.online) {
-      // ── Device is online: send via authenticated MQTT command ─────────────
       await manager.changeDeviceWifi(
         device.uniqueDeviceId,
         device.authToken!,
@@ -97,19 +95,18 @@ class _DeviceSettingsScreenState extends ConsumerState<DeviceSettingsScreen> {
       if (!mounted) return;
       setState(() {
         _wifiChanging = false;
-        _wifiSuccess  = true;
-        _wifiStatus   = 'Change sent. The device will reboot and reconnect to "$ssid". '
+        _wifiSuccess = true;
+        _wifiStatus = 'Change sent. The device will reboot and reconnect to "$ssid". '
             'It will appear online again within ~30 seconds.';
       });
     } else {
-      // ── Device is offline: reconnect via BLE using the stored device name ──
       final bleName = await manager.getBleNameForDevice(device.uniqueDeviceId);
       if (!mounted) return;
 
       if (bleName == null) {
         setState(() {
           _wifiChanging = false;
-          _wifiStatus   = 'Device is offline and its Bluetooth name is not stored.\n\n'
+          _wifiStatus = 'Device is offline and its Bluetooth name is not stored.\n\n'
               'Option A: Connect your phone to the "DSGV_Setup_*" Wi-Fi network '
               'the device created, then enter new credentials in your browser.\n\n'
               'Option B: Scan the QR code on the device to re-provision it.';
@@ -117,13 +114,12 @@ class _DeviceSettingsScreenState extends ConsumerState<DeviceSettingsScreen> {
         return;
       }
 
-      // Run BLE provisioning using the stored device name — no QR scan needed.
       setState(() => _wifiStatus = 'Connecting to device via Bluetooth…');
 
       final stream = BleProvisioningService.provision(
         deviceName: bleName,
-        ssid:       ssid,
-        password:   _wifiPassCtrl.text,
+        ssid: ssid,
+        password: _wifiPassCtrl.text,
       );
 
       await for (final status in stream) {
@@ -132,7 +128,7 @@ class _DeviceSettingsScreenState extends ConsumerState<DeviceSettingsScreen> {
         if (status.isTerminal) {
           setState(() {
             _wifiChanging = false;
-            _wifiSuccess  = status.step == ProvisioningStep.success;
+            _wifiSuccess = status.step == ProvisioningStep.success;
             if (_wifiSuccess) {
               _wifiStatus = 'Done! Device is connecting to "$ssid". '
                   'Reconnect your phone to your home Wi-Fi — '
@@ -156,17 +152,40 @@ class _DeviceSettingsScreenState extends ConsumerState<DeviceSettingsScreen> {
         ProvisioningStep.failed                => 'Failed.',
       };
 
+  // ── Room assignment ────────────────────────────────────────────────────────
+
+  Future<void> _showRoomPicker(
+      BuildContext ctx, SmartDevice device, RoomState roomState) async {
+    final currentRoomId = roomState.roomIdForDevice(device.uniqueDeviceId);
+    final selectedId = await showDialog<String?>(
+      context: ctx,
+      builder: (_) => _RoomPickerDialog(
+        rooms: roomState.rooms,
+        currentRoomId: currentRoomId,
+      ),
+    );
+    // selectedId == null means dialog dismissed (no change)
+    // selectedId == '' means "None" was chosen
+    if (!mounted || selectedId == null) return;
+    await ref.read(roomServiceProvider.notifier).assignDevice(
+          device.uniqueDeviceId,
+          selectedId.isEmpty ? null : selectedId,
+        );
+  }
+
+  // ── Build ──────────────────────────────────────────────────────────────────
+
   @override
   Widget build(BuildContext context) {
-    // Watch live device so the power restore chip updates immediately after send.
-    final device = ref
-            .watch(deviceManagerProvider)
-            .valueOrNull
-            ?.firstWhere(
+    final device = ref.watch(deviceManagerProvider).valueOrNull?.firstWhere(
               (d) => d.uniqueDeviceId == widget.device.uniqueDeviceId,
               orElse: () => widget.device,
             ) ??
         widget.device;
+
+    final roomState =
+        ref.watch(roomServiceProvider).valueOrNull ?? const RoomState();
+    final assignedRoom = roomState.roomForDevice(device.uniqueDeviceId);
 
     return Scaffold(
       backgroundColor: const Color(0xFF0A0E1A),
@@ -183,10 +202,9 @@ class _DeviceSettingsScreenState extends ConsumerState<DeviceSettingsScreen> {
             child: const Text(
               'Save',
               style: TextStyle(
-                color: Color(0xFF00E5FF),
-                fontWeight: FontWeight.w600,
-                fontSize: 15,
-              ),
+                  color: Color(0xFF00E5FF),
+                  fontWeight: FontWeight.w600,
+                  fontSize: 15),
             ),
           ),
         ],
@@ -194,7 +212,7 @@ class _DeviceSettingsScreenState extends ConsumerState<DeviceSettingsScreen> {
       body: ListView(
         padding: const EdgeInsets.all(20),
         children: [
-          // ── Device identity ──────────────────────────────────────────
+          // ── Identity ────────────────────────────────────────────────────
           _section('Identity'),
           _card(
             child: Column(
@@ -211,11 +229,11 @@ class _DeviceSettingsScreenState extends ConsumerState<DeviceSettingsScreen> {
                     hintText: widget.device.deviceName,
                     hintStyle: const TextStyle(color: Colors.white24),
                     helperText: 'Leave blank to use the auto-generated name',
-                    helperStyle:
-                        const TextStyle(color: Colors.white24, fontSize: 11),
+                    helperStyle: const TextStyle(
+                        color: Colors.white24, fontSize: 11),
                     suffixIcon: IconButton(
-                      icon: const Icon(Icons.clear, size: 18,
-                          color: Colors.white24),
+                      icon: const Icon(Icons.clear,
+                          size: 18, color: Colors.white24),
                       tooltip: 'Revert to auto-generated name',
                       onPressed: () =>
                           setState(() => _nameController.clear()),
@@ -223,15 +241,72 @@ class _DeviceSettingsScreenState extends ConsumerState<DeviceSettingsScreen> {
                     enabledBorder: const UnderlineInputBorder(
                         borderSide: BorderSide(color: Colors.white12)),
                     focusedBorder: const UnderlineInputBorder(
-                        borderSide:
-                            BorderSide(color: Color(0xFF00E5FF))),
+                        borderSide: BorderSide(color: Color(0xFF00E5FF))),
                   ),
                 ),
               ],
             ),
           ),
 
-          // ── Power Restore ────────────────────────────────────────────
+          // ── Room ────────────────────────────────────────────────────────
+          const SizedBox(height: 24),
+          _section('Room'),
+          _card(
+            child: InkWell(
+              borderRadius: BorderRadius.circular(10),
+              onTap: () => _showRoomPicker(context, device, roomState),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 38,
+                      height: 38,
+                      decoration: BoxDecoration(
+                        color: (assignedRoom?.color ??
+                                const Color(0xFF00E5FF))
+                            .withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Icon(
+                        assignedRoom?.icon ?? Icons.home_outlined,
+                        size: 20,
+                        color: assignedRoom?.color ??
+                            const Color(0xFF00E5FF),
+                      ),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            assignedRoom?.name ?? 'Not assigned',
+                            style: TextStyle(
+                              color: assignedRoom != null
+                                  ? Colors.white
+                                  : Colors.white38,
+                              fontSize: 15,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          const Text(
+                            'Tap to change room',
+                            style: TextStyle(
+                                color: Colors.white24, fontSize: 11),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Icon(Icons.chevron_right,
+                        color: Colors.white24, size: 20),
+                  ],
+                ),
+              ),
+            ),
+          ),
+
+          // ── Power Restore ────────────────────────────────────────────────
           if (_hasRelay) ...[
             const SizedBox(height: 24),
             _section('Power Restore'),
@@ -242,9 +317,7 @@ class _DeviceSettingsScreenState extends ConsumerState<DeviceSettingsScreen> {
                   const Text(
                     'What should this device do when power returns after an outage or restart?',
                     style: TextStyle(
-                        color: Colors.white54,
-                        fontSize: 12,
-                        height: 1.5),
+                        color: Colors.white54, fontSize: 12, height: 1.5),
                   ),
                   const SizedBox(height: 12),
                   _restoreOption(
@@ -280,8 +353,8 @@ class _DeviceSettingsScreenState extends ConsumerState<DeviceSettingsScreen> {
                         SizedBox(width: 6),
                         Text(
                           'Device is offline — setting will apply on reconnect.',
-                          style:
-                              TextStyle(color: Colors.white38, fontSize: 11),
+                          style: TextStyle(
+                              color: Colors.white38, fontSize: 11),
                         ),
                       ],
                     ),
@@ -293,7 +366,7 @@ class _DeviceSettingsScreenState extends ConsumerState<DeviceSettingsScreen> {
 
           const SizedBox(height: 24),
 
-          // ── Change Wi-Fi ─────────────────────────────────────────────
+          // ── Change Wi-Fi ─────────────────────────────────────────────────
           _section('Wi-Fi Network'),
           _card(
             child: Column(
@@ -368,8 +441,8 @@ class _DeviceSettingsScreenState extends ConsumerState<DeviceSettingsScreen> {
                     style: ElevatedButton.styleFrom(
                       backgroundColor: const Color(0xFF00E5FF),
                       foregroundColor: Colors.black,
-                      disabledBackgroundColor:
-                          const Color(0xFF00E5FF).withValues(alpha: 0.35),
+                      disabledBackgroundColor: const Color(0xFF00E5FF)
+                          .withValues(alpha: 0.35),
                       padding: const EdgeInsets.symmetric(vertical: 13),
                       shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(10)),
@@ -440,14 +513,13 @@ class _DeviceSettingsScreenState extends ConsumerState<DeviceSettingsScreen> {
 
           const SizedBox(height: 24),
 
-          // ── Read-only device info ────────────────────────────────────
+          // ── Device info ──────────────────────────────────────────────────
           _section('Device Info'),
           _card(
             child: Column(
               children: [
                 _infoRow('Device ID', widget.device.uniqueDeviceId),
-                _infoRow(
-                    'Firmware Name', widget.device.deviceName),
+                _infoRow('Firmware Name', widget.device.deviceName),
                 _infoRow(
                     'Capabilities',
                     widget.device.capabilities.isEmpty
@@ -482,7 +554,6 @@ class _DeviceSettingsScreenState extends ConsumerState<DeviceSettingsScreen> {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Radio indicator
             Container(
               width: 20,
               height: 20,
@@ -490,9 +561,7 @@ class _DeviceSettingsScreenState extends ConsumerState<DeviceSettingsScreen> {
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 border: Border.all(
-                  color: selected
-                      ? const Color(0xFF00E5FF)
-                      : Colors.white24,
+                  color: selected ? const Color(0xFF00E5FF) : Colors.white24,
                   width: 2,
                 ),
               ),
@@ -509,13 +578,10 @@ class _DeviceSettingsScreenState extends ConsumerState<DeviceSettingsScreen> {
                     )
                   : null,
             ),
-            // Icon
             Icon(icon,
                 size: 18,
-                color:
-                    selected ? const Color(0xFF00E5FF) : Colors.white38),
+                color: selected ? const Color(0xFF00E5FF) : Colors.white38),
             const SizedBox(width: 10),
-            // Text
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -531,7 +597,9 @@ class _DeviceSettingsScreenState extends ConsumerState<DeviceSettingsScreen> {
                   const SizedBox(height: 2),
                   Text(description,
                       style: const TextStyle(
-                          color: Colors.white38, fontSize: 11, height: 1.4)),
+                          color: Colors.white38,
+                          fontSize: 11,
+                          height: 1.4)),
                 ],
               ),
             ),
@@ -556,8 +624,7 @@ class _DeviceSettingsScreenState extends ConsumerState<DeviceSettingsScreen> {
         decoration: BoxDecoration(
           color: const Color(0xFF121826),
           borderRadius: BorderRadius.circular(14),
-          border:
-              Border.all(color: Colors.white.withValues(alpha: 0.06)),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
         ),
         child: child,
       );
@@ -581,4 +648,125 @@ class _DeviceSettingsScreenState extends ConsumerState<DeviceSettingsScreen> {
           ],
         ),
       );
+}
+
+// ── Room picker dialog ─────────────────────────────────────────────────────────
+
+class _RoomPickerDialog extends StatefulWidget {
+  final List<Room> rooms;
+  final String? currentRoomId;
+
+  const _RoomPickerDialog({required this.rooms, required this.currentRoomId});
+
+  @override
+  State<_RoomPickerDialog> createState() => _RoomPickerDialogState();
+}
+
+class _RoomPickerDialogState extends State<_RoomPickerDialog> {
+  late String? _selected;
+
+  @override
+  void initState() {
+    super.initState();
+    _selected = widget.currentRoomId;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: const Color(0xFF121826),
+      title: const Text('Assign to Room',
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // None option
+            _RoomOption(
+              label: 'Not assigned',
+              icon: Icons.home_outlined,
+              color: Colors.white38,
+              selected: _selected == null,
+              onTap: () => setState(() => _selected = ''),
+            ),
+            if (widget.rooms.isNotEmpty) const Divider(color: Colors.white12),
+            ...widget.rooms.map((r) => _RoomOption(
+                  label: r.name,
+                  icon: r.icon,
+                  color: r.color,
+                  selected: _selected == r.id,
+                  onTap: () => setState(() => _selected = r.id),
+                )),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel',
+              style: TextStyle(color: Colors.white54)),
+        ),
+        ElevatedButton(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFF00E5FF),
+            foregroundColor: Colors.black,
+          ),
+          onPressed: () => Navigator.pop(context, _selected ?? ''),
+          child: const Text('Confirm'),
+        ),
+      ],
+    );
+  }
+}
+
+class _RoomOption extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final Color color;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _RoomOption({
+    required this.label,
+    required this.icon,
+    required this.color,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(10),
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+        child: Row(
+          children: [
+            Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Icon(icon, size: 18, color: color),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(label,
+                  style: TextStyle(
+                    color: selected ? Colors.white : Colors.white70,
+                    fontSize: 14,
+                    fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
+                  )),
+            ),
+            if (selected)
+              const Icon(Icons.check_circle,
+                  color: Color(0xFF00E5FF), size: 18),
+          ],
+        ),
+      ),
+    );
+  }
 }

@@ -2,11 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../domain/services/mqtt_service.dart';
 import '../screens/dashboard_screen.dart';
-import '../screens/matter_pairing_screen.dart';
 import '../screens/settings_screen.dart';
 
-/// Root shell with a persistent bottom navigation bar.
-/// Houses Dashboard, Pair Device, and Settings tabs.
+/// Root shell with a 2-tab bottom navigation bar: Dashboard and Settings.
+/// Device pairing is accessed via the "+" button on the dashboard — not via
+/// a persistent tab — so the camera never opens unexpectedly.
 class AppShell extends ConsumerStatefulWidget {
   const AppShell({super.key});
 
@@ -20,7 +20,6 @@ class _AppShellState extends ConsumerState<AppShell> {
   @override
   void initState() {
     super.initState();
-    // Auto-connect to the factory or previously saved broker on startup
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(mqttServiceProvider.notifier).connect();
     });
@@ -28,7 +27,6 @@ class _AppShellState extends ConsumerState<AppShell> {
 
   final List<Widget> _screens = const [
     DashboardScreen(),
-    MatterPairingScreen(),
     SettingsScreen(),
   ];
 
@@ -49,11 +47,6 @@ class _AppShellState extends ConsumerState<AppShell> {
             icon: Icon(Icons.dashboard_outlined),
             selectedIcon: Icon(Icons.dashboard, color: Color(0xFF00E5FF)),
             label: 'Dashboard',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.add_circle_outline),
-            selectedIcon: Icon(Icons.add_circle, color: Color(0xFF00E5FF)),
-            label: 'Add Device',
           ),
           NavigationDestination(
             icon: Icon(Icons.settings_outlined),

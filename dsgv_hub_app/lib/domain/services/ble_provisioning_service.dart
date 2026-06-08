@@ -65,7 +65,9 @@ class ProvisioningDeviceInfo {
   String get label {
     if (capabilities.contains('rgb'))                              return 'RGB Light';
     if (capabilities.contains('brightness') &&
-        capabilities.contains('color_temp'))                       return 'Colour Temp Light';
+        capabilities.contains('color_temp')) {
+      return 'Colour Temp Light';
+    }
     if (capabilities.contains('brightness'))                       return 'Dimmable Light';
     if (capabilities.contains('hvac_mode'))                        return 'Thermostat';
     if (capabilities.contains('motion'))                           return 'Motion Sensor';
@@ -197,6 +199,7 @@ class BleProvisioningService {
       return;
     }
 
+    StreamSubscription<List<int>>? statusSub;
     try {
       // ── Step 4: Discover services ──────────────────────────────────────────
       yield const ProvisioningStatus(ProvisioningStep.discoveringServices);
@@ -228,11 +231,18 @@ class BleProvisioningService {
         return;
       }
 
-      // Subscribe to status notifications before writing credentials so we
-      // don't miss the "success" notification that arrives right after the write.
+      // Enable notifications and subscribe eagerly BEFORE writing credentials.
+      // The firmware fires success/failed inside the write callback, so a lazy
+      // broadcast-stream subscription set up after the write would miss it.
       await statusChar.setNotifyValue(true);
-      final statusUpdates = statusChar.onValueReceived
-          .map((bytes) => utf8.decode(bytes, allowMalformed: true));
+      final terminalCompleter = Completer<String>();
+      statusSub = statusChar.onValueReceived.listen((bytes) {
+        final s = utf8.decode(bytes, allowMalformed: true);
+        if (!terminalCompleter.isCompleted &&
+            (s.startsWith('success:') || s.startsWith('failed:'))) {
+          terminalCompleter.complete(s);
+        }
+      });
 
       // ── Step 5: Write credentials (+ optional device config) ──────────────
       yield const ProvisioningStatus(ProvisioningStep.sendingCredentials);
@@ -250,9 +260,17 @@ class BleProvisioningService {
         'Waiting for device to connect to Wi-Fi…',
       );
 
-      final deviceStatus = await statusUpdates
-          .timeout(const Duration(seconds: 15))
-          .firstWhere((s) => s.startsWith('success:') || s.startsWith('failed:'));
+      final String deviceStatus;
+      try {
+        deviceStatus = await terminalCompleter.future
+            .timeout(const Duration(seconds: 15));
+      } on TimeoutException {
+        yield const ProvisioningStatus(
+          ProvisioningStep.failed,
+          'Device did not respond. Ensure it is powered on and within Bluetooth range.',
+        );
+        return;
+      }
 
       if (deviceStatus.startsWith('success:')) {
         // Format: "success:<32-hex-token>:<12-hex-wifi-mac>"
@@ -261,22 +279,24 @@ class BleProvisioningService {
         final provisionedId   = parts.length >= 3 ? parts[2] : null;
         yield ProvisioningStatus(
           ProvisioningStep.success,
-          'Device provisioned! It will reboot and join your network.',
+          'Wi-Fi credentials accepted. The device is rebooting and will join your network.',
           authToken,
           provisionedId,
         );
       } else {
-        final reason = deviceStatus.replaceFirst('failed:', '');
+        final reason = deviceStatus
+            .replaceFirst('failed:', '')
+            .replaceAll('_', ' ');
         yield ProvisioningStatus(
           ProvisioningStep.failed,
-          'Device rejected credentials: $reason',
+          'Device rejected the credentials: $reason.',
         );
       }
     } catch (e) {
       yield ProvisioningStatus(
           ProvisioningStep.failed, 'Provisioning error: ${_friendly(e)}');
     } finally {
-      // device is always non-null here: any earlier failure path calls return.
+      await statusSub?.cancel();
       // Device reboots on success, but we disconnect cleanly on all paths.
       try {
         await device.disconnect();

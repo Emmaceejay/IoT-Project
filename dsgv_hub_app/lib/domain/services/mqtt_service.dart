@@ -7,7 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:mqtt_client/mqtt_client.dart';
 import 'package:mqtt_client/mqtt_server_client.dart';
-import '../models/matter_device.dart';
+import '../models/smart_device.dart';
 import '../models/mqtt_config.dart';
 import 'device_manager.dart';
 
@@ -293,7 +293,7 @@ class MqttConnectivityService extends StateNotifier<MqttConnectionStatus>
       case 'announce':
         try {
           final map = jsonDecode(payload) as Map<String, dynamic>;
-          final device = MatterDevice.fromJson(map);
+          final device = SmartDevice.fromJson(map);
           _ref.read(deviceManagerProvider.notifier).handleAnnounce(device);
           debugPrint('[MQTT] Announce from $deviceId — IP: ${device.localIp}');
         } catch (_) {

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../domain/models/matter_device.dart';
+import '../../domain/models/smart_device.dart';
 import '../../domain/services/device_manager.dart';
 import '../widgets/schema_driven_ui_builder.dart';
 import '../screens/device_detail_screen.dart';
@@ -12,7 +12,7 @@ import '../screens/device_detail_screen.dart';
 /// Devices with complex controls (dimmer, RGB, CCT, thermostat) keep the
 /// tap-to-expand pattern so the card stays compact when collapsed.
 class DeviceCard extends ConsumerStatefulWidget {
-  final MatterDevice device;
+  final SmartDevice device;
 
   const DeviceCard({super.key, required this.device});
 

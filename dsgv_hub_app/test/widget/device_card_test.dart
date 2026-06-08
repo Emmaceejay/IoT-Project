@@ -1,22 +1,22 @@
 ﻿import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:dsgv_hub_app/domain/models/matter_device.dart';
+import 'package:dsgv_hub_app/domain/models/smart_device.dart';
 import 'package:dsgv_hub_app/domain/services/device_manager.dart';
 import 'package:dsgv_hub_app/data/repositories/device_repository.dart';
 import 'package:dsgv_hub_app/presentation/widgets/device_card.dart';
 
 // Minimal stub repository so DeviceManager never touches Isar in tests.
 class _StubRepository implements DeviceRepository {
-  final List<MatterDevice> devices;
+  final List<SmartDevice> devices;
   _StubRepository(this.devices);
 
   @override
-  Future<List<MatterDevice>> getDevices() async => devices;
+  Future<List<SmartDevice>> getDevices() async => devices;
   @override
   Future<void> updateDeviceState(String id, Map<String, dynamic> patch) async {}
   @override
-  Future<void> provisionDevice(MatterDevice device) async {}
+  Future<void> provisionDevice(SmartDevice device) async {}
   @override
   Future<void> removeDevice(String id) async {}
   @override
@@ -27,7 +27,7 @@ class _StubRepository implements DeviceRepository {
   Future<void> updatePowerRestoreMode(String id, PowerRestoreMode mode) async {}
 }
 
-Widget _wrap(Widget child, {List<MatterDevice> devices = const []}) {
+Widget _wrap(Widget child, {List<SmartDevice> devices = const []}) {
   return ProviderScope(
     overrides: [
       deviceRepositoryProvider.overrideWithValue(_StubRepository(devices)),
@@ -40,7 +40,7 @@ Widget _wrap(Widget child, {List<MatterDevice> devices = const []}) {
 }
 
 void main() {
-  const onlineDevice = MatterDevice(
+  const onlineDevice = SmartDevice(
     uniqueDeviceId: 'CARD-001',
     deviceName: 'Living Room Bulb',
     status: DeviceStatus.online,
@@ -48,7 +48,7 @@ void main() {
     telemetry: {'power': true, 'brightness': 75},
   );
 
-  const offlineDevice = MatterDevice(
+  const offlineDevice = SmartDevice(
     uniqueDeviceId: 'CARD-002',
     deviceName: 'Garage Door',
     status: DeviceStatus.offline,

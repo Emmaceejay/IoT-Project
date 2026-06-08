@@ -1,6 +1,6 @@
 import 'dart:convert';
 import 'package:objectbox/objectbox.dart';
-import '../../domain/models/matter_device.dart';
+import '../../domain/models/smart_device.dart';
 
 @Entity()
 class DeviceEntity {
@@ -46,7 +46,7 @@ class DeviceEntity {
 
   // ── Conversions ───────────────────────────────────────────────────────────
 
-  MatterDevice toDomain() => MatterDevice(
+  SmartDevice toDomain() => SmartDevice(
         uniqueDeviceId: uniqueDeviceId,
         deviceName: deviceName,
         status: DeviceStatus.values.firstWhere(
@@ -69,7 +69,7 @@ class DeviceEntity {
         firmwareVersion: firmwareVersion,
       );
 
-  static DeviceEntity fromDomain(MatterDevice d) => DeviceEntity()
+  static DeviceEntity fromDomain(SmartDevice d) => DeviceEntity()
     ..uniqueDeviceId = d.uniqueDeviceId
     ..deviceName = d.deviceName
     ..statusName = d.status.name

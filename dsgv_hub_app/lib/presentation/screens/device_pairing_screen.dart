@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
@@ -6,11 +6,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import '../../domain/services/ble_provisioning_service.dart';
 import '../../domain/services/device_manager.dart';
-import '../../domain/services/matter_commissioning_service.dart';
+import '../../domain/services/device_commissioning_service.dart';
 
 // ── QR code type ──────────────────────────────────────────────────────────────
 
-enum _QrType { dsgvProvision, matter }
+enum _QrType { dsgvProvision, shortCode }
 
 class _ParsedQr {
   final _QrType type;
@@ -22,8 +22,8 @@ class _ParsedQr {
   const _ParsedQr.dsgv(this.raw, this.dsgvDeviceName)
       : type = _QrType.dsgvProvision;
 
-  const _ParsedQr.matter(this.raw)
-      : type = _QrType.matter,
+  const _ParsedQr.shortCode(this.raw)
+      : type = _QrType.shortCode,
         dsgvDeviceName = null;
 
   /// Parses a raw QR string and returns a typed result, or null if unknown.
@@ -37,9 +37,9 @@ class _ParsedQr {
       }
       return null;
     }
-    // MT:XXXXXX — Matter setup payload
+    // MT:XXXXXX — setup payload short code
     if (raw.startsWith('MT:')) {
-      return _ParsedQr.matter(raw);
+      return _ParsedQr.shortCode(raw);
     }
     return null;
   }
@@ -47,15 +47,21 @@ class _ParsedQr {
 
 // ── Screen ────────────────────────────────────────────────────────────────────
 
-class MatterPairingScreen extends ConsumerStatefulWidget {
-  const MatterPairingScreen({super.key});
+class DevicePairingScreen extends ConsumerStatefulWidget {
+  /// When true, the camera opens immediately on load.
+  /// When false (default), the scanner shows an idle placeholder and the user
+  /// taps to activate it.  Pass [openScanner: false] when launching from the
+  /// "Enter pair code" flow so the manual entry form is shown first.
+  final bool openScanner;
+
+  const DevicePairingScreen({super.key, this.openScanner = false});
 
   @override
-  ConsumerState<MatterPairingScreen> createState() =>
-      _MatterPairingScreenState();
+  ConsumerState<DevicePairingScreen> createState() =>
+      _DevicePairingScreenState();
 }
 
-class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
+class _DevicePairingScreenState extends ConsumerState<DevicePairingScreen> {
   // Controllers
   final _nameCtrl     = TextEditingController();
   final _ssidCtrl     = TextEditingController();
@@ -65,9 +71,8 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
     facing: CameraFacing.back,
   );
 
-  // State
-  _ParsedQr? _parsedQr;
-  bool _scannerActive = true;
+  // State — initialised in initState via widget.openScanner
+  late bool _scannerActive;
   bool _obscurePassword = true;
 
   // Provisioning/commissioning progress
@@ -76,21 +81,28 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
   bool _isSuccess = false;
   ProvisioningStep? _provStep;
 
-  // Pre-provisioning device info (identity + Wi-Fi networks), fetched
-  // automatically after the QR code is scanned.
+  // Pre-provisioning device info fetched automatically after QR scan.
+  _ParsedQr? _parsedQr;
   ProvisioningDeviceInfo? _deviceInfo;
   bool _isLoadingDeviceInfo = false;
-  bool _manualSsidEntry = false; // user opted to type SSID instead of picking
+  bool _manualSsidEntry = false;
 
   // ── Option 1: manual pair-code entry ─────────────────────────────────────
   final _pairCodeCtrl = TextEditingController();
-  bool _showManualEntry = false;
+  late bool _showManualEntry;
 
   // ── Option 2: BLE device picker ──────────────────────────────────────────
   bool _isScanning = false;
   List<BluetoothDevice> _nearbyDevices = [];
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
+
+  @override
+  void initState() {
+    super.initState();
+    _scannerActive    = widget.openScanner;
+    _showManualEntry  = !widget.openScanner;
+  }
 
   @override
   void dispose() {
@@ -110,10 +122,9 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
 
     final parsed = _ParsedQr.tryParse(raw);
     if (parsed == null) {
-      // Scanned something unrecognised — show a brief hint
       setState(() {
         _statusMessage =
-            'Unrecognised QR code. Scan a DSGV provisioning or Matter QR code.';
+            'Unrecognised QR code. Scan a DSGV provisioning or setup QR code.';
       });
       return;
     }
@@ -125,10 +136,9 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
       _statusMessage = parsed.type == _QrType.dsgvProvision
           ? 'DSGV device found: ${parsed.dsgvDeviceName}.\n'
             'Enter a name and your Wi-Fi credentials, then tap Provision.'
-          : 'Matter QR captured. Enter a name and tap Commission.';
+          : 'QR captured. Enter a name and tap Commission.';
     });
 
-    // Immediately fetch device identity + Wi-Fi networks in one BLE session.
     if (parsed.type == _QrType.dsgvProvision &&
         parsed.dsgvDeviceName != null) {
       _loadProvisioningData(parsed.dsgvDeviceName!);
@@ -151,8 +161,6 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
     _scannerCtrl.start();
   }
 
-  /// Connects to the device in a background BLE session, reads device identity
-  /// and nearby Wi-Fi networks in one connection, then disconnects.
   Future<void> _loadProvisioningData(String deviceName) async {
     setState(() => _isLoadingDeviceInfo = true);
     final info = await BleProvisioningService.fetchProvisioningData(deviceName);
@@ -160,7 +168,6 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
     setState(() {
       _deviceInfo = info;
       _isLoadingDeviceInfo = false;
-      // Auto-select the strongest network if the user hasn't typed anything yet
       if (info.networks.length == 1 && _ssidCtrl.text.isEmpty) {
         _ssidCtrl.text = info.networks.first.ssid;
       }
@@ -172,13 +179,14 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
   void _submitManualCode() {
     final code = _pairCodeCtrl.text.trim().toUpperCase();
     if (code.length != 6) {
-      setState(() => _statusMessage = 'Enter the 6-character pair code from the device label.');
+      setState(() =>
+          _statusMessage = 'Enter the 6-character pair code from the device label.');
       return;
     }
     final deviceName = 'DSGVHub_$code';
     _scannerCtrl.stop();
     setState(() {
-      _parsedQr      = _ParsedQr.dsgv('manual:$deviceName', deviceName);
+      _parsedQr = _ParsedQr.dsgv('manual:$deviceName', deviceName);
       _scannerActive = false;
       _showManualEntry = false;
       _nearbyDevices = [];
@@ -191,7 +199,11 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
   // ── Option 2: BLE device picker ──────────────────────────────────────────
 
   Future<void> _scanNearbyDevices() async {
-    setState(() { _isScanning = true; _nearbyDevices = []; _statusMessage = null; });
+    setState(() {
+      _isScanning = true;
+      _nearbyDevices = [];
+      _statusMessage = null;
+    });
     final found = await BleProvisioningService.discoverNearbyDevices();
     if (!mounted) return;
     if (found.isEmpty) {
@@ -202,13 +214,16 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
       });
       return;
     }
-    setState(() { _isScanning = false; _nearbyDevices = found; });
+    setState(() {
+      _isScanning = false;
+      _nearbyDevices = found;
+    });
   }
 
   void _selectNearbyDevice(BluetoothDevice device) {
     final deviceName = device.platformName;
     setState(() {
-      _parsedQr      = _ParsedQr.dsgv('picker:$deviceName', deviceName);
+      _parsedQr = _ParsedQr.dsgv('picker:$deviceName', deviceName);
       _scannerActive = false;
       _nearbyDevices = [];
       _showManualEntry = false;
@@ -233,13 +248,14 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
     if (_parsedQr!.type == _QrType.dsgvProvision) {
       await _runBleProvisioning();
     } else {
-      await _runMatterCommissioning();
+      await _runCommissioning();
     }
   }
 
   Future<void> _runBleProvisioning() async {
     if (_ssidCtrl.text.trim().isEmpty) {
-      setState(() => _statusMessage = 'Please enter your Wi-Fi network name (SSID).');
+      setState(
+          () => _statusMessage = 'Please enter your Wi-Fi network name (SSID).');
       return;
     }
     if (_passwordCtrl.text.isEmpty) {
@@ -253,15 +269,12 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
       _isSuccess = false;
     });
 
-    final service = ref.read(matterCommissioningProvider);
+    final service = ref.read(deviceCommissioningProvider);
     final stream = service.provisionViaBle(
       deviceName:   _parsedQr!.dsgvDeviceName!,
       ssid:         _ssidCtrl.text.trim(),
       password:     _passwordCtrl.text,
       assignedName: _nameCtrl.text.trim(),
-      // Device type/capabilities/relayCount are NOT sent — the device already
-      // has the correct config baked into firmware. The app reads them for
-      // display only; overriding them from the app is an error source.
     );
 
     await for (final status in stream) {
@@ -275,24 +288,16 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
       if (status.step == ProvisioningStep.success) {
         if (status.authToken != null && status.provisionedDeviceId != null) {
           final manager = ref.read(deviceManagerProvider.notifier);
-
-          // Store token locally so MQTT announce can be matched to this device
           manager.setPendingToken(
             status.provisionedDeviceId!,
             status.authToken!,
           );
-
-          // Persist BLE name so the app can re-provision this device via BLE
-          // (without QR scan) if WiFi needs to change in the future.
           if (_parsedQr?.dsgvDeviceName != null) {
             manager.setPendingBleName(
               status.provisionedDeviceId!,
               _parsedQr!.dsgvDeviceName!,
             );
           }
-
-          // Register device in Firebase — creates its config entry so the
-          // firmware can fetch the broker via HTTPS on first boot
           manager.registerDevice(
             status.provisionedDeviceId!,
             status.authToken!,
@@ -305,14 +310,14 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
     }
   }
 
-  Future<void> _runMatterCommissioning() async {
+  Future<void> _runCommissioning() async {
     setState(() {
       _inProgress = true;
-      _statusMessage = 'Commissioning Matter device…';
+      _statusMessage = 'Commissioning device…';
       _isSuccess = false;
     });
 
-    final service = ref.read(matterCommissioningProvider);
+    final service = ref.read(deviceCommissioningProvider);
     final result = await service.commissionDevice(
       qrCodeString: _parsedQr!.raw,
       assignedName: _nameCtrl.text.trim(),
@@ -347,7 +352,6 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
   bool get _canAct {
     if (_inProgress || _parsedQr == null) return false;
     if (_nameCtrl.text.trim().isEmpty) return false;
-    // For BLE provisioning the SSID is also mandatory
     if (_parsedQr!.type == _QrType.dsgvProvision &&
         _ssidCtrl.text.trim().isEmpty) {
       return false;
@@ -386,10 +390,10 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // ── QR Scanner / Preview ─────────────────────────────────────
+            // ── QR Scanner / Preview / Idle ──────────────────────────────
             _buildScannerSection(),
 
-            // ── Fallback options (damaged QR / no QR) ────────────────────
+            // ── Fallback options (damaged QR / no QR) ───────────────────
             if (_parsedQr == null) ...[
               const SizedBox(height: 16),
               _buildFallbackOptions(),
@@ -397,7 +401,7 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
 
             const SizedBox(height: 28),
 
-            // ── Device Name ───────────────────────────────────────────────
+            // ── Device Name ──────────────────────────────────────────────
             _buildTextField(
               controller: _nameCtrl,
               label: 'Device Name (e.g., Kitchen Switch)',
@@ -405,13 +409,13 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
               onChanged: (_) => setState(() {}),
             ),
 
-            // ── Auto-detected device type (DSGV BLE provisioning only) ───
+            // ── Auto-detected device type (DSGV BLE provisioning only) ──
             if (_parsedQr?.type == _QrType.dsgvProvision) ...[
               const SizedBox(height: 16),
               _buildDeviceInfoCard(),
             ],
 
-            // ── Wi-Fi credentials (DSGV BLE provisioning only) ───────────
+            // ── Wi-Fi credentials (DSGV BLE provisioning only) ──────────
             if (_parsedQr?.type == _QrType.dsgvProvision) ...[
               const SizedBox(height: 16),
               _buildSsidSection(),
@@ -435,7 +439,7 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
 
             const SizedBox(height: 20),
 
-            // ── Progress indicator (BLE provisioning) ─────────────────────
+            // ── Progress indicator ────────────────────────────────────────
             if (_inProgress &&
                 _parsedQr?.type == _QrType.dsgvProvision &&
                 _provStep != null) ...[
@@ -445,19 +449,7 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
 
             // ── Status message ────────────────────────────────────────────
             if (_statusMessage != null) ...[
-              Text(
-                _statusMessage!,
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: _isSuccess
-                      ? const Color(0xFF00E5FF)
-                      : _inProgress
-                          ? Colors.white70
-                          : Colors.redAccent,
-                  fontSize: 13,
-                  height: 1.5,
-                ),
-              ),
+              _buildStatusBanner(),
               const SizedBox(height: 16),
             ],
 
@@ -488,7 +480,6 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
 
             const SizedBox(height: 32),
 
-            // ── Info footer ───────────────────────────────────────────────
             _buildFooter(),
           ],
         ),
@@ -511,6 +502,7 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
           borderRadius: BorderRadius.circular(20),
         ),
         child: _scannerActive
+            // ── Camera live ──────────────────────────────────────────────
             ? Stack(children: [
                 MobileScanner(
                   controller: _scannerCtrl,
@@ -523,47 +515,83 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
                     padding: const EdgeInsets.all(8),
                     color: Colors.black54,
                     child: const Text(
-                      'Scan a DSGV provisioning QR (DSGV://…) or Matter QR (MT:…)',
+                      'Scan a DSGV provisioning QR or setup short-code',
                       textAlign: TextAlign.center,
                       style: TextStyle(color: Colors.white70, fontSize: 11),
                     ),
                   ),
                 ),
               ])
-            : Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(
-                    _parsedQr?.type == _QrType.dsgvProvision
-                        ? Icons.bluetooth_searching
-                        : Icons.check_circle,
-                    size: 48,
-                    color: const Color(0xFF00E5FF),
-                  ),
-                  const SizedBox(height: 8),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: Text(
-                      _parsedQr?.type == _QrType.dsgvProvision
-                          ? 'DSGV: ${_parsedQr!.dsgvDeviceName}'
-                          : 'Matter: ${_parsedQr?.raw}',
-                      textAlign: TextAlign.center,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                          color: Colors.white70, fontSize: 12),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  TextButton.icon(
-                    onPressed: _resetScanner,
-                    icon: const Icon(Icons.refresh,
-                        color: Color(0xFF00E5FF), size: 16),
-                    label: const Text('Rescan',
-                        style: TextStyle(color: Color(0xFF00E5FF))),
-                  ),
-                ],
-              ),
+            : _parsedQr != null
+                // ── QR captured ──────────────────────────────────────────
+                ? Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        _parsedQr?.type == _QrType.dsgvProvision
+                            ? Icons.bluetooth_searching
+                            : Icons.check_circle,
+                        size: 48,
+                        color: const Color(0xFF00E5FF),
+                      ),
+                      const SizedBox(height: 8),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: Text(
+                          _parsedQr?.type == _QrType.dsgvProvision
+                              ? 'DSGV: ${_parsedQr!.dsgvDeviceName}'
+                              : 'Code: ${_parsedQr?.raw}',
+                          textAlign: TextAlign.center,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              color: Colors.white70, fontSize: 12),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      TextButton.icon(
+                        onPressed: _resetScanner,
+                        icon: const Icon(Icons.refresh,
+                            color: Color(0xFF00E5FF), size: 16),
+                        label: const Text('Rescan',
+                            style: TextStyle(color: Color(0xFF00E5FF))),
+                      ),
+                    ],
+                  )
+                // ── Idle — user hasn't activated camera yet ───────────────
+                : _buildScanIdlePlaceholder(),
+      ),
+    );
+  }
+
+  Widget _buildScanIdlePlaceholder() {
+    return InkWell(
+      onTap: () {
+        _scannerCtrl.start();
+        setState(() => _scannerActive = true);
+      },
+      child: const Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.qr_code_scanner, size: 52, color: Color(0xFF00E5FF)),
+          SizedBox(height: 12),
+          Text(
+            'Tap to open camera',
+            style: TextStyle(
+                color: Colors.white,
+                fontSize: 15,
+                fontWeight: FontWeight.w500),
+          ),
+          SizedBox(height: 4),
+          Padding(
+            padding: EdgeInsets.symmetric(horizontal: 24),
+            child: Text(
+              'Scan the QR label on the device',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.white38, fontSize: 12),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -600,8 +628,6 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
     );
   }
 
-  /// Shows the device type auto-detected from firmware via BLE.
-  /// While loading, shows a skeleton; on failure, shows nothing (graceful).
   Widget _buildDeviceInfoCard() {
     if (_isLoadingDeviceInfo) {
       return _buildDisabledField(
@@ -644,9 +670,9 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
                 ),
               ),
               const SizedBox(height: 2),
-              Text(
+              const Text(
                 'Auto-detected from device firmware',
-                style: const TextStyle(color: Colors.white38, fontSize: 11),
+                style: TextStyle(color: Colors.white38, fontSize: 11),
               ),
             ],
           ),
@@ -666,27 +692,18 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
       ProvisioningStep.waitingForDevice,
     ];
     final currentIndex = steps.indexOf(step);
-    return Column(
-      children: [
-        LinearProgressIndicator(
-          value: currentIndex < 0
-              ? null
-              : (currentIndex + 1) / steps.length,
-          backgroundColor: const Color(0xFF1E2736),
-          color: const Color(0xFF00E5FF),
-          borderRadius: BorderRadius.circular(4),
-          minHeight: 4,
-        ),
-      ],
+    return LinearProgressIndicator(
+      value: currentIndex < 0 ? null : (currentIndex + 1) / steps.length,
+      backgroundColor: const Color(0xFF1E2736),
+      color: const Color(0xFF00E5FF),
+      borderRadius: BorderRadius.circular(4),
+      minHeight: 4,
     );
   }
 
   // ── Wi-Fi network picker ───────────────────────────────────────────────────
 
-  /// Shows a loading indicator, a tap-to-select dropdown, or a plain text
-  /// field depending on whether the network scan has completed.
   Widget _buildSsidSection() {
-    // Still loading (BLE fetch in progress) — show a disabled field with a spinner
     if (_isLoadingDeviceInfo) {
       return _buildDisabledField(
         icon: Icons.wifi_find,
@@ -702,12 +719,10 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
 
     final nets = _deviceInfo?.networks;
 
-    // Networks available and user hasn't switched to manual entry
     if (nets != null && nets.isNotEmpty && !_manualSsidEntry) {
       return _buildNetworkDropdown(nets);
     }
 
-    // No networks found, scan failed, or manual entry selected
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -733,11 +748,9 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
   }
 
   Widget _buildNetworkDropdown(List<WifiNetwork> networks) {
-    // Ensure the current text value is in the list; if not, default to first.
     final currentSsid = _ssidCtrl.text;
     final inList = networks.any((n) => n.ssid == currentSsid);
     if (!inList) {
-      // Pre-select the strongest network on first render
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && _ssidCtrl.text.isEmpty) {
           setState(() => _ssidCtrl.text = networks.first.ssid);
@@ -751,15 +764,14 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         DropdownButtonFormField<String>(
-          value: selectedSsid,
+          initialValue: selectedSsid,
           dropdownColor: const Color(0xFF121826),
           style: const TextStyle(color: Colors.white, fontSize: 14),
           isExpanded: true,
           decoration: InputDecoration(
             labelText: 'Wi-Fi Network',
             labelStyle: const TextStyle(color: Colors.white38),
-            prefixIcon:
-                const Icon(Icons.wifi, color: Color(0xFF00E5FF)),
+            prefixIcon: const Icon(Icons.wifi, color: Color(0xFF00E5FF)),
             filled: true,
             fillColor: const Color(0xFF121826),
             border: OutlineInputBorder(
@@ -768,24 +780,18 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
             ),
             focusedBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(12),
-              borderSide:
-                  const BorderSide(color: Color(0xFF00E5FF)),
+              borderSide: const BorderSide(color: Color(0xFF00E5FF)),
             ),
           ),
           items: networks
               .map((n) => DropdownMenuItem(
                     value: n.ssid,
                     child: Row(children: [
-                      Icon(
-                        Icons.wifi,
-                        size: 18,
-                        color: _signalColor(n.signalLevel),
-                      ),
+                      Icon(Icons.wifi, size: 18, color: _signalColor(n.signalLevel)),
                       const SizedBox(width: 8),
                       Expanded(
-                        child: Text(n.ssid,
-                            overflow: TextOverflow.ellipsis),
-                      ),
+                          child: Text(n.ssid,
+                              overflow: TextOverflow.ellipsis)),
                       Text('${n.rssi} dBm',
                           style: const TextStyle(
                               color: Colors.white38, fontSize: 11)),
@@ -800,25 +806,22 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
         Align(
           alignment: Alignment.centerRight,
           child: TextButton(
-            onPressed:
-                () => setState(() => _manualSsidEntry = true),
+            onPressed: () => setState(() => _manualSsidEntry = true),
             child: const Text('Type manually',
-                style: TextStyle(
-                    color: Color(0xFF00E5FF), fontSize: 12)),
+                style: TextStyle(color: Color(0xFF00E5FF), fontSize: 12)),
           ),
         ),
       ],
     );
   }
 
-  /// A read-only-looking field used while the network scan is in progress.
-  Widget _buildDisabledField(
-      {required IconData icon,
-      required String label,
-      required Widget trailing}) {
+  Widget _buildDisabledField({
+    required IconData icon,
+    required String label,
+    required Widget trailing,
+  }) {
     return Container(
-      padding:
-          const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
       decoration: BoxDecoration(
         color: const Color(0xFF121826),
         borderRadius: BorderRadius.circular(12),
@@ -828,8 +831,7 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
         const SizedBox(width: 12),
         Expanded(
           child: Text(label,
-              style:
-                  const TextStyle(color: Colors.white38, fontSize: 14)),
+              style: const TextStyle(color: Colors.white38, fontSize: 14)),
         ),
         trailing,
       ]),
@@ -845,13 +847,12 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
     }
   }
 
-  // ── Fallback provisioning options (Option 1 + Option 2) ──────────────────
+  // ── Fallback options ──────────────────────────────────────────────────────
 
   Widget _buildFallbackOptions() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // ── Option 1: Manual pair-code entry ─────────────────────────────
         _buildSectionDivider("Can't scan the QR code?"),
         const SizedBox(height: 10),
 
@@ -882,7 +883,8 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
                     textCapitalization: TextCapitalization.characters,
                     maxLength: 6,
                     inputFormatters: [
-                      FilteringTextInputFormatter.allow(RegExp(r'[A-Fa-f0-9]')),
+                      FilteringTextInputFormatter.allow(
+                          RegExp(r'[A-Fa-f0-9]')),
                     ],
                     style: const TextStyle(
                         color: Colors.white,
@@ -891,11 +893,13 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
                         fontWeight: FontWeight.w600),
                     decoration: InputDecoration(
                       labelText: 'Pair code (6 characters from label)',
-                      labelStyle: const TextStyle(color: Colors.white38, fontSize: 12),
+                      labelStyle:
+                          const TextStyle(color: Colors.white38, fontSize: 12),
                       hintText: 'A1B2C3',
                       hintStyle: const TextStyle(color: Colors.white24),
                       prefixText: 'DSGVHub_  ',
-                      prefixStyle: const TextStyle(color: Colors.white38, fontSize: 13),
+                      prefixStyle:
+                          const TextStyle(color: Colors.white38, fontSize: 13),
                       counterText: '',
                       filled: true,
                       fillColor: const Color(0xFF121826),
@@ -904,7 +908,8 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
                           borderSide: BorderSide.none),
                       focusedBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(12),
-                          borderSide: const BorderSide(color: Color(0xFF00E5FF))),
+                          borderSide:
+                              const BorderSide(color: Color(0xFF00E5FF))),
                     ),
                     onChanged: (_) => setState(() {}),
                   ),
@@ -936,7 +941,6 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
           ),
         ),
 
-        // ── Option 2: BLE device picker ───────────────────────────────────
         const SizedBox(height: 12),
         _buildSectionDivider('or'),
         const SizedBox(height: 10),
@@ -962,7 +966,6 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
           onPressed: _isScanning ? null : _scanNearbyDevices,
         ),
 
-        // Results list
         if (_nearbyDevices.isNotEmpty) ...[
           const SizedBox(height: 10),
           Container(
@@ -1012,10 +1015,97 @@ class _MatterPairingScreenState extends ConsumerState<MatterPairingScreen> {
           ? 'Wi-Fi credentials are sent directly to your device\n'
             'over an encrypted BLE channel. They are never uploaded\n'
             'to any server.'
-          : 'Matter pairing uses the OS-native BLE commissioning\n'
-            'stack to securely onboard your device.',
+          : 'Device pairing uses a secure commissioning flow\n'
+            'to onboard your device.',
       textAlign: TextAlign.center,
-      style: const TextStyle(color: Colors.white24, fontSize: 11, height: 1.6),
+      style:
+          const TextStyle(color: Colors.white24, fontSize: 11, height: 1.6),
+    );
+  }
+
+  Widget _buildStatusBanner() {
+    if (_inProgress) {
+      return Text(
+        _statusMessage!,
+        textAlign: TextAlign.center,
+        style:
+            const TextStyle(color: Colors.white70, fontSize: 13, height: 1.5),
+      );
+    }
+    if (_isSuccess) {
+      return Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: const Color(0xFF071A0F),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+              color: const Color(0xFF00C853).withValues(alpha: 0.45)),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Icon(Icons.check_circle_rounded,
+                color: Color(0xFF00C853), size: 22),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Provisioned successfully',
+                    style: TextStyle(
+                        color: Color(0xFF00C853),
+                        fontWeight: FontWeight.w600,
+                        fontSize: 14),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    _statusMessage!,
+                    style: const TextStyle(
+                        color: Colors.white70, fontSize: 12, height: 1.5),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A0707),
+        borderRadius: BorderRadius.circular(12),
+        border:
+            Border.all(color: Colors.redAccent.withValues(alpha: 0.45)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.error_rounded, color: Colors.redAccent, size: 22),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Provisioning failed',
+                  style: TextStyle(
+                      color: Colors.redAccent,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 14),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  _statusMessage!,
+                  style: const TextStyle(
+                      color: Colors.white70, fontSize: 12, height: 1.5),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

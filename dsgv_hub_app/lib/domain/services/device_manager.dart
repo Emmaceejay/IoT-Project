@@ -5,7 +5,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../../core/objectbox_store_provider.dart';
 import '../../data/datasources/objectbox_device_datasource.dart';
 import '../../data/repositories/device_repository.dart';
-import '../models/matter_device.dart';
+import '../models/smart_device.dart';
 import 'firebase_config_service.dart';
 import 'local_http_service.dart';
 import 'mqtt_service.dart';
@@ -30,7 +30,7 @@ final deviceRepositoryProvider = Provider<DeviceRepository>((ref) {
 ///   1. Local HTTP    — if device has [localIp] and phone is on WiFi
 ///   2. MQTT          — cloud or local broker
 ///   3. ObjectBox DB  — optimistic update always applied first
-class DeviceManager extends AsyncNotifier<List<MatterDevice>> {
+class DeviceManager extends AsyncNotifier<List<SmartDevice>> {
   late DeviceRepository _repository;
 
   // Persists BLE device names (e.g. "DSGVHub_A1B2C3") keyed by device_id so
@@ -48,7 +48,7 @@ class DeviceManager extends AsyncNotifier<List<MatterDevice>> {
   final _pendingBleNames = <String, String>{};
 
   @override
-  Future<List<MatterDevice>> build() async {
+  Future<List<SmartDevice>> build() async {
     _repository = ref.watch(deviceRepositoryProvider);
     return _repository.getDevices();
   }
@@ -111,7 +111,7 @@ class DeviceManager extends AsyncNotifier<List<MatterDevice>> {
 
     final device = state.value?.firstWhere(
       (d) => d.uniqueDeviceId == deviceId,
-      orElse: () => MatterDevice(uniqueDeviceId: deviceId, deviceName: ''),
+      orElse: () => SmartDevice(uniqueDeviceId: deviceId, deviceName: ''),
     );
 
     // 1. Local HTTP — preferred transport when on same LAN
@@ -178,7 +178,7 @@ class DeviceManager extends AsyncNotifier<List<MatterDevice>> {
   }
 
   /// Registers a newly commissioned device (called after Matter pairing).
-  Future<void> registerNewDevice(MatterDevice device) async {
+  Future<void> registerNewDevice(SmartDevice device) async {
     await _repository.provisionDevice(device);
     ref.read(telemetryServiceProvider).logProvisionResult(
         device.uniqueDeviceId, success: true);
@@ -257,7 +257,7 @@ class DeviceManager extends AsyncNotifier<List<MatterDevice>> {
     final devices = state.valueOrNull ?? [];
     final device = devices.firstWhere(
       (d) => d.uniqueDeviceId == deviceId,
-      orElse: () => MatterDevice(uniqueDeviceId: deviceId, deviceName: ''),
+      orElse: () => SmartDevice(uniqueDeviceId: deviceId, deviceName: ''),
     );
 
     // Build the relay patch for on/off modes.
@@ -326,7 +326,7 @@ class DeviceManager extends AsyncNotifier<List<MatterDevice>> {
   /// Handles a device announce message from MQTT.
   /// Registers unknown devices or updates [localIp] for known ones.
   /// Attaches a pending auth token if this is a just-provisioned device.
-  Future<void> handleAnnounce(MatterDevice announced) async {
+  Future<void> handleAnnounce(SmartDevice announced) async {
     final devices = state.value ?? [];
     final normalised = announced.uniqueDeviceId.toUpperCase();
     final pendingToken   = _pendingTokens.remove(normalised);
@@ -441,4 +441,4 @@ class DeviceManager extends AsyncNotifier<List<MatterDevice>> {
 
 /// The global provider — all dashboard widgets watch this.
 final deviceManagerProvider =
-    AsyncNotifierProvider<DeviceManager, List<MatterDevice>>(DeviceManager.new);
+    AsyncNotifierProvider<DeviceManager, List<SmartDevice>>(DeviceManager.new);

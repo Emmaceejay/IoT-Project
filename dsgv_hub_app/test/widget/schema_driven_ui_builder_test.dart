@@ -1,18 +1,18 @@
 ﻿import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:dsgv_hub_app/domain/models/matter_device.dart';
+import 'package:dsgv_hub_app/domain/models/smart_device.dart';
 import 'package:dsgv_hub_app/domain/services/device_manager.dart';
 import 'package:dsgv_hub_app/data/repositories/device_repository.dart';
 import 'package:dsgv_hub_app/presentation/widgets/schema_driven_ui_builder.dart';
 
 class _StubRepository implements DeviceRepository {
   @override
-  Future<List<MatterDevice>> getDevices() async => [];
+  Future<List<SmartDevice>> getDevices() async => [];
   @override
   Future<void> updateDeviceState(String id, Map<String, dynamic> patch) async {}
   @override
-  Future<void> provisionDevice(MatterDevice device) async {}
+  Future<void> provisionDevice(SmartDevice device) async {}
   @override
   Future<void> removeDevice(String id) async {}
   @override
@@ -23,7 +23,7 @@ class _StubRepository implements DeviceRepository {
   Future<void> updatePowerRestoreMode(String id, PowerRestoreMode mode) async {}
 }
 
-Widget _wrap(MatterDevice device) {
+Widget _wrap(SmartDevice device) {
   return ProviderScope(
     overrides: [
       deviceRepositoryProvider.overrideWithValue(_StubRepository()),
@@ -40,7 +40,7 @@ Widget _wrap(MatterDevice device) {
 void main() {
   group('SchemaDrivenUiBuilder', () {
     testWidgets('relay capability renders a Switch', (tester) async {
-      const device = MatterDevice(
+      const device = SmartDevice(
         uniqueDeviceId: 'S-001',
         deviceName: 'Switch',
         status: DeviceStatus.online,
@@ -53,7 +53,7 @@ void main() {
     });
 
     testWidgets('brightness capability renders a Slider', (tester) async {
-      const device = MatterDevice(
+      const device = SmartDevice(
         uniqueDeviceId: 'S-002',
         deviceName: 'Dimmer',
         status: DeviceStatus.online,
@@ -65,7 +65,7 @@ void main() {
     });
 
     testWidgets('temperature capability shows read-only value', (tester) async {
-      const device = MatterDevice(
+      const device = SmartDevice(
         uniqueDeviceId: 'S-003',
         deviceName: 'Sensor',
         status: DeviceStatus.online,
@@ -77,7 +77,7 @@ void main() {
     });
 
     testWidgets('unknown capability shows fallback text', (tester) async {
-      const device = MatterDevice(
+      const device = SmartDevice(
         uniqueDeviceId: 'S-004',
         deviceName: 'Unknown',
         status: DeviceStatus.online,
@@ -89,7 +89,7 @@ void main() {
     });
 
     testWidgets('offline device absorbs pointer input', (tester) async {
-      const device = MatterDevice(
+      const device = SmartDevice(
         uniqueDeviceId: 'S-005',
         deviceName: 'Offline',
         status: DeviceStatus.offline,
@@ -108,7 +108,7 @@ void main() {
     });
 
     testWidgets('online device does not absorb pointer input', (tester) async {
-      const device = MatterDevice(
+      const device = SmartDevice(
         uniqueDeviceId: 'S-006',
         deviceName: 'Online',
         status: DeviceStatus.online,
@@ -126,7 +126,7 @@ void main() {
     });
 
     testWidgets('multiple capabilities each render their control', (tester) async {
-      const device = MatterDevice(
+      const device = SmartDevice(
         uniqueDeviceId: 'S-007',
         deviceName: 'Multi',
         status: DeviceStatus.online,

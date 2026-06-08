@@ -1,4 +1,4 @@
-import '../../domain/models/matter_device.dart';
+import '../../domain/models/smart_device.dart';
 import '../repositories/device_repository.dart';
 
 /// Mock implementation of [DeviceRepository].
@@ -8,8 +8,8 @@ import '../repositories/device_repository.dart';
 /// 400ms network round-trip to make the UI feel real during development.
 class MockDeviceDatasource implements DeviceRepository {
   /// In-memory store — replaced by ObjectBox in production.
-  final List<MatterDevice> _devices = [
-    const MatterDevice(
+  final List<SmartDevice> _devices = [
+    const SmartDevice(
       uniqueDeviceId: 'MOCK-ESP32-001',
       deviceName: 'Living Room Bulb',
       status: DeviceStatus.online,
@@ -17,7 +17,7 @@ class MockDeviceDatasource implements DeviceRepository {
       telemetry: {'power': true, 'brightness': 75, 'color_temp': 3000},
       localIp: '192.168.1.101', // Simulate device on local LAN
     ),
-    const MatterDevice(
+    const SmartDevice(
       uniqueDeviceId: 'MOCK-ESP32-002',
       deviceName: 'Hall Thermostat',
       status: DeviceStatus.online,
@@ -25,7 +25,7 @@ class MockDeviceDatasource implements DeviceRepository {
       telemetry: {'current_temp': 22.5, 'target_temp': 24.0, 'mode': 'cool'},
       localIp: '192.168.1.102',
     ),
-    const MatterDevice(
+    const SmartDevice(
       uniqueDeviceId: 'MOCK-ESP32-003',
       deviceName: 'Garage Door',
       status: DeviceStatus.offline,
@@ -36,7 +36,7 @@ class MockDeviceDatasource implements DeviceRepository {
   ];
 
   @override
-  Future<List<MatterDevice>> getDevices() async {
+  Future<List<SmartDevice>> getDevices() async {
     await Future.delayed(const Duration(milliseconds: 400)); // Simulate latency
     return List.unmodifiable(_devices);
   }
@@ -53,7 +53,7 @@ class MockDeviceDatasource implements DeviceRepository {
   }
 
   @override
-  Future<void> provisionDevice(MatterDevice device) async {
+  Future<void> provisionDevice(SmartDevice device) async {
     await Future.delayed(const Duration(milliseconds: 300));
     _devices.add(device);
   }
