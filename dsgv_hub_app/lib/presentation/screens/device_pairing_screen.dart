@@ -2,6 +2,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:wifi_scan/wifi_scan.dart';
 import '../../domain/services/ble_provisioning_service.dart';
 import '../../domain/services/device_manager.dart';
 
@@ -108,6 +110,14 @@ class _DevicePairingScreenState extends ConsumerState<DevicePairingScreen> {
   _ProvisionResult _result          = _ProvisionResult.none;
   String           _resultMessage   = '';
 
+  // ── WiFi scan state ───────────────────────────────────────────────────────
+  List<String>    _scannedSsids     = [];
+  bool            _ssidScanning     = false;
+  bool            _ssidManualMode   = false;
+
+  // ── Password collapsible ──────────────────────────────────────────────────
+  bool            _passwordExpanded = false;
+
   // ── Lifecycle ─────────────────────────────────────────────────────────────
 
   @override
@@ -142,20 +152,52 @@ class _DevicePairingScreenState extends ConsumerState<DevicePairingScreen> {
           'Device found: ${parsed.dsgvDeviceName}.\n'
           'Enter a name and your Wi-Fi credentials, then tap Provision.';
     });
+    _scanNetworks();
+  }
+
+  Future<void> _scanNetworks() async {
+    final status = await Permission.locationWhenInUse.request();
+    if (!status.isGranted) {
+      if (mounted) setState(() => _ssidManualMode = true);
+      return;
+    }
+    if (mounted) setState(() => _ssidScanning = true);
+    try {
+      final canStart = await WifiScan.instance.canStartScan(askPermissions: false);
+      if (canStart == CanStartScan.yes) {
+        await WifiScan.instance.startScan();
+      }
+      final results = await WifiScan.instance.getScannedResults(askPermissions: false);
+      final ssids = results
+          .map((r) => r.ssid)
+          .where((s) => s.isNotEmpty)
+          .toSet()
+          .toList()
+        ..sort();
+      if (mounted) setState(() => _scannedSsids = ssids);
+    } catch (_) {
+      if (mounted) setState(() => _ssidManualMode = true);
+    } finally {
+      if (mounted) setState(() => _ssidScanning = false);
+    }
   }
 
   void _resetScanner() {
     if (_scannerActive) _scannerCtrl.stop();
     setState(() {
-      _parsedQr       = null;
-      _scannerActive  = false;
-      _statusMessage  = null;
-      _isSuccess      = false;
-      _inProgress     = false;
-      _provStep       = null;
-      _selectedPreset = _kDevicePresets.first;
-      _result         = _ProvisionResult.none;
-      _resultMessage  = '';
+      _parsedQr         = null;
+      _scannerActive    = false;
+      _statusMessage    = null;
+      _isSuccess        = false;
+      _inProgress       = false;
+      _provStep         = null;
+      _selectedPreset   = _kDevicePresets.first;
+      _result           = _ProvisionResult.none;
+      _resultMessage    = '';
+      _scannedSsids     = [];
+      _ssidScanning     = false;
+      _ssidManualMode   = false;
+      _passwordExpanded = false;
     });
   }
 
@@ -313,28 +355,9 @@ class _DevicePairingScreenState extends ConsumerState<DevicePairingScreen> {
               const SizedBox(height: 16),
               _buildPresetDropdown(),
               const SizedBox(height: 16),
-              _buildTextField(
-                controller: _ssidCtrl,
-                label: 'Wi-Fi Network Name (SSID)',
-                icon: Icons.wifi,
-                onChanged: (_) => setState(() {}),
-              ),
+              _buildSsidField(),
               const SizedBox(height: 12),
-              _buildTextField(
-                controller: _passwordCtrl,
-                label: 'Wi-Fi Password',
-                icon: Icons.lock_outline,
-                obscureText: _obscurePassword,
-                suffix: IconButton(
-                  icon: Icon(
-                    _obscurePassword ? Icons.visibility_off : Icons.visibility,
-                    color: Colors.white38,
-                    size: 20,
-                  ),
-                  onPressed: () =>
-                      setState(() => _obscurePassword = !_obscurePassword),
-                ),
-              ),
+              _buildPasswordField(),
             ],
 
             const SizedBox(height: 20),
@@ -643,6 +666,206 @@ class _DevicePairingScreenState extends ConsumerState<DevicePairingScreen> {
                     ],
                   ),
       ),
+    );
+  }
+
+  // ── SSID dropdown / manual entry ─────────────────────────────────────────
+
+  Widget _buildSsidField() {
+    if (_ssidManualMode) {
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Expanded(
+            child: _buildTextField(
+              controller: _ssidCtrl,
+              label: 'Wi-Fi Network Name (SSID)',
+              icon: Icons.wifi,
+              onChanged: (_) => setState(() {}),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Tooltip(
+            message: 'Pick from list',
+            child: IconButton(
+              icon: const Icon(Icons.list, color: Color(0xFF00E5FF)),
+              onPressed: () => setState(() {
+                _ssidManualMode = false;
+                if (_scannedSsids.isEmpty) _scanNetworks();
+              }),
+            ),
+          ),
+        ],
+      );
+    }
+
+    final dropdownItems = [
+      ..._scannedSsids.map(
+        (s) => DropdownMenuItem<String>(
+          value: s,
+          child: Text(
+            s,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(color: Colors.white),
+          ),
+        ),
+      ),
+      const DropdownMenuItem<String>(
+        value: '__manual__',
+        child: Text(
+          'Type manually…',
+          style: TextStyle(color: Color(0xFF00E5FF), fontSize: 13),
+        ),
+      ),
+    ];
+
+    final currentValue = _scannedSsids.contains(_ssidCtrl.text) ? _ssidCtrl.text : null;
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Expanded(
+          child: DropdownButtonFormField<String>(
+            decoration: InputDecoration(
+              labelText: 'Wi-Fi Network',
+              prefixIcon: const Icon(Icons.wifi, color: Color(0xFF00E5FF)),
+              labelStyle: const TextStyle(color: Colors.white54),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: Color(0xFF1E3A5F)),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: Color(0xFF00E5FF)),
+              ),
+              filled: true,
+              fillColor: const Color(0xFF121826),
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+            ),
+            dropdownColor: const Color(0xFF121826),
+            hint: Text(
+              _ssidScanning ? 'Scanning…' : 'Select a network',
+              style: const TextStyle(color: Colors.white38),
+            ),
+            value: currentValue,
+            items: _ssidScanning ? [] : dropdownItems,
+            onChanged: (val) {
+              if (val == '__manual__') {
+                setState(() => _ssidManualMode = true);
+              } else if (val != null) {
+                setState(() => _ssidCtrl.text = val);
+              }
+            },
+          ),
+        ),
+        const SizedBox(width: 8),
+        _ssidScanning
+            ? const SizedBox(
+                width: 36,
+                height: 36,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Color(0xFF00E5FF),
+                ),
+              )
+            : Tooltip(
+                message: 'Rescan networks',
+                child: IconButton(
+                  icon: const Icon(Icons.refresh, color: Color(0xFF00E5FF)),
+                  onPressed: _scanNetworks,
+                ),
+              ),
+      ],
+    );
+  }
+
+  // ── Collapsible password ──────────────────────────────────────────────────
+
+  Widget _buildPasswordField() {
+    final hasPassword = _passwordCtrl.text.isNotEmpty;
+    final maskedDots  = hasPassword
+        ? '●' * _passwordCtrl.text.length.clamp(0, 14)
+        : 'Tap to enter';
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Tappable header row
+        InkWell(
+          onTap: () => setState(() => _passwordExpanded = !_passwordExpanded),
+          borderRadius: BorderRadius.circular(12),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            decoration: BoxDecoration(
+              color: const Color(0xFF121826),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: const Color(0xFF1E3A5F)),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.lock_outline,
+                    color: Color(0xFF00E5FF), size: 20),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Wi-Fi Password',
+                          style:
+                              TextStyle(color: Colors.white54, fontSize: 12)),
+                      const SizedBox(height: 2),
+                      Text(
+                        maskedDots,
+                        style: TextStyle(
+                          color:
+                              hasPassword ? Colors.white70 : Colors.white24,
+                          fontSize: 14,
+                          letterSpacing: hasPassword ? 2 : 0,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Icon(
+                  _passwordExpanded
+                      ? Icons.keyboard_arrow_up
+                      : Icons.keyboard_arrow_down,
+                  color: Colors.white38,
+                ),
+              ],
+            ),
+          ),
+        ),
+        // Animated reveal
+        AnimatedSize(
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeInOut,
+          child: _passwordExpanded
+              ? Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: _buildTextField(
+                    controller: _passwordCtrl,
+                    label: 'Wi-Fi Password',
+                    icon: Icons.lock_outline,
+                    obscureText: _obscurePassword,
+                    onChanged: (_) => setState(() {}),
+                    suffix: IconButton(
+                      icon: Icon(
+                        _obscurePassword
+                            ? Icons.visibility_off_outlined
+                            : Icons.visibility_outlined,
+                        color: Colors.white38,
+                        size: 20,
+                      ),
+                      onPressed: () =>
+                          setState(() => _obscurePassword = !_obscurePassword),
+                    ),
+                  ),
+                )
+              : const SizedBox.shrink(),
+        ),
+      ],
     );
   }
 
