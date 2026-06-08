@@ -172,40 +172,114 @@ class BleProvisioningService {
       await credChar.write(utf8.encode(payload), withoutResponse: false);
       debugPrint('[BLE Prov] Credentials sent for SSID: $ssid (type=$deviceType relays=$relayCount)');
 
-      // ── Step 6: Wait for device confirmation ──────────────────────────────
+      // ── Step 6: Race three signals for the device's final response ──────────
+      // The firmware sends "success:<token>:<mac>" and then IMMEDIATELY reboots
+      // to join Wi-Fi.  On many Android BLE stacks the reboot disconnect races
+      // ahead of the GATT notification, causing the old .timeout().firstWhere()
+      // to throw TimeoutException even though provisioning succeeded.
+      //
+      // Solution: use a single-completion Completer and listen to three
+      // concurrent signals.  The first to fire wins; the rest are ignored.
+      //
+      //   Signal A — explicit BLE notification ("success:…" or "failed:…")
+      //   Signal B — BLE disconnect (device rebooted = Wi-Fi join succeeded)
+      //   Signal C — 30-second wall-clock deadline (genuine timeout / stuck)
+      //
+      // Signal B is safe to treat as success ONLY here, after credentials have
+      // been written.  The firmware never reboots on a failed Wi-Fi join — it
+      // stays up and returns "failed:<reason>" over BLE instead.
       yield const ProvisioningStatus(
         ProvisioningStep.waitingForDevice,
         'Waiting for device to connect to Wi-Fi…',
       );
 
-      final deviceStatus = await statusUpdates
-          .timeout(const Duration(seconds: 15))
-          .firstWhere((s) => s.startsWith('success:') || s.startsWith('failed:'));
+      // The first of the three signals to fire completes this.
+      final responseCompleter = Completer<String>();
 
-      if (deviceStatus.startsWith('success:')) {
+      // Signal A — explicit firmware notification over BLE GATT
+      final notifySub = statusUpdates.listen(
+        (msg) {
+          if (!responseCompleter.isCompleted &&
+              (msg.startsWith('success:') || msg.startsWith('failed:'))) {
+            responseCompleter.complete(msg);
+          }
+        },
+        onError: (_) {}, // Suppress BLE stack errors on stream
+        // onDone fires when the GATT stream closes (= BLE connection dropped).
+        // Reaching here without a prior notification means the device rebooted.
+        onDone: () {
+          if (!responseCompleter.isCompleted) {
+            responseCompleter.complete('_disconnected');
+          }
+        },
+      );
+
+      // Signal B — connection-state watcher (fires faster than onDone on many
+      // Android / iOS BLE driver implementations)
+      final connSub = device.connectionState.listen((state) {
+        if (!responseCompleter.isCompleted &&
+            state == BluetoothConnectionState.disconnected) {
+          responseCompleter.complete('_disconnected');
+        }
+      });
+
+      // Signal C — hard 30-second deadline to avoid hanging the UI forever
+      final timeoutTimer = Timer(const Duration(seconds: 30), () {
+        if (!responseCompleter.isCompleted) {
+          responseCompleter.complete('_timeout');
+        }
+      });
+
+      // Await the winner; always clean up the other two signals in finally.
+      final String response;
+      try {
+        response = await responseCompleter.future;
+      } finally {
+        timeoutTimer.cancel();
+        await notifySub.cancel();
+        await connSub.cancel();
+      }
+
+      // Dispatch on whichever signal fired first
+      if (response.startsWith('success:')) {
         // Format: "success:<32-hex-token>:<12-hex-wifi-mac>"
-        final parts = deviceStatus.split(':');
-        final authToken       = parts.length >= 2 ? parts[1] : null;
-        final provisionedId   = parts.length >= 3 ? parts[2] : null;
+        final parts = response.split(':');
         yield ProvisioningStatus(
           ProvisioningStep.success,
           'Device provisioned! It will reboot and join your network.',
-          authToken,
-          provisionedId,
+          parts.length >= 2 ? parts[1] : null,
+          parts.length >= 3 ? parts[2] : null,
         );
-      } else {
-        final reason = deviceStatus.replaceFirst('failed:', '');
+      } else if (response.startsWith('failed:')) {
+        final reason = response.replaceFirst('failed:', '').trim();
         yield ProvisioningStatus(
           ProvisioningStep.failed,
-          'Device rejected credentials: $reason',
+          reason.isNotEmpty
+              ? reason
+              : 'Device could not join the Wi-Fi network. Check the password and try again.',
+        );
+      } else if (response == '_disconnected') {
+        // The device rebooted to join Wi-Fi — this is a success outcome.
+        // authToken / provisionedDeviceId are null; the device will announce
+        // itself over MQTT once it connects to the broker after its reboot.
+        yield const ProvisioningStatus(
+          ProvisioningStep.success,
+          'Device rebooted to join your Wi-Fi.\nIt will appear on your dashboard shortly.',
+        );
+      } else {
+        // '_timeout' — no signal from the device after 30 seconds
+        yield const ProvisioningStatus(
+          ProvisioningStep.failed,
+          'No response from the device after 30 seconds.\n'
+          'Check that your Wi-Fi password is correct and try again.',
         );
       }
     } catch (e) {
       yield ProvisioningStatus(
-          ProvisioningStep.failed, 'Provisioning error: ${_friendly(e)}');
+          ProvisioningStep.failed, 'Something went wrong: ${_friendly(e)}');
     } finally {
-      // device is always non-null here: any earlier failure path calls return.
-      // Device reboots on success, but we disconnect cleanly on all paths.
+      // Disconnect cleanly on every path.  If the device already rebooted, the
+      // call throws a "not connected" error — the inner try silences it.
       try {
         await device.disconnect();
       } catch (_) {}

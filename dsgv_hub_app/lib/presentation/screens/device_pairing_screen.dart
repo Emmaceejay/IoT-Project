@@ -73,6 +73,10 @@ class _ParsedQr {
 
 // ── Screen ────────────────────────────────────────────────────────────────────
 
+// Tracks the final outcome of a provisioning attempt so the UI can switch from
+// the live-progress form to a dedicated result card.
+enum _ProvisionResult { none, success, failed }
+
 class DevicePairingScreen extends ConsumerStatefulWidget {
   const DevicePairingScreen({super.key});
 
@@ -100,6 +104,9 @@ class _DevicePairingScreenState extends ConsumerState<DevicePairingScreen> {
   String?         _statusMessage;
   bool            _isSuccess        = false;
   ProvisioningStep? _provStep;
+  // Set when the provisioning stream terminates; drives the result card.
+  _ProvisionResult _result          = _ProvisionResult.none;
+  String           _resultMessage   = '';
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -146,6 +153,8 @@ class _DevicePairingScreenState extends ConsumerState<DevicePairingScreen> {
       _inProgress     = false;
       _provStep       = null;
       _selectedPreset = _kDevicePresets.first;
+      _result         = _ProvisionResult.none;
+      _resultMessage  = '';
     });
     _scannerCtrl.start();
   }
@@ -203,24 +212,42 @@ class _DevicePairingScreenState extends ConsumerState<DevicePairingScreen> {
           final manager = ref.read(deviceManagerProvider.notifier);
 
           // Cache the auth token locally so that when the device's MQTT
-          // announce arrives (a few seconds later, after reboot) the
-          // DeviceManager can match the announce to this provisioning session
-          // and attach the auth token to the device record.
+          // announce arrives (a few seconds after reboot) the DeviceManager
+          // can match the announce to this session and attach the token.
           manager.setPendingToken(
             status.provisionedDeviceId!,
             status.authToken!,
           );
 
-          // Register the device in Firebase so the device firmware can fetch
-          // its broker config via HTTPS on its first boot after provisioning.
+          // Fire-and-forget Firebase registration.  The device still works on
+          // the factory broker config even if this call fails, so we log the
+          // error but do not surface it to the user.
           manager.registerDevice(
             status.provisionedDeviceId!,
             status.authToken!,
-          );
+          ).catchError((Object e) {
+            debugPrint('[Pairing] Firebase registration failed (non-fatal): $e');
+          });
         }
 
-        await Future.delayed(const Duration(seconds: 1));
-        if (mounted) Navigator.of(context).pop();
+        // Switch to the success result card instead of auto-navigating away —
+        // this lets the user clearly see the outcome and choose what to do next.
+        if (mounted) {
+          setState(() {
+            _result        = _ProvisionResult.success;
+            _resultMessage = status.message ?? 'Device provisioned successfully!';
+          });
+        }
+        return;
+      }
+
+      if (status.step == ProvisioningStep.failed) {
+        if (mounted) {
+          setState(() {
+            _result        = _ProvisionResult.failed;
+            _resultMessage = status.message ?? 'Provisioning failed. Please try again.';
+          });
+        }
         return;
       }
     }
@@ -242,9 +269,10 @@ class _DevicePairingScreenState extends ConsumerState<DevicePairingScreen> {
 
   /// Whether the provision button should be enabled.
   bool get _canProvision {
-    if (_inProgress || _parsedQr == null) return false;
-    if (_nameCtrl.text.trim().isEmpty)    return false;
-    if (_ssidCtrl.text.trim().isEmpty)    return false;
+    if (_inProgress || _parsedQr == null)      return false;
+    if (_result != _ProvisionResult.none)       return false;
+    if (_nameCtrl.text.trim().isEmpty)         return false;
+    if (_ssidCtrl.text.trim().isEmpty)         return false;
     return true;
   }
 
@@ -264,7 +292,9 @@ class _DevicePairingScreenState extends ConsumerState<DevicePairingScreen> {
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
-        child: Column(
+        child: _result != _ProvisionResult.none
+            ? _buildResultCard()
+            : Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             _buildScannerSection(),
@@ -371,6 +401,165 @@ class _DevicePairingScreenState extends ConsumerState<DevicePairingScreen> {
   }
 
   // ── Widget helpers ─────────────────────────────────────────────────────────
+
+  /// Full-screen result card shown when provisioning completes (success or
+  /// failure).  Replaces the form entirely so the outcome is unmistakable.
+  Widget _buildResultCard() {
+    final isSuccess = _result == _ProvisionResult.success;
+
+    // Icon + colours differ between success and failure
+    final iconData  = isSuccess ? Icons.check_circle_rounded : Icons.cancel_rounded;
+    final iconColor = isSuccess ? const Color(0xFF00E695) : const Color(0xFFFF5252);
+    final cardColor = isSuccess
+        ? const Color(0xFF00E695).withValues(alpha: 0.08)
+        : const Color(0xFFFF5252).withValues(alpha: 0.08);
+    final borderColor = isSuccess
+        ? const Color(0xFF00E695).withValues(alpha: 0.4)
+        : const Color(0xFFFF5252).withValues(alpha: 0.4);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const SizedBox(height: 40),
+
+        // ── Outcome card ────────────────────────────────────────────────────
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
+          decoration: BoxDecoration(
+            color: cardColor,
+            border: Border.all(color: borderColor),
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Column(
+            children: [
+              // Large outcome icon
+              Icon(iconData, size: 72, color: iconColor),
+              const SizedBox(height: 20),
+
+              // Headline
+              Text(
+                isSuccess ? 'Device Added!' : 'Provisioning Failed',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: iconColor,
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 12),
+
+              // Descriptive message from the provisioning stream
+              Text(
+                _resultMessage,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Colors.white70,
+                  fontSize: 14,
+                  height: 1.6,
+                ),
+              ),
+
+              // Extra hint for failure cases
+              if (!isSuccess) ...[
+                const SizedBox(height: 16),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.black26,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(Icons.tips_and_updates_outlined,
+                          size: 16, color: Colors.white38),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Make sure the device is powered on, in range, '
+                          'and has not already been provisioned.',
+                          style: TextStyle(
+                              color: Colors.white38, fontSize: 12, height: 1.5),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+
+        const SizedBox(height: 28),
+
+        // ── Action buttons ──────────────────────────────────────────────────
+        if (isSuccess) ...[
+          // Primary: go back to the dashboard
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF00E695),
+              foregroundColor: Colors.black,
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
+            ),
+            onPressed: () => Navigator.of(context).pop(),
+            icon: const Icon(Icons.dashboard_rounded),
+            label: const Text('Go to Dashboard',
+                style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+          const SizedBox(height: 12),
+
+          // Secondary: stay on screen and provision another device
+          OutlinedButton.icon(
+            style: OutlinedButton.styleFrom(
+              foregroundColor: Colors.white70,
+              side: const BorderSide(color: Colors.white24),
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
+            ),
+            onPressed: _resetScanner,
+            icon: const Icon(Icons.add_circle_outline, size: 18),
+            label: const Text('Provision Another Device'),
+          ),
+        ] else ...[
+          // Failure: retry from the beginning
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF00E5FF),
+              foregroundColor: Colors.black,
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
+            ),
+            onPressed: _resetScanner,
+            icon: const Icon(Icons.refresh_rounded),
+            label: const Text('Try Again',
+                style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+          const SizedBox(height: 12),
+
+          // Let the user also bail out entirely
+          OutlinedButton.icon(
+            style: OutlinedButton.styleFrom(
+              foregroundColor: Colors.white54,
+              side: const BorderSide(color: Colors.white24),
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
+            ),
+            onPressed: () => Navigator.of(context).pop(),
+            icon: const Icon(Icons.arrow_back_rounded, size: 18),
+            label: const Text('Back to Dashboard'),
+          ),
+        ],
+
+        const SizedBox(height: 32),
+        _buildFooter(),
+      ],
+    );
+  }
 
   Widget _buildScannerSection() {
     return ClipRRect(
