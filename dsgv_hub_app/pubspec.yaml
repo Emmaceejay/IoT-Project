@@ -45,6 +45,9 @@ dependencies:
   # WiFi SSID scanning (lists nearby networks in provisioning screen)
   wifi_scan: ^0.4.1
 
+  # WiFi AP provisioning — Android programmatic connect to device softAP
+  wifi_iot: ^0.3.19+1
+
   # Runtime permission requests (BLE scan/connect, location)
   permission_handler: ^11.3.0
 

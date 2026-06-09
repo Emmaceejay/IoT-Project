@@ -204,3 +204,11 @@
 // Credential char:    beb5483e-36e1-4688-b7f5-ea07361b26a8  (Write JSON creds)
 // Status char:        beb5483f-36e1-4688-b7f5-ea07361b26a8  (Read + Notify)
 #define DSGV_PROV_DEVICE_NAME_PREFIX  "DSGVHub_"
+
+// ── WiFi AP Provisioning (first-boot softAP mode) ────────────────────────────
+// Device creates this AP when no WiFi credentials exist in NVS.
+// The app connects to it and sends home-WiFi credentials via POST /provision.
+// SSID is built at runtime: DSGV_AP_SSID_PREFIX + last 3 WiFi MAC bytes (hex).
+// e.g. "DSGV_SETUP_A1B2C3"
+#define DSGV_AP_SSID_PREFIX           "DSGV_SETUP_"
+#define DSGV_AP_PASSWORD              "dsgvsetup"

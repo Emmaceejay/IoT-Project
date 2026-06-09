@@ -31,3 +31,9 @@ esp_err_t wifi_manager_factory_reset(void);
  * @brief Returns true if device currently has an active Wi-Fi connection.
  */
 bool wifi_manager_is_connected(void);
+
+/**
+ * @brief Returns true while the device is running in softAP (provisioning) mode.
+ *        Cleared automatically when the device connects to home Wi-Fi.
+ */
+bool wifi_manager_is_ap_mode(void);

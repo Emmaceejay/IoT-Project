@@ -1,70 +1,95 @@
-﻿/**
- * DSGV_http_server.c — Local HTTP Transport (Tasmota-Compatible REST API)
+/**
+ * DSGV_http_server.c — Local HTTP Transport + WiFi-AP Provisioning
  *
- * Activated when the DSGV Hub App detects it is on the same Wi-Fi network
- * as the device. Provides two-way control without any broker or internet.
- *
- * Endpoints:
- *   GET  /api/status     → Full JSON state snapshot (read by App)
+ * Normal operation (STA mode) — Tasmota-compatible REST API:
+ *   GET  /api/status     → Full JSON state snapshot
  *   POST /api/cmd        → {"capability":"power","value":true}
- *   GET  /cm?cmnd=<cmd>  → Tasmota compatibility layer
- *                          Supported: Power ON/OFF, Dimmer N, CT N (mired)
+ *   GET  /cm?cmnd=<cmd>  → Tasmota (Power ON/OFF, Dimmer N, CT N)
  *
- * After any state change the updated state is published via MQTT telemetry
- * so the cloud/local broker view stays in sync with direct-HTTP changes.
+ * AP provisioning mode (first-boot, no home WiFi credentials):
+ *   GET  /provision/ping → {"status":"ok"} — app polls to detect AP connection
+ *   POST /provision      → {ssid, password, [device_type, capabilities, relay_count]}
+ *                          responds {"status":"ok","auth_token":"...","device_id":"..."}
+ *                          then reboots the device to connect to home WiFi
+ *
+ * Browser-proofing: in AP mode every endpoint except /provision/ping requires
+ *   the header "X-DSGV-Client: DSGVHub-App". Browsers never send this header on
+ *   navigation; any bare browser visit gets 403 with an empty body.
  */
 
 #include "dsgv_http_server.h"
 #include "dsgv_config.h"
+#include "dsgv_device_config.h"
 #include "dsgv_device_state.h"
+#include "wifi_manager.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
+#include "esp_wifi.h"
 #include "cJSON.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include <string.h>
 #include <stdlib.h>
 
 static const char *TAG = "DSGV_http";
-static httpd_handle_t s_server = NULL;
+static httpd_handle_t s_server   = NULL;
+static bool           s_ap_mode  = false;
 
 // Forward declarations
 static esp_err_t handle_status_get(httpd_req_t *req);
 static esp_err_t handle_cmd_post(httpd_req_t *req);
 static esp_err_t handle_tasmota_get(httpd_req_t *req);
-static void apply_capability(const char *capability, cJSON *value);
-static void apply_tasmota_cmd(const char *cmnd);
-static void build_status_json(char *buf, size_t buf_size);
+static esp_err_t handle_provision_ping_get(httpd_req_t *req);
+static esp_err_t handle_provision_post(httpd_req_t *req);
+static void      apply_capability(const char *capability, cJSON *value);
+static void      apply_tasmota_cmd(const char *cmnd);
+static void      build_status_json(char *buf, size_t buf_size);
 
-// Declared in DSGV_mqtt.c — call after local HTTP changes state so broker
-// view stays in sync.
 extern void DSGV_mqtt_publish_telemetry(const char *json_payload);
 extern void DSGV_gpio_apply_state(void);
 
-// ── Route table ──────────────────────────────────────────────────────────────
+// ── AP mode control ───────────────────────────────────────────────────────────
+
+void DSGV_http_set_ap_mode(bool active) {
+    s_ap_mode = active;
+}
+
+// Returns ESP_FAIL (and sends 403) if AP mode is active and the required
+// app-identification header is missing. Call at the top of every handler
+// except handle_provision_ping_get.
+static esp_err_t _check_app_header(httpd_req_t *req) {
+    if (!s_ap_mode) return ESP_OK;
+    char val[32] = {0};
+    if (httpd_req_get_hdr_value_str(req, "X-DSGV-Client", val, sizeof(val)) != ESP_OK
+        || strcmp(val, "DSGVHub-App") != 0) {
+        httpd_resp_set_status(req, "403 Forbidden");
+        httpd_resp_send(req, NULL, 0);
+        return ESP_FAIL;
+    }
+    return ESP_OK;
+}
+
+// ── Route table ───────────────────────────────────────────────────────────────
 
 static const httpd_uri_t s_routes[] = {
-    {
-        .uri     = "/api/status",
-        .method  = HTTP_GET,
-        .handler = handle_status_get,
-    },
-    {
-        .uri     = "/api/cmd",
-        .method  = HTTP_POST,
-        .handler = handle_cmd_post,
-    },
-    {
-        .uri     = "/cm",
-        .method  = HTTP_GET,
-        .handler = handle_tasmota_get,
-    },
+    { .uri = "/api/status",      .method = HTTP_GET,  .handler = handle_status_get       },
+    { .uri = "/api/cmd",         .method = HTTP_POST, .handler = handle_cmd_post         },
+    { .uri = "/cm",              .method = HTTP_GET,  .handler = handle_tasmota_get      },
+    { .uri = "/provision/ping",  .method = HTTP_GET,  .handler = handle_provision_ping_get },
+    { .uri = "/provision",       .method = HTTP_POST, .handler = handle_provision_post   },
 };
 
-// ── Public API ───────────────────────────────────────────────────────────────
+// ── Public API ────────────────────────────────────────────────────────────────
 
 esp_err_t DSGV_http_server_start(void) {
-    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.server_port   = HTTP_SERVER_PORT;
-    config.stack_size    = 8192;
+    httpd_config_t config     = HTTPD_DEFAULT_CONFIG();
+    config.server_port        = HTTP_SERVER_PORT;
+    config.stack_size         = 8192;
+    config.max_uri_handlers   = 8;
+
+    // Start in AP mode if wifi_manager already set the AP up before the server
+    // was launched. Callers can also call DSGV_http_set_ap_mode() later.
+    s_ap_mode = wifi_manager_is_ap_mode();
 
     esp_err_t err = httpd_start(&s_server, &config);
     if (err != ESP_OK) {
@@ -72,11 +97,12 @@ esp_err_t DSGV_http_server_start(void) {
         return err;
     }
 
-    for (int i = 0; i < sizeof(s_routes) / sizeof(s_routes[0]); i++) {
+    for (int i = 0; i < (int)(sizeof(s_routes) / sizeof(s_routes[0])); i++) {
         httpd_register_uri_handler(s_server, &s_routes[i]);
     }
 
-    ESP_LOGI(TAG, "HTTP server started on port %d", HTTP_SERVER_PORT);
+    ESP_LOGI(TAG, "HTTP server started on port %d (ap_mode=%d)",
+             HTTP_SERVER_PORT, (int)s_ap_mode);
     return ESP_OK;
 }
 
@@ -88,9 +114,109 @@ void DSGV_http_server_stop(void) {
     }
 }
 
+// ── GET /provision/ping ───────────────────────────────────────────────────────
+// No header guard — the app uses this to detect that it has connected to the
+// device AP before it knows to send the custom header.
+
+static esp_err_t handle_provision_ping_get(httpd_req_t *req) {
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"status\":\"ok\"}");
+    return ESP_OK;
+}
+
+// ── POST /provision ───────────────────────────────────────────────────────────
+// Accepts JSON: {ssid, password, [device_type, capabilities[], relay_count]}
+// Saves WiFi credentials + optional device config, then reboots.
+
+static void _restart_after_delay(void *pvParam) {
+    (void)pvParam;
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    esp_restart();
+}
+
+static esp_err_t handle_provision_post(httpd_req_t *req) {
+    if (_check_app_header(req) != ESP_OK) return ESP_FAIL;
+
+    char body[512] = {0};
+    int received = httpd_req_recv(req, body,
+                                   sizeof(body) - 1 < (size_t)req->content_len
+                                       ? sizeof(body) - 1 : req->content_len);
+    if (received <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Empty body");
+        return ESP_FAIL;
+    }
+    body[received] = '\0';
+
+    cJSON *root = cJSON_Parse(body);
+    if (!root) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_FAIL;
+    }
+
+    cJSON *j_ssid = cJSON_GetObjectItemCaseSensitive(root, "ssid");
+    cJSON *j_pass = cJSON_GetObjectItemCaseSensitive(root, "password");
+
+    if (!cJSON_IsString(j_ssid) || !cJSON_IsString(j_pass)) {
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing ssid or password");
+        return ESP_FAIL;
+    }
+
+    wifi_manager_save_credentials(j_ssid->valuestring, j_pass->valuestring);
+
+    // Apply optional device config fields if provided
+    cJSON *j_type  = cJSON_GetObjectItemCaseSensitive(root, "device_type");
+    cJSON *j_caps  = cJSON_GetObjectItemCaseSensitive(root, "capabilities");
+    cJSON *j_relay = cJSON_GetObjectItemCaseSensitive(root, "relay_count");
+
+    if (cJSON_IsString(j_type) || cJSON_IsArray(j_caps) || cJSON_IsNumber(j_relay)) {
+        DSGV_device_config_t cfg = g_device_config;
+        if (cJSON_IsString(j_type)) {
+            strlcpy(cfg.device_type, j_type->valuestring, sizeof(cfg.device_type));
+        }
+        if (cJSON_IsArray(j_caps)) {
+            char *caps_str = cJSON_PrintUnformatted(j_caps);
+            if (caps_str) {
+                strlcpy(cfg.capabilities, caps_str, sizeof(cfg.capabilities));
+                free(caps_str);
+            }
+        }
+        if (cJSON_IsNumber(j_relay)) {
+            int rc = (int)j_relay->valuedouble;
+            if (rc >= 1 && rc <= DSGV_MAX_RELAY_COUNT) {
+                cfg.relay_count = (uint8_t)rc;
+            }
+        }
+        DSGV_device_config_save(&cfg);
+    }
+
+    cJSON_Delete(root);
+
+    // Build response
+    uint8_t mac[6];
+    esp_wifi_get_mac(WIFI_IF_STA, mac);
+    char device_id[13];
+    snprintf(device_id, sizeof(device_id), "%02X%02X%02X%02X%02X%02X",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
+    char resp[160];
+    snprintf(resp, sizeof(resp),
+             "{\"status\":\"ok\",\"auth_token\":\"%s\",\"device_id\":\"%s\"}",
+             g_device_config.auth_token, device_id);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, resp);
+
+    ESP_LOGI(TAG, "WiFi AP provisioning accepted — restarting in 1 s");
+    xTaskCreate(_restart_after_delay, "prov_rst", 1024, NULL, 5, NULL);
+    return ESP_OK;
+}
+
 // ── GET /api/status ───────────────────────────────────────────────────────────
 
 static esp_err_t handle_status_get(httpd_req_t *req) {
+    if (_check_app_header(req) != ESP_OK) return ESP_FAIL;
+
     char buf[HTTP_MAX_RESP_SIZE];
     build_status_json(buf, sizeof(buf));
 
@@ -105,18 +231,18 @@ static esp_err_t handle_status_get(httpd_req_t *req) {
 // ── POST /api/cmd ─────────────────────────────────────────────────────────────
 
 static esp_err_t handle_cmd_post(httpd_req_t *req) {
+    if (_check_app_header(req) != ESP_OK) return ESP_FAIL;
+
     char body[HTTP_MAX_BODY_SIZE] = {0};
-    int  received = httpd_req_recv(req, body,
+    int received = httpd_req_recv(req, body,
                                    sizeof(body) - 1 < (size_t)req->content_len
-                                       ? sizeof(body) - 1
-                                       : req->content_len);
+                                       ? sizeof(body) - 1 : req->content_len);
     if (received <= 0) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Empty body");
         return ESP_FAIL;
     }
     body[received] = '\0';
 
-    // Parse: {"capability": "power", "value": true}
     cJSON *root = cJSON_Parse(body);
     if (!root) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
@@ -135,11 +261,9 @@ static esp_err_t handle_cmd_post(httpd_req_t *req) {
 
     char cap_name[32];
     strlcpy(cap_name, cap->valuestring, sizeof(cap_name));
-
     apply_capability(cap_name, val);
     cJSON_Delete(root);
 
-    // Publish updated state via MQTT so broker view stays in sync
     char telemetry[HTTP_MAX_RESP_SIZE];
     build_status_json(telemetry, sizeof(telemetry));
     DSGV_mqtt_publish_telemetry(telemetry);
@@ -153,9 +277,10 @@ static esp_err_t handle_cmd_post(httpd_req_t *req) {
 }
 
 // ── GET /cm?cmnd=<tasmota_command> ───────────────────────────────────────────
-// Tasmota compatibility: Power ON/OFF, Dimmer N, CT N (mired)
 
 static esp_err_t handle_tasmota_get(httpd_req_t *req) {
+    if (_check_app_header(req) != ESP_OK) return ESP_FAIL;
+
     char query[128] = {0};
     if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing query string");
@@ -168,11 +293,9 @@ static esp_err_t handle_tasmota_get(httpd_req_t *req) {
         return ESP_FAIL;
     }
 
-    // URL-decode: %20 → space (minimal decode for common cases)
     for (char *p = cmnd; *p; p++) {
         if (*p == '+') *p = ' ';
     }
-    // Full percent-decode of %XX sequences
     char decoded[64] = {0};
     size_t j = 0;
     for (size_t i = 0; cmnd[i] && j < sizeof(decoded) - 1; i++) {
@@ -188,12 +311,10 @@ static esp_err_t handle_tasmota_get(httpd_req_t *req) {
 
     apply_tasmota_cmd(decoded);
 
-    // Publish updated state via MQTT
     char telemetry[HTTP_MAX_RESP_SIZE];
     build_status_json(telemetry, sizeof(telemetry));
     DSGV_mqtt_publish_telemetry(telemetry);
 
-    // Respond in Tasmota-compatible JSON
     char resp[HTTP_MAX_RESP_SIZE];
     build_status_json(resp, sizeof(resp));
     httpd_resp_set_type(req, "application/json");
@@ -206,10 +327,6 @@ static esp_err_t handle_tasmota_get(httpd_req_t *req) {
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
-/**
- * Builds the current device state as a JSON string.
- * Format matches IoTDevice.telemetry schema in the Flutter app.
- */
 static void build_status_json(char *buf, size_t buf_size) {
     STATE_LOCK();
     DSGV_device_state_t snap = g_device_state;
@@ -251,10 +368,6 @@ static void build_status_json(char *buf, size_t buf_size) {
     );
 }
 
-/**
- * Applies a DSGV capability command to g_device_state and drives GPIO.
- * Mirrors LocalHttpService._toTasmotaCommand() on the app side.
- */
 static void apply_capability(const char *capability, cJSON *value) {
     STATE_LOCK();
 
@@ -272,20 +385,17 @@ static void apply_capability(const char *capability, cJSON *value) {
         if (pct > 100) pct = 100;
         g_device_state.brightness = pct;
     } else if (strcmp(capability, "color_temp") == 0 && cJSON_IsNumber(value)) {
-        // App sends Kelvin
         int k = (int)value->valuedouble;
         if (k < 1000) k = 1000;
         if (k > 10000) k = 10000;
         g_device_state.color_temp_k = k;
     } else if (strcmp(capability, "target_temp") == 0 && cJSON_IsNumber(value)) {
         g_device_state.target_temp = (float)value->valuedouble;
-        ESP_LOGI(TAG, "HTTP target_temp: %.1f C", g_device_state.target_temp);
     } else if (strcmp(capability, "mode") == 0 && cJSON_IsString(value)) {
         const char *m = value->valuestring;
         if (strcmp(m, "cool") == 0 || strcmp(m, "heat") == 0 ||
             strcmp(m, "auto") == 0 || strcmp(m, "off")  == 0) {
             strlcpy(g_device_state.hvac_mode, m, sizeof(g_device_state.hvac_mode));
-            ESP_LOGI(TAG, "HTTP hvac_mode: %s", g_device_state.hvac_mode);
         } else {
             ESP_LOGW(TAG, "HTTP mode '%s' rejected — unknown value", m);
         }
@@ -306,16 +416,9 @@ static void apply_capability(const char *capability, cJSON *value) {
     }
 
     STATE_UNLOCK();
-
     DSGV_gpio_apply_state();
 }
 
-/**
- * Parses Tasmota cmnd syntax and maps to g_device_state.
- *   Power ON/OFF  → power
- *   Dimmer N      → brightness (0-100)
- *   CT N          → color_temp_k (mired→Kelvin: 1 000 000/N)
- */
 static void apply_tasmota_cmd(const char *cmnd) {
     STATE_LOCK();
 

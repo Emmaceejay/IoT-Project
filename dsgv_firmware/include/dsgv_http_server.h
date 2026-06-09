@@ -24,3 +24,10 @@ esp_err_t DSGV_http_server_start(void);
  * @brief Stop and free the HTTP server (e.g., before deep sleep or OTA).
  */
 void DSGV_http_server_stop(void);
+
+/**
+ * @brief Notify the HTTP layer whether the device is in softAP provisioning mode.
+ *        When true, all endpoints except GET /provision/ping require the header
+ *        "X-DSGV-Client: DSGVHub-App" — browsers get 403, the app gets through.
+ */
+void DSGV_http_set_ap_mode(bool active);
