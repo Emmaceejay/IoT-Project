@@ -1,9 +1,8 @@
 ﻿/**
  * DSGV_mqtt.c — DSGV Hub MQTT Client
  *
- * Dual-broker strategy (mirrors the Flutter app):
- *   1. Connect to MQTT_CLOUD_HOST (TLS, port 8883)
- *   2. On error → retry with MQTT_LOCAL_HOST (plain, port 1883)
+ * Connects to MQTT_CLOUD_HOST (TLS, port 8883) only.
+ * Local control is handled exclusively by the HTTP server (dsgv_http_server.c).
  *
  * On connect, publishes a device announcement so the DSGV Hub App
  * can populate the real device list (device_id, name, capabilities, local_ip).
@@ -54,7 +53,6 @@ SemaphoreHandle_t g_state_mutex = NULL;
 
 // ── Private state ─────────────────────────────────────────────────────────────
 static esp_mqtt_client_handle_t s_client = NULL;
-static bool s_using_local_broker = false;
 
 static char s_device_id[18];           // "AABBCCDDEEFF"
 static char s_device_name[32];         // auto-generated: "Switch_DDEEFF"
@@ -216,7 +214,6 @@ esp_err_t DSGV_mqtt_start(void) {
         nvs_close(hcfg);
     }
 
-    s_using_local_broker = false;
     if (has_nvs_cfg) {
         ESP_LOGI(TAG, "Connecting to user-configured broker %s:%d (TLS=%d)",
                  nvs_host, nvs_port, nvs_tls);
@@ -236,8 +233,7 @@ static void mqtt_event_handler(void *arg, esp_event_base_t base,
     switch (event->event_id) {
 
         case MQTT_EVENT_CONNECTED:
-            ESP_LOGI(TAG, "MQTT connected (%s). Device: %s",
-                     s_using_local_broker ? "local" : "cloud", s_device_id);
+            ESP_LOGI(TAG, "MQTT connected (cloud). Device: %s", s_device_id);
 
             // New broker confirmed reachable — cancel any pending rollback
             if (s_broker_rollback_timer &&
@@ -296,14 +292,7 @@ static void mqtt_event_handler(void *arg, esp_event_base_t base,
         }
 
         case MQTT_EVENT_ERROR:
-            ESP_LOGE(TAG, "MQTT error. Broker unreachable.");
-            if (!s_using_local_broker) {
-                // Cloud broker failed → fall back to local Mosquitto
-                s_using_local_broker = true;
-                ESP_LOGW(TAG, "Retrying with local broker %s:%d (plain)",
-                         MQTT_LOCAL_HOST, MQTT_LOCAL_PORT);
-                connect_to_broker(MQTT_LOCAL_HOST, MQTT_LOCAL_PORT, false);
-            }
+            ESP_LOGE(TAG, "MQTT error. Cloud broker unreachable — will retry.");
             break;
 
         default:
@@ -584,7 +573,6 @@ static void _broker_switch_task(void *arg) {
         esp_mqtt_client_destroy(s_client);
         s_client = NULL;
     }
-    s_using_local_broker = false;
     connect_to_broker(args->host, args->port, args->tls);
 
     if (args->is_rollback) {

@@ -31,11 +31,10 @@
 
 ### [C2] Unintentional plaintext MQTT fallback in firmware
 
-- [ ] Fixed — commit: ___________
-- **Location:** `dsgv_firmware/main/mqtt/dsgv_mqtt.c:298-307`
-- **Issue:** The `MQTT_EVENT_ERROR` handler silently falls back to `MQTT_LOCAL_HOST:1883` (plaintext TCP) when the TLS cloud broker is unreachable. This behaviour was NOT part of the intentional design — local control is HTTP-only — but the code exists and activates automatically.
-- **Impact:** On any network failure, all MQTT traffic (commands, telemetry, OTA triggers) is transmitted in plaintext. Any device on the same network can read or inject messages.
-- **Fix:** Remove the fallback block (lines 299-307) entirely. Local control is already handled by the HTTP server. If a local MQTT broker is added later, add it as an explicit user-configured option with TLS required.
+- [x] Fixed — commit: see below
+- **Location:** `dsgv_firmware/main/mqtt/dsgv_mqtt.c` · `dsgv_firmware/components/dsgv_common/mqtt/dsgv_mqtt.c`
+- **Issue:** The `MQTT_EVENT_ERROR` handler silently fell back to `MQTT_LOCAL_HOST:1883` (plaintext TCP) when the TLS cloud broker was unreachable. This behaviour was NOT part of the intentional design — local control is HTTP-only.
+- **Resolution:** Removed `s_using_local_broker` flag, the fallback block in `MQTT_EVENT_ERROR`, and all plaintext `connect_to_broker()` calls. On error the device now logs a warning and lets the ESP-MQTT client handle automatic TLS reconnection. Both firmware copies updated identically.
 
 ---
 
@@ -166,7 +165,7 @@
 | # | ID | Title | Effort | Status |
 |---|----|-------|--------|--------|
 | 1 | C3 | Add auth to HTTP server routes | ~1 h | [ ] |
-| 2 | C2 | Remove plaintext MQTT fallback | ~30 min | [ ] |
+| 2 | C2 | Remove plaintext MQTT fallback | ~30 min | [x] |
 | 3 | C1 | Require auth_token in OTA trigger | ~1 h | [ ] |
 | 4 | H1 | Wipe DSGV_cfg on factory reset | ~30 min | [ ] |
 | 5 | H3 | Pin OTA HTTPS certificate | ~30 min | [ ] |
