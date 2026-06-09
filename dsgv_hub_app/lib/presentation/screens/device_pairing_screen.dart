@@ -1,12 +1,10 @@
 import 'dart:async';
-import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:wifi_scan/wifi_scan.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
-import 'package:wifi_iot/wifi_iot.dart';
 import '../../domain/services/ble_provisioning_service.dart';
 import '../../domain/services/device_manager.dart';
 import '../../domain/services/wifi_ap_provisioning_service.dart';
@@ -118,7 +116,6 @@ class _DevicePairingScreenState extends ConsumerState<DevicePairingScreen> {
   List<WiFiAccessPoint>  _deviceAPs   = [];
   bool                   _apScanning  = false;
   WiFiAccessPoint?       _selectedAp;
-  bool                   _apConnecting = false;
   bool                   _apConnected  = false;
   Timer?                 _apPingTimer;
 
@@ -158,7 +155,6 @@ class _DevicePairingScreenState extends ConsumerState<DevicePairingScreen> {
       _deviceAPs       = [];
       _apScanning      = false;
       _selectedAp      = null;
-      _apConnecting    = false;
       _apConnected     = false;
       _nameCtrl.clear();
       _ssidCtrl.clear();
@@ -316,20 +312,6 @@ class _DevicePairingScreenState extends ConsumerState<DevicePairingScreen> {
         }
       }
     });
-  }
-
-  Future<void> _tryAutoConnect() async {
-    if (_selectedAp == null) return;
-    setState(() => _apConnecting = true);
-    try {
-      await WiFiForIoTPlugin.connect(
-        _selectedAp!.ssid,
-        password: 'dsgvsetup',
-        security: NetworkSecurity.WPA,
-        joinOnce: true,
-      );
-    } catch (_) {}
-    if (mounted) setState(() => _apConnecting = false);
   }
 
   Future<void> _startWifiApProvisioning() async {
@@ -1162,32 +1144,6 @@ class _DevicePairingScreenState extends ConsumerState<DevicePairingScreen> {
         ),
 
         const SizedBox(height: 20),
-
-        // Android: auto-connect button
-        if (Platform.isAndroid) ...[
-          ElevatedButton.icon(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF1E2A3A),
-              foregroundColor: const Color(0xFF00E5FF),
-              padding: const EdgeInsets.symmetric(vertical: 14),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12)),
-            ),
-            onPressed: _apConnecting ? null : _tryAutoConnect,
-            icon: _apConnecting
-                ? const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(
-                        strokeWidth: 2, color: Color(0xFF00E5FF)),
-                  )
-                : const Icon(Icons.wifi, size: 18),
-            label: Text(_apConnecting
-                ? 'Connecting…'
-                : 'Connect Automatically'),
-          ),
-          const SizedBox(height: 12),
-        ],
 
         // Ping status
         Container(
