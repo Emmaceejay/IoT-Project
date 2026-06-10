@@ -9,6 +9,8 @@ import 'package:path_provider/path_provider.dart';
 import '../models/device_schedule.dart';
 import 'device_manager.dart';
 
+// ignore_for_file: prefer_mixin
+
 class ScheduleState {
   final List<DeviceSchedule> schedules;
 
@@ -22,16 +24,30 @@ class ScheduleState {
   }
 }
 
-class ScheduleNotifier extends AsyncNotifier<ScheduleState> {
+class ScheduleNotifier extends AsyncNotifier<ScheduleState>
+    with WidgetsBindingObserver {
   Timer? _timer;
   final Map<String, DateTime> _lastFired = {};
 
   @override
   Future<ScheduleState> build() async {
-    ref.onDispose(() => _timer?.cancel());
+    WidgetsBinding.instance.addObserver(this);
+    ref.onDispose(() {
+      _timer?.cancel();
+      WidgetsBinding.instance.removeObserver(this);
+    });
     final loaded = await _load();
     _startTimer();
     return loaded;
+  }
+
+  // Re-evaluate when the app comes back from background — timers pause when
+  // backgrounded so a scheduled minute can be missed entirely without this.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _evaluate();
+    }
   }
 
   Future<void> addSchedule(DeviceSchedule schedule) async {
@@ -75,7 +91,15 @@ class ScheduleNotifier extends AsyncNotifier<ScheduleState> {
   }
 
   void _startTimer() {
-    _timer = Timer.periodic(const Duration(minutes: 1), (_) => _evaluate());
+    // Delay until the next :00-second mark so every periodic tick aligns to a
+    // full clock minute. Without this, Timer.periodic fires at an arbitrary
+    // offset and can skip an entire scheduled minute.
+    final now = DateTime.now();
+    final secsUntilNext = 60 - now.second;
+    _timer = Timer(Duration(seconds: secsUntilNext), () {
+      _evaluate();
+      _timer = Timer.periodic(const Duration(minutes: 1), (_) => _evaluate());
+    });
   }
 
   void _evaluate() {
