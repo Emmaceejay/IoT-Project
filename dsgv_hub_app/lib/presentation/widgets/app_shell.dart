@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../domain/services/mqtt_service.dart';
+import '../../domain/services/schedule_service.dart';
 import '../screens/dashboard_screen.dart';
 import '../screens/settings_screen.dart';
 
@@ -22,6 +23,7 @@ class _AppShellState extends ConsumerState<AppShell> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(mqttServiceProvider.notifier).connect();
+      ref.read(scheduleServiceProvider); // warm-start evaluation timer
     });
   }
 

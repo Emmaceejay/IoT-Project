@@ -47,6 +47,9 @@ class DeviceManager extends AsyncNotifier<List<SmartDevice>> {
   // Holds BLE names from provisioning until the MQTT announce arrives.
   final _pendingBleNames = <String, String>{};
 
+  // Holds user-assigned names from provisioning until the MQTT announce arrives.
+  final _pendingNames = <String, String>{};
+
   @override
   Future<List<SmartDevice>> build() async {
     _repository = ref.watch(deviceRepositoryProvider);
@@ -66,6 +69,16 @@ class DeviceManager extends AsyncNotifier<List<SmartDevice>> {
   void setPendingBleName(String deviceId, String bleName) {
     _pendingBleNames[deviceId.toUpperCase()] = bleName;
     debugPrint('[DeviceManager] Pending BLE name stored for $deviceId: $bleName');
+  }
+
+  /// Stores the user-assigned display name for a just-provisioned device.
+  /// Applied as [customName] when the device's MQTT announce arrives.
+  void setPendingName(String deviceId, String name) {
+    final trimmed = name.trim();
+    if (trimmed.isNotEmpty) {
+      _pendingNames[deviceId.toUpperCase()] = trimmed;
+      debugPrint('[DeviceManager] Pending name stored for $deviceId: $trimmed');
+    }
   }
 
   /// Returns the persisted BLE name for [deviceId], or null if unknown.
@@ -330,6 +343,7 @@ class DeviceManager extends AsyncNotifier<List<SmartDevice>> {
     final devices = state.value ?? [];
     final normalised = announced.uniqueDeviceId.toUpperCase();
     final pendingToken   = _pendingTokens.remove(normalised);
+    final pendingName    = _pendingNames.remove(normalised);
 
     // Persist BLE name when it arrives from provisioning so future WiFi
     // recovery can reconnect without QR scan.
@@ -353,11 +367,17 @@ class DeviceManager extends AsyncNotifier<List<SmartDevice>> {
         devices.indexWhere((d) => d.uniqueDeviceId == normalised);
 
     if (existingIndex == -1) {
-      await _repository.provisionDevice(withToken);
-      state = AsyncValue.data([...devices, withToken]);
+      // Apply user-assigned name from provisioning if present.
+      final toStore = pendingName != null
+          ? withToken.copyWith(customName: pendingName)
+          : withToken;
+      await _repository.provisionDevice(toStore);
+      state = AsyncValue.data([...devices, toStore]);
     } else {
       // Preserve the user-set custom name — MQTT announce must never wipe it.
-      final existingCustomName = devices[existingIndex].customName;
+      // If a pending name arrived (re-provisioning), prefer it over an empty slot.
+      final existingCustomName =
+          devices[existingIndex].customName ?? pendingName;
 
       state = AsyncValue.data(
         devices.map((d) {

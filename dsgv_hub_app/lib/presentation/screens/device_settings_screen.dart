@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:wifi_scan/wifi_scan.dart';
 import '../../domain/models/smart_device.dart';
 import '../../domain/models/room.dart';
 import '../../domain/services/ble_provisioning_service.dart';
@@ -25,6 +27,10 @@ class _DeviceSettingsScreenState extends ConsumerState<DeviceSettingsScreen> {
   bool _wifiChanging = false;
   bool _wifiSuccess  = false;
   String? _wifiStatus;
+
+  List<WiFiAccessPoint> _scannedNetworks = [];
+  bool _isScanning = false;
+  bool _showNetworkList = false;
 
   bool get _hasRelay => widget.device.capabilities
       .any((c) => c == 'relay' || c.startsWith('relay_'));
@@ -151,6 +157,57 @@ class _DeviceSettingsScreenState extends ConsumerState<DeviceSettingsScreen> {
         ProvisioningStep.success               => 'Connected successfully!',
         ProvisioningStep.failed                => 'Failed.',
       };
+
+  // ── WiFi scan ──────────────────────────────────────────────────────────────
+
+  Future<void> _scanNetworks() async {
+    FocusScope.of(context).unfocus();
+
+    final status = await Permission.locationWhenInUse.request();
+    if (!status.isGranted) {
+      setState(() => _wifiStatus =
+          'Location permission is required to scan for Wi-Fi networks.');
+      return;
+    }
+
+    final canScan = await WiFiScan.instance.canStartScan(askPermissions: true);
+    if (canScan != CanStartScan.yes) {
+      setState(() => _wifiStatus =
+          'Wi-Fi scanning is not available on this device. Please type the network name.');
+      return;
+    }
+
+    setState(() {
+      _isScanning = true;
+      _wifiStatus = null;
+      _showNetworkList = false;
+    });
+
+    await WiFiScan.instance.startScan();
+    final results = await WiFiScan.instance.getScannedResults();
+    final networks = results.where((r) => r.ssid.isNotEmpty).toList()
+      ..sort((a, b) => b.level.compareTo(a.level));
+
+    if (!mounted) return;
+    setState(() {
+      _scannedNetworks = networks;
+      _isScanning = false;
+      _showNetworkList = networks.isNotEmpty;
+      if (networks.isEmpty) {
+        _wifiStatus = 'No networks found nearby. Try scanning again.';
+      }
+    });
+  }
+
+  int _wifiSignalLevel(int rssi) {
+    if (rssi >= -50) return 4;
+    if (rssi >= -60) return 3;
+    if (rssi >= -70) return 2;
+    return 1;
+  }
+
+  bool _isSecuredNetwork(String capabilities) =>
+      capabilities.contains('WPA') || capabilities.contains('WEP');
 
   // ── Room assignment ────────────────────────────────────────────────────────
 
@@ -390,6 +447,19 @@ class _DeviceSettingsScreenState extends ConsumerState<DeviceSettingsScreen> {
                     labelStyle: const TextStyle(color: Colors.white38),
                     prefixIcon: const Icon(Icons.wifi,
                         color: Color(0xFF00E5FF), size: 20),
+                    suffixIcon: IconButton(
+                      icon: _isScanning
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 1.5,
+                                  color: Color(0xFF00E5FF)))
+                          : const Icon(Icons.wifi_find,
+                              color: Color(0xFF00E5FF), size: 20),
+                      tooltip: 'Scan for networks',
+                      onPressed: _isScanning ? null : _scanNetworks,
+                    ),
                     filled: true,
                     fillColor: const Color(0xFF0A0E1A),
                     border: OutlineInputBorder(
@@ -400,8 +470,66 @@ class _DeviceSettingsScreenState extends ConsumerState<DeviceSettingsScreen> {
                         borderSide:
                             const BorderSide(color: Color(0xFF00E5FF))),
                   ),
-                  onChanged: (_) => setState(() {}),
+                  onChanged: (_) =>
+                      setState(() => _showNetworkList = false),
                 ),
+                if (_showNetworkList) ...[
+                  const SizedBox(height: 6),
+                  Container(
+                    constraints: const BoxConstraints(maxHeight: 220),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0A0E1A),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                          color: Colors.white.withValues(alpha: 0.08)),
+                    ),
+                    child: ListView.builder(
+                      shrinkWrap: true,
+                      physics: const ClampingScrollPhysics(),
+                      itemCount: _scannedNetworks.length,
+                      itemBuilder: (_, i) {
+                        final n = _scannedNetworks[i];
+                        final level = _wifiSignalLevel(n.level);
+                        final secured = _isSecuredNetwork(n.capabilities);
+                        final signalColor = level >= 3
+                            ? const Color(0xFF00E5FF)
+                            : level == 2
+                                ? const Color(0xFF00E5FF)
+                                    .withValues(alpha: 0.55)
+                                : const Color(0xFF00E5FF)
+                                    .withValues(alpha: 0.3);
+                        return InkWell(
+                          borderRadius: BorderRadius.circular(8),
+                          onTap: () {
+                            _wifiSsidCtrl.text = n.ssid;
+                            setState(() => _showNetworkList = false);
+                          },
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 10),
+                            child: Row(
+                              children: [
+                                Icon(Icons.wifi,
+                                    size: 18, color: signalColor),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Text(n.ssid,
+                                      style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 13)),
+                                ),
+                                if (secured)
+                                  const Icon(Icons.lock_outline,
+                                      size: 14,
+                                      color: Colors.white38),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 10),
                 TextField(
                   controller: _wifiPassCtrl,

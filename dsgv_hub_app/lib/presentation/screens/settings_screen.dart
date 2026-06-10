@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../domain/models/mqtt_config.dart';
 import '../../domain/services/device_manager.dart';
 import '../../domain/services/mqtt_service.dart';
+import 'bulk_wifi_screen.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
@@ -554,6 +555,63 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             inProgress: _brokerSyncInProgress,
             onPush: _onPushBrokerTapped,
             onRevert: _onRevertToFactoryTapped,
+          ),
+          const SizedBox(height: 32),
+
+          // ── Device Wi-Fi ───────────────────────────────────────────────
+          _sectionHeader('Device Wi-Fi'),
+          InkWell(
+            borderRadius: BorderRadius.circular(12),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const BulkWifiScreen()),
+            ),
+            child: Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: const Color(0xFF121826),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.06)),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 42,
+                    height: 42,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF00E5FF).withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: const Icon(Icons.wifi_tethering,
+                        color: Color(0xFF00E5FF), size: 20),
+                  ),
+                  const SizedBox(width: 14),
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Bulk Wi-Fi Change',
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600),
+                        ),
+                        SizedBox(height: 3),
+                        Text(
+                          'Move all devices to a new network at once',
+                          style: TextStyle(
+                              color: Colors.white38, fontSize: 12),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Icon(Icons.chevron_right,
+                      color: Colors.white24, size: 20),
+                ],
+              ),
+            ),
           ),
           const SizedBox(height: 32),
 

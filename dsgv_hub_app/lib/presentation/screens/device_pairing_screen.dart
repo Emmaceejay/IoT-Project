@@ -49,12 +49,17 @@ class _ParsedQr {
 
 class DevicePairingScreen extends ConsumerStatefulWidget {
   /// When true, the camera opens immediately on load.
-  /// When false (default), the scanner shows an idle placeholder and the user
-  /// taps to activate it.  Pass [openScanner: false] when launching from the
-  /// "Enter pair code" flow so the manual entry form is shown first.
   final bool openScanner;
 
-  const DevicePairingScreen({super.key, this.openScanner = false});
+  /// When true, skips the QR scanner and immediately starts a BLE device scan.
+  /// Navigated to from the "Scan for nearby devices" option in the add sheet.
+  final bool bleScanMode;
+
+  const DevicePairingScreen({
+    super.key,
+    this.openScanner = false,
+    this.bleScanMode = false,
+  });
 
   @override
   ConsumerState<DevicePairingScreen> createState() =>
@@ -100,8 +105,13 @@ class _DevicePairingScreenState extends ConsumerState<DevicePairingScreen> {
   @override
   void initState() {
     super.initState();
-    _scannerActive    = widget.openScanner;
-    _showManualEntry  = !widget.openScanner;
+    _scannerActive   = widget.openScanner && !widget.bleScanMode;
+    _showManualEntry = !widget.openScanner && !widget.bleScanMode;
+    if (widget.bleScanMode) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _scanNearbyDevices();
+      });
+    }
   }
 
   @override
@@ -298,6 +308,12 @@ class _DevicePairingScreenState extends ConsumerState<DevicePairingScreen> {
               _parsedQr!.dsgvDeviceName!,
             );
           }
+          if (_nameCtrl.text.trim().isNotEmpty) {
+            manager.setPendingName(
+              status.provisionedDeviceId!,
+              _nameCtrl.text.trim(),
+            );
+          }
           manager.registerDevice(
             status.provisionedDeviceId!,
             status.authToken!,
@@ -380,9 +396,9 @@ class _DevicePairingScreenState extends ConsumerState<DevicePairingScreen> {
       appBar: AppBar(
         backgroundColor: const Color(0xFF0A0E1A),
         iconTheme: const IconThemeData(color: Colors.white),
-        title: const Text(
-          'Pair New Device',
-          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+        title: Text(
+          widget.bleScanMode ? 'Pair via Bluetooth' : 'Pair New Device',
+          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
         ),
       ),
       body: SingleChildScrollView(
@@ -390,13 +406,15 @@ class _DevicePairingScreenState extends ConsumerState<DevicePairingScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // ── QR Scanner / Preview / Idle ──────────────────────────────
-            _buildScannerSection(),
-
-            // ── Fallback options (damaged QR / no QR) ───────────────────
-            if (_parsedQr == null) ...[
-              const SizedBox(height: 16),
-              _buildFallbackOptions(),
+            // ── Entry section ─────────────────────────────────────────────
+            if (widget.bleScanMode && _parsedQr == null)
+              _buildBleScanSection()
+            else ...[
+              _buildScannerSection(),
+              if (_parsedQr == null) ...[
+                const SizedBox(height: 16),
+                _buildFallbackOptions(),
+              ],
             ],
 
             const SizedBox(height: 28),
@@ -1008,6 +1026,86 @@ class _DevicePairingScreenState extends ConsumerState<DevicePairingScreen> {
     ]);
   }
 
+  Widget _buildBleScanSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: const Color(0xFF121826),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: const Color(0xFF00E5FF).withValues(alpha: 0.3)),
+          ),
+          child: Column(
+            children: [
+              if (_isScanning)
+                const SizedBox(
+                  width: 52,
+                  height: 52,
+                  child: CircularProgressIndicator(strokeWidth: 2.5, color: Color(0xFF00E5FF)),
+                )
+              else
+                const Icon(Icons.bluetooth_searching, size: 52, color: Color(0xFF00E5FF)),
+              const SizedBox(height: 14),
+              Text(
+                _isScanning ? 'Scanning for DSGV devices…' : 'Bluetooth Device Scan',
+                style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w500),
+              ),
+              const SizedBox(height: 6),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16),
+                child: Text(
+                  'Make sure the device is powered on\nand in provisioning mode',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.white38, fontSize: 12, height: 1.5),
+                ),
+              ),
+              if (!_isScanning) ...[
+                const SizedBox(height: 16),
+                ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF00E5FF),
+                    foregroundColor: Colors.black,
+                    padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 12),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                  icon: const Icon(Icons.refresh, size: 18),
+                  label: Text(_nearbyDevices.isEmpty ? 'Start Scan' : 'Rescan'),
+                  onPressed: _scanNearbyDevices,
+                ),
+              ],
+            ],
+          ),
+        ),
+        if (_nearbyDevices.isNotEmpty) ...[
+          const SizedBox(height: 16),
+          const Text('Found devices',
+              style: TextStyle(color: Colors.white54, fontSize: 13, fontWeight: FontWeight.w500)),
+          const SizedBox(height: 8),
+          Container(
+            decoration: BoxDecoration(
+              color: const Color(0xFF121826),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: const Color(0xFF00E5FF).withValues(alpha: 0.2)),
+            ),
+            child: Column(
+              children: _nearbyDevices.map((device) {
+                return ListTile(
+                  leading: const Icon(Icons.bluetooth, color: Color(0xFF00E5FF), size: 20),
+                  title: Text(device.platformName,
+                      style: const TextStyle(color: Colors.white, fontSize: 14)),
+                  trailing: const Icon(Icons.chevron_right, color: Colors.white38, size: 20),
+                  onTap: () => _selectNearbyDevice(device),
+                );
+              }).toList(),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
   Widget _buildFooter() {
     final isDSGV = _parsedQr?.type == _QrType.dsgvProvision;
     return Text(
@@ -1028,8 +1126,7 @@ class _DevicePairingScreenState extends ConsumerState<DevicePairingScreen> {
       return Text(
         _statusMessage!,
         textAlign: TextAlign.center,
-        style:
-            const TextStyle(color: Colors.white70, fontSize: 13, height: 1.5),
+        style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.5),
       );
     }
     if (_isSuccess) {
@@ -1038,32 +1135,22 @@ class _DevicePairingScreenState extends ConsumerState<DevicePairingScreen> {
         decoration: BoxDecoration(
           color: const Color(0xFF071A0F),
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-              color: const Color(0xFF00C853).withValues(alpha: 0.45)),
+          border: Border.all(color: const Color(0xFF00C853).withValues(alpha: 0.45)),
         ),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Icon(Icons.check_circle_rounded,
-                color: Color(0xFF00C853), size: 22),
+            const Icon(Icons.check_circle_rounded, color: Color(0xFF00C853), size: 22),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    'Provisioned successfully',
-                    style: TextStyle(
-                        color: Color(0xFF00C853),
-                        fontWeight: FontWeight.w600,
-                        fontSize: 14),
-                  ),
+                  const Text('Provisioned successfully',
+                      style: TextStyle(color: Color(0xFF00C853), fontWeight: FontWeight.w600, fontSize: 14)),
                   const SizedBox(height: 4),
-                  Text(
-                    _statusMessage!,
-                    style: const TextStyle(
-                        color: Colors.white70, fontSize: 12, height: 1.5),
-                  ),
+                  Text(_statusMessage!,
+                      style: const TextStyle(color: Colors.white70, fontSize: 12, height: 1.5)),
                 ],
               ),
             ),
@@ -1071,38 +1158,52 @@ class _DevicePairingScreenState extends ConsumerState<DevicePairingScreen> {
         ),
       );
     }
+    // Provisioning started and failed — show a red failure card
+    if (_provStep != null) {
+      return Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1A0707),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.redAccent.withValues(alpha: 0.45)),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Icon(Icons.error_rounded, color: Colors.redAccent, size: 22),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Provisioning failed',
+                      style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.w600, fontSize: 14)),
+                  const SizedBox(height: 4),
+                  Text(_statusMessage!,
+                      style: const TextStyle(color: Colors.white70, fontSize: 12, height: 1.5)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+    // Pre-provisioning info/warning (e.g. scan result, validation hint)
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
-        color: const Color(0xFF1A0707),
+        color: const Color(0xFF1A1500),
         borderRadius: BorderRadius.circular(12),
-        border:
-            Border.all(color: Colors.redAccent.withValues(alpha: 0.45)),
+        border: Border.all(color: Colors.orangeAccent.withValues(alpha: 0.4)),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Icon(Icons.error_rounded, color: Colors.redAccent, size: 22),
-          const SizedBox(width: 12),
+          const Icon(Icons.info_outline, color: Colors.orangeAccent, size: 18),
+          const SizedBox(width: 10),
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Provisioning failed',
-                  style: TextStyle(
-                      color: Colors.redAccent,
-                      fontWeight: FontWeight.w600,
-                      fontSize: 14),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  _statusMessage!,
-                  style: const TextStyle(
-                      color: Colors.white70, fontSize: 12, height: 1.5),
-                ),
-              ],
-            ),
+            child: Text(_statusMessage!,
+                style: const TextStyle(color: Colors.white70, fontSize: 12, height: 1.5)),
           ),
         ],
       ),

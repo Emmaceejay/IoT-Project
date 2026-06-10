@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../domain/models/device_schedule.dart';
 import '../../domain/models/smart_device.dart';
 import '../../domain/services/device_manager.dart';
 import '../../domain/services/ota_service.dart';
+import '../../domain/services/schedule_service.dart';
+import '../widgets/schedule_sheet.dart';
 import 'device_settings_screen.dart';
 
 /// Device Detail Screen
@@ -83,6 +86,11 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
                     ),
             ),
           ),
+          const SizedBox(height: 20),
+
+          // ── Schedules ─────────────────────────────────────────────
+          _section('Schedules'),
+          _buildSchedulesSection(device),
           const SizedBox(height: 20),
 
           // ── OTA Firmware Update ───────────────────────────────────
@@ -460,6 +468,95 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
         ),
       );
 
+  // ── Schedules section ──────────────────────────────────────────────────────
+
+  Widget _buildSchedulesSection(SmartDevice device) {
+    final scheduleAsync = ref.watch(scheduleServiceProvider);
+    final schedules = scheduleAsync.valueOrNull?.forDevice(device.uniqueDeviceId) ?? [];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        ...schedules.map((s) => _ScheduleRow(
+              schedule: s,
+              onToggle: (enabled) => ref
+                  .read(scheduleServiceProvider.notifier)
+                  .toggleSchedule(s.id, enabled),
+              onTap: () => showModalBottomSheet(
+                context: context,
+                isScrollControlled: true,
+                backgroundColor: Colors.transparent,
+                builder: (_) =>
+                    ScheduleSheet(device: device, existing: s),
+              ),
+              onDelete: () => _confirmDeleteSchedule(s),
+            )),
+        const SizedBox(height: 8),
+        OutlinedButton.icon(
+          style: OutlinedButton.styleFrom(
+            foregroundColor: const Color(0xFF00E5FF),
+            side: const BorderSide(color: Color(0xFF00E5FF)),
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          ),
+          onPressed: () => showModalBottomSheet(
+            context: context,
+            isScrollControlled: true,
+            backgroundColor: Colors.transparent,
+            builder: (_) => ScheduleSheet(device: device),
+          ),
+          icon: const Icon(Icons.add, size: 18),
+          label: const Text('Add Schedule'),
+        ),
+        const SizedBox(height: 6),
+        const Text(
+          'Schedules run while the app is open.',
+          style: TextStyle(color: Colors.white24, fontSize: 10),
+          textAlign: TextAlign.center,
+        ),
+      ],
+    );
+  }
+
+  Future<void> _confirmDeleteSchedule(DeviceSchedule schedule) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF121826),
+        title: const Text('Delete Schedule?',
+            style: TextStyle(color: Colors.white)),
+        content: Text(
+          'Delete "${schedule.label}"?',
+          style: const TextStyle(
+              color: Colors.white70, fontSize: 13, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child:
+                const Text('Cancel', style: TextStyle(color: Colors.white54)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.redAccent,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8)),
+            ),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true && mounted) {
+      await ref
+          .read(scheduleServiceProvider.notifier)
+          .removeSchedule(schedule.id);
+    }
+  }
+
   Widget _section(String title) => Padding(
         padding: const EdgeInsets.only(bottom: 10),
         child: Text(title,
@@ -468,6 +565,72 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
                 fontWeight: FontWeight.bold,
                 fontSize: 16)),
       );
+}
+
+// ── Schedule row tile ──────────────────────────────────────────────────────────
+
+class _ScheduleRow extends StatelessWidget {
+  final DeviceSchedule schedule;
+  final ValueChanged<bool> onToggle;
+  final VoidCallback onTap;
+  final VoidCallback onDelete;
+
+  const _ScheduleRow({
+    required this.schedule,
+    required this.onToggle,
+    required this.onTap,
+    required this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onLongPress: onDelete,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 8),
+        decoration: BoxDecoration(
+          color: const Color(0xFF121826),
+          borderRadius: BorderRadius.circular(12),
+          border:
+              Border.all(color: Colors.white.withValues(alpha: 0.06)),
+        ),
+        child: ListTile(
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+          leading: Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: const Color(0xFF00E5FF).withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: const Icon(Icons.schedule_outlined,
+                color: Color(0xFF00E5FF), size: 18),
+          ),
+          title: Text(
+            schedule.label,
+            style: TextStyle(
+              color: schedule.enabled ? Colors.white : Colors.white38,
+              fontSize: 14,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          subtitle: Text(
+            '${schedule.formattedTime}  ·  ${schedule.formattedDays}',
+            style: const TextStyle(color: Colors.white38, fontSize: 12),
+          ),
+          trailing: Switch.adaptive(
+            value: schedule.enabled,
+            activeThumbColor: const Color(0xFF00E5FF),
+            activeTrackColor:
+                const Color(0xFF00E5FF).withValues(alpha: 0.3),
+            onChanged: onToggle,
+          ),
+          onTap: onTap,
+        ),
+      ),
+    );
+  }
 }
 
 // ── Sub-widgets ────────────────────────────────────────────────────────────────

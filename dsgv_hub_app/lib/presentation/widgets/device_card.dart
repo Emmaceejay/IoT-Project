@@ -116,33 +116,14 @@ class _DeviceCardState extends ConsumerState<DeviceCard> {
           ),
         ),
         child: Padding(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(18),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               // ── Header row ───────────────────────────────────────────
               Row(
                 children: [
-                  // Status dot
-                  Container(
-                    width: 10,
-                    height: 10,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: statusColor,
-                      boxShadow: isOnline
-                          ? [
-                              BoxShadow(
-                                  color:
-                                      statusColor.withValues(alpha: 0.5),
-                                  blurRadius: 8)
-                            ]
-                          : null,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-
-                  // Name + status
+                  // Name + status pill
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -151,15 +132,50 @@ class _DeviceCardState extends ConsumerState<DeviceCard> {
                           widget.device.displayName,
                           style: const TextStyle(
                               color: Colors.white,
-                              fontSize: 16,
+                              fontSize: 17,
                               fontWeight: FontWeight.w600),
                           overflow: TextOverflow.ellipsis,
                         ),
-                        const SizedBox(height: 2),
-                        Text(
-                          isOnline ? 'Online' : 'Offline',
-                          style: TextStyle(
-                              color: statusColor, fontSize: 12),
+                        const SizedBox(height: 5),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 7, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: statusColor.withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(
+                                color: statusColor.withValues(alpha: 0.4),
+                                width: 0.8),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Container(
+                                width: 5,
+                                height: 5,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: statusColor,
+                                  boxShadow: isOnline
+                                      ? [
+                                          BoxShadow(
+                                              color: statusColor
+                                                  .withValues(alpha: 0.6),
+                                              blurRadius: 4)
+                                        ]
+                                      : null,
+                                ),
+                              ),
+                              const SizedBox(width: 5),
+                              Text(
+                                isOnline ? 'Online' : 'Offline',
+                                style: TextStyle(
+                                    color: statusColor,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w600),
+                              ),
+                            ],
+                          ),
                         ),
                       ],
                     ),
@@ -179,25 +195,29 @@ class _DeviceCardState extends ConsumerState<DeviceCard> {
                       spacing: 4,
                       children: widget.device.capabilities
                           .take(2)
-                          .map((c) => Chip(
-                                label: Text(
-                                    c.replaceAll('_', ' '),
-                                    style: const TextStyle(
-                                        fontSize: 10,
-                                        color: Colors.white70)),
-                                padding: EdgeInsets.zero,
-                                backgroundColor:
-                                    const Color(0xFF1E2A3A),
-                                side: BorderSide.none,
+                          .map((c) => Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 8, vertical: 3),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF1A2235),
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: Text(
+                                  c.replaceAll('_', ' '),
+                                  style: const TextStyle(
+                                      fontSize: 10,
+                                      color: Colors.white54),
+                                ),
                               ))
                           .toList(),
                     ),
                     const SizedBox(width: 8),
                     Icon(
                       _expanded
-                          ? Icons.expand_less
-                          : Icons.expand_more,
+                          ? Icons.keyboard_arrow_up_rounded
+                          : Icons.keyboard_arrow_down_rounded,
                       color: Colors.white38,
+                      size: 20,
                     ),
                   ],
                 ],
@@ -205,7 +225,10 @@ class _DeviceCardState extends ConsumerState<DeviceCard> {
 
               // ── Expanded controls (complex devices only) ─────────────
               if (!_isRelayOnly && _expanded) ...[
-                const Divider(color: Colors.white12, height: 24),
+                Divider(
+                    color: Colors.white.withValues(alpha: 0.06),
+                    height: 20,
+                    thickness: 1),
                 SchemaDrivenUiBuilder(device: widget.device),
               ],
             ],

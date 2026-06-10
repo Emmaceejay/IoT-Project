@@ -43,6 +43,9 @@ dependencies:
   # Connectivity (for mDNS / network state detection)
   connectivity_plus: ^6.0.5
 
+  # Phone-side WiFi scanning (device settings + bulk WiFi change)
+  wifi_scan: ^0.4.1
+
   # Icons
   cupertino_icons: ^1.0.6
 

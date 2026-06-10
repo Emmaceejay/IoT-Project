@@ -6,6 +6,7 @@ import '../../domain/services/device_manager.dart';
 import '../../domain/services/room_service.dart';
 import '../widgets/device_card.dart';
 import 'device_pairing_screen.dart';
+import 'ap_provisioning_screen.dart';
 
 class DashboardScreen extends ConsumerStatefulWidget {
   const DashboardScreen({super.key});
@@ -17,6 +18,7 @@ class DashboardScreen extends ConsumerStatefulWidget {
 class _DashboardScreenState extends ConsumerState<DashboardScreen> {
   String? _selectedRoomId; // null = All
   String _categoryFilter = 'all'; // 'all' | 'switches' | 'lights' | 'sensors'
+  bool _filtersExpanded = false;
 
   // ── Filtering ──────────────────────────────────────────────────────────────
 
@@ -51,6 +53,30 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
 
     return result;
   }
+
+  // ── Filter summary ─────────────────────────────────────────────────────────
+
+  String _filterSummary(RoomState roomState) {
+    final roomLabel = _selectedRoomId != null
+        ? roomState.rooms
+            .firstWhere(
+              (r) => r.id == _selectedRoomId,
+              orElse: () => const Room(
+                  id: '', name: 'Room', color: Colors.white, iconKey: 'home'),
+            )
+            .name
+        : 'All Rooms';
+    final catLabel = switch (_categoryFilter) {
+      'switches' => 'Switches',
+      'lights' => 'Lights',
+      'sensors' => 'Sensors',
+      _ => 'All Devices',
+    };
+    return '$roomLabel  ·  $catLabel';
+  }
+
+  bool get _hasActiveFilter =>
+      _selectedRoomId != null || _categoryFilter != 'all';
 
   // ── Actions ────────────────────────────────────────────────────────────────
 
@@ -93,8 +119,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                 onTap: () {
                   Navigator.pop(sheetCtx);
                   Navigator.of(ctx).push(MaterialPageRoute(
-                    builder: (_) =>
-                        const DevicePairingScreen(openScanner: true),
+                    builder: (_) => const DevicePairingScreen(openScanner: true),
                   ));
                 },
               ),
@@ -107,8 +132,33 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                 onTap: () {
                   Navigator.pop(sheetCtx);
                   Navigator.of(ctx).push(MaterialPageRoute(
-                    builder: (_) =>
-                        const DevicePairingScreen(openScanner: false),
+                    builder: (_) => const DevicePairingScreen(openScanner: false),
+                  ));
+                },
+              ),
+              const Divider(color: Colors.white12, height: 8),
+              _AddOptionTile(
+                icon: Icons.bluetooth_searching,
+                title: 'Scan for nearby devices',
+                subtitle: 'Auto-discover DSGV devices broadcasting via Bluetooth',
+                iconColor: const Color(0xFF00E5FF),
+                onTap: () {
+                  Navigator.pop(sheetCtx);
+                  Navigator.of(ctx).push(MaterialPageRoute(
+                    builder: (_) => const DevicePairingScreen(bleScanMode: true),
+                  ));
+                },
+              ),
+              const Divider(color: Colors.white12, height: 8),
+              _AddOptionTile(
+                icon: Icons.wifi_tethering,
+                title: 'Join via device Wi-Fi',
+                subtitle: 'Connect directly to the device\'s setup hotspot',
+                iconColor: Colors.tealAccent,
+                onTap: () {
+                  Navigator.pop(sheetCtx);
+                  Navigator.of(ctx).push(MaterialPageRoute(
+                    builder: (_) => const ApProvisioningScreen(),
                   ));
                 },
               ),
@@ -191,7 +241,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
             ),
             Text(
               'Smart Device Dashboard',
-              style: TextStyle(color: Colors.white38, fontSize: 12),
+              style: TextStyle(color: Colors.white38, fontSize: 11, letterSpacing: 0.3),
             ),
           ],
         ),
@@ -234,29 +284,23 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       color: const Color(0xFF00E5FF),
       onRefresh: () => ref.read(deviceManagerProvider.notifier).refresh(),
       child: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 100),
         children: [
-          // ── Summary stats (always global counts) ───────────────────────
-          _SummaryRow(
-            total: devices.length,
-            online: devices.where((d) => d.status == DeviceStatus.online).length,
-          ),
-          const SizedBox(height: 16),
-
-          // ── Room filter chips ──────────────────────────────────────────
-          _RoomChipsBar(
+          // ── Collapsible filter panel ───────────────────────────────────
+          _CollapsibleFilterPanel(
+            expanded: _filtersExpanded,
+            summary: _filterSummary(roomState),
+            hasActiveFilter: _hasActiveFilter,
+            onToggle: () =>
+                setState(() => _filtersExpanded = !_filtersExpanded),
             rooms: roomState.rooms,
-            selectedId: _selectedRoomId,
-            onSelect: (id) => setState(() => _selectedRoomId = id),
-            onLongPress: (room) => _confirmDeleteRoom(ctx, room),
+            selectedRoomId: _selectedRoomId,
+            onRoomSelect: (id) => setState(() => _selectedRoomId = id),
+            onRoomLongPress: (room) => _confirmDeleteRoom(ctx, room),
             onAddRoom: () => _showAddRoomDialog(ctx),
-          ),
-          const SizedBox(height: 8),
-
-          // ── Category filter ────────────────────────────────────────────
-          _CategoryFilterBar(
-            selected: _categoryFilter,
-            onSelect: (c) => setState(() => _categoryFilter = c),
+            categoryFilter: _categoryFilter,
+            onCategorySelect: (c) =>
+                setState(() => _categoryFilter = c),
           ),
           const SizedBox(height: 16),
 
@@ -397,7 +441,7 @@ class _RoomChipsBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      height: 34,
+      height: 36,
       child: ListView(
         scrollDirection: Axis.horizontal,
         children: [
@@ -480,6 +524,7 @@ class _RoomChip extends StatelessWidget {
           borderRadius: BorderRadius.circular(20),
           border: Border.all(
             color: selected ? chipColor : Colors.white12,
+            width: selected ? 1.5 : 1.0,
           ),
         ),
         child: Row(
@@ -506,69 +551,225 @@ class _RoomChip extends StatelessWidget {
   }
 }
 
-// ── Category filter bar ────────────────────────────────────────────────────────
+// ── Collapsible filter panel ──────────────────────────────────────────────────
 
-class _CategoryFilterBar extends StatelessWidget {
-  final String selected;
-  final ValueChanged<String> onSelect;
+class _CollapsibleFilterPanel extends StatelessWidget {
+  final bool expanded;
+  final String summary;
+  final bool hasActiveFilter;
+  final VoidCallback onToggle;
+  final List<Room> rooms;
+  final String? selectedRoomId;
+  final ValueChanged<String?> onRoomSelect;
+  final ValueChanged<Room> onRoomLongPress;
+  final VoidCallback onAddRoom;
+  final String categoryFilter;
+  final ValueChanged<String> onCategorySelect;
 
-  const _CategoryFilterBar({required this.selected, required this.onSelect});
+  const _CollapsibleFilterPanel({
+    required this.expanded,
+    required this.summary,
+    required this.hasActiveFilter,
+    required this.onToggle,
+    required this.rooms,
+    required this.selectedRoomId,
+    required this.onRoomSelect,
+    required this.onRoomLongPress,
+    required this.onAddRoom,
+    required this.categoryFilter,
+    required this.onCategorySelect,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: Row(
-        children: [
-          _CategoryChip(label: 'All',      value: 'all',      selected: selected == 'all',      onTap: () => onSelect('all')),
-          const SizedBox(width: 8),
-          _CategoryChip(label: 'Switches', value: 'switches', selected: selected == 'switches', onTap: () => onSelect('switches')),
-          const SizedBox(width: 8),
-          _CategoryChip(label: 'Lights',   value: 'lights',   selected: selected == 'lights',   onTap: () => onSelect('lights')),
-          const SizedBox(width: 8),
-          _CategoryChip(label: 'Sensors',  value: 'sensors',  selected: selected == 'sensors',  onTap: () => onSelect('sensors')),
-        ],
-      ),
+    const accent = Color(0xFF00E5FF);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // ── Collapsed summary pill ─────────────────────────────────────
+        GestureDetector(
+          onTap: onToggle,
+          child: Container(
+            padding:
+                const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              color: const Color(0xFF121826),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: hasActiveFilter
+                    ? accent.withValues(alpha: 0.35)
+                    : Colors.white.withValues(alpha: 0.08),
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  expanded
+                      ? Icons.keyboard_arrow_up_rounded
+                      : Icons.keyboard_arrow_down_rounded,
+                  size: 18,
+                  color: hasActiveFilter ? accent : Colors.white38,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    summary,
+                    style: TextStyle(
+                      color: hasActiveFilter
+                          ? accent.withValues(alpha: 0.85)
+                          : Colors.white38,
+                      fontSize: 13,
+                      fontWeight: hasActiveFilter
+                          ? FontWeight.w500
+                          : FontWeight.w400,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                if (hasActiveFilter)
+                  Container(
+                    width: 6,
+                    height: 6,
+                    decoration: const BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: accent,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+
+        // ── Expanded panel ─────────────────────────────────────────────
+        AnimatedSize(
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeInOut,
+          child: expanded
+              ? Padding(
+                  padding: const EdgeInsets.only(top: 10),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _RoomChipsBar(
+                        rooms: rooms,
+                        selectedId: selectedRoomId,
+                        onSelect: onRoomSelect,
+                        onLongPress: onRoomLongPress,
+                        onAddRoom: onAddRoom,
+                      ),
+                      const SizedBox(height: 10),
+                      _CategoryTabBar(
+                        selected: categoryFilter,
+                        onSelect: onCategorySelect,
+                      ),
+                    ],
+                  ),
+                )
+              : const SizedBox.shrink(),
+        ),
+      ],
     );
   }
 }
 
-class _CategoryChip extends StatelessWidget {
-  final String label;
+// ── Category tab bar ──────────────────────────────────────────────────────────
+
+class _CategoryTabBar extends StatelessWidget {
+  final String selected;
+  final ValueChanged<String> onSelect;
+
+  const _CategoryTabBar({required this.selected, required this.onSelect});
+
+  static const _tabs = [
+    ('all', 'All', Icons.apps_rounded),
+    ('switches', 'Switches', Icons.toggle_on_outlined),
+    ('lights', 'Lights', Icons.lightbulb_outline),
+    ('sensors', 'Sensors', Icons.sensors_outlined),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Divider(
+          color: Colors.white.withValues(alpha: 0.06),
+          height: 1,
+          thickness: 1,
+        ),
+        const SizedBox(height: 8),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceAround,
+          children: _tabs
+              .map((t) => _CategoryTab(
+                    value: t.$1,
+                    label: t.$2,
+                    icon: t.$3,
+                    selected: selected == t.$1,
+                    onTap: () => onSelect(t.$1),
+                  ))
+              .toList(),
+        ),
+        const SizedBox(height: 4),
+      ],
+    );
+  }
+}
+
+class _CategoryTab extends StatelessWidget {
   final String value;
+  final String label;
+  final IconData icon;
   final bool selected;
   final VoidCallback onTap;
 
-  const _CategoryChip({
-    required this.label,
+  const _CategoryTab({
     required this.value,
+    required this.label,
+    required this.icon,
     required this.selected,
     required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
+    const accent = Color(0xFF00E5FF);
     return GestureDetector(
       onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
-        decoration: BoxDecoration(
-          color: selected
-              ? const Color(0xFF00E5FF).withValues(alpha: 0.12)
-              : Colors.transparent,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: selected ? const Color(0xFF00E5FF) : Colors.white12,
-          ),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            color: selected ? const Color(0xFF00E5FF) : Colors.white38,
-            fontSize: 12,
-            fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
-          ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              icon,
+              size: 20,
+              color: selected ? accent : Colors.white38,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              label,
+              style: TextStyle(
+                color: selected ? accent : Colors.white38,
+                fontSize: 11,
+                fontWeight:
+                    selected ? FontWeight.w600 : FontWeight.w400,
+              ),
+            ),
+            const SizedBox(height: 4),
+            AnimatedOpacity(
+              duration: const Duration(milliseconds: 200),
+              opacity: selected ? 1.0 : 0.0,
+              child: Container(
+                height: 2,
+                width: 20,
+                decoration: BoxDecoration(
+                  color: accent,
+                  borderRadius: BorderRadius.circular(1),
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -765,72 +966,6 @@ class _AddRoomDialogState extends State<_AddRoomDialog> {
   }
 }
 
-// ── Summary row ────────────────────────────────────────────────────────────────
-
-class _SummaryRow extends StatelessWidget {
-  final int total;
-  final int online;
-
-  const _SummaryRow({required this.total, required this.online});
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        _StatCard(label: 'Total', value: total.toString()),
-        const SizedBox(width: 12),
-        _StatCard(
-            label: 'Online',
-            value: online.toString(),
-            color: const Color(0xFF00E5FF)),
-        const SizedBox(width: 12),
-        _StatCard(
-            label: 'Offline',
-            value: (total - online).toString(),
-            color: Colors.grey),
-      ],
-    );
-  }
-}
-
-class _StatCard extends StatelessWidget {
-  final String label;
-  final String value;
-  final Color color;
-
-  const _StatCard({
-    required this.label,
-    required this.value,
-    this.color = Colors.white,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Expanded(
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
-        decoration: BoxDecoration(
-          color: const Color(0xFF121826),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
-        ),
-        child: Column(
-          children: [
-            Text(value,
-                style: TextStyle(
-                    color: color,
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold)),
-            const SizedBox(height: 4),
-            Text(label,
-                style: const TextStyle(color: Colors.white38, fontSize: 11)),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 class _SectionHeader extends StatelessWidget {
   final String label;
   final int count;
@@ -842,24 +977,32 @@ class _SectionHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.only(bottom: 10, top: 4),
       child: Row(
         children: [
-          Container(
-            width: 4,
-            height: 16,
-            decoration: BoxDecoration(
-              color: color,
-              borderRadius: BorderRadius.circular(2),
+          Text(
+            label.toUpperCase(),
+            style: TextStyle(
+              color: color.withValues(alpha: 0.7),
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 1.2,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Container(
+              height: 1,
+              color: color.withValues(alpha: 0.12),
             ),
           ),
           const SizedBox(width: 8),
           Text(
-            '$label ($count)',
+            '$count',
             style: TextStyle(
-                color: color,
-                fontWeight: FontWeight.w600,
-                fontSize: 14),
+              color: color.withValues(alpha: 0.5),
+              fontSize: 11,
+            ),
           ),
         ],
       ),
