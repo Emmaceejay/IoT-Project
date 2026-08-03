@@ -2,6 +2,7 @@ idf_component_register(
     SRCS
         "dsgv_app_main.c"
         "config/dsgv_device_config.c"
+        "events/dsgv_events.c"
         "gpio/dsgv_gpio.c"
         "http/dsgv_http_server.c"
         "http/dsgv_captive_portal.c"

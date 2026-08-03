@@ -16,6 +16,7 @@
 #include "dsgv_config.h"
 #include "dsgv_device_config.h"
 #include "dsgv_device_state.h"
+#include "dsgv_events.h"
 #include "wifi_manager.h"
 
 #include "driver/gpio.h"
@@ -66,10 +67,6 @@ static bool s_has_contact = false;
 
 static int     s_reset_count           = 0;
 static int64_t s_reset_window_start_us = 0;
-
-// ── External symbols ──────────────────────────────────────────────────────────
-
-extern void DSGV_mqtt_publish_telemetry(const char *json_payload);
 
 // ── LEDC helpers ──────────────────────────────────────────────────────────────
 
@@ -341,7 +338,7 @@ static void wall_switch_task(void *pvParam) {
 
         char buf[512];
         build_telemetry(buf, sizeof(buf));
-        DSGV_mqtt_publish_telemetry(buf);
+        dsgv_events_post_telemetry(buf);
 
         ESP_LOGI(TAG, "Wall switch gang %" PRIu32 " → %s", gang, new_state ? "ON" : "OFF");
     }
@@ -390,7 +387,7 @@ static void sensor_task(void *pvParam) {
         // or when the full heartbeat interval has elapsed (keepalive / app sync).
         bool heartbeat = elapsed_us >= (int64_t)DSGV_TELEMETRY_INTERVAL_MS * 1000;
         if (heartbeat || strcmp(buf, last_telemetry) != 0) {
-            DSGV_mqtt_publish_telemetry(buf);
+            dsgv_events_post_telemetry(buf);
             strlcpy(last_telemetry, buf, sizeof(last_telemetry));
             last_pub_us = now;
         }
@@ -533,7 +530,7 @@ void DSGV_gpio_relay_set(bool on) {
 
     char buf[512];
     build_telemetry(buf, sizeof(buf));
-    DSGV_mqtt_publish_telemetry(buf);
+    dsgv_events_post_telemetry(buf);
 }
 
 bool DSGV_gpio_relay_get(void) {

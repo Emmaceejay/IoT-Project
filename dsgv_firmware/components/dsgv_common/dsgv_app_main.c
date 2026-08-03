@@ -10,10 +10,11 @@
  *   1. NVS init
  *   2. Device config load (compile-time defaults → NVS overlay)
  *   3. TCP/IP stack + default event loop
- *   4. GPIO init (relays, LEDC PWM, ADC, sensors)
- *   5. Wi-Fi connect — enters BLE provisioning mode if no credentials found
- *   6. HTTP server (Tasmota-compatible REST API, port 80)
- *   7. MQTT client (cloud TLS → local Mosquitto fallback)
+ *   4. Event bus (dsgv_events — GPIO-to-MQTT telemetry bridge)
+ *   5. GPIO init (relays, LEDC PWM, ADC, sensors)
+ *   6. Wi-Fi connect — enters BLE provisioning mode if no credentials found
+ *   7. HTTP server (Tasmota-compatible REST API, port 80)
+ *   8. MQTT client (cloud TLS → local Mosquitto fallback)
  */
 
 #include "nvs_flash.h"
@@ -36,6 +37,7 @@
 
 esp_err_t DSGV_mqtt_start(void);
 void      DSGV_gpio_init(void);
+void      dsgv_events_init(void);
 
 static const char *TAG = "DSGV_main";
 
@@ -72,12 +74,17 @@ void dsgv_app_main(void)
     ESP_ERROR_CHECK(DSGV_device_config_load());
     print_device_identity();
 
-    // ── Step 2: TCP/IP stack + Event Loop ────────────────────────────────────
+    // ── Step 3: TCP/IP stack + Event Loop ────────────────────────────────────
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     esp_netif_create_default_wifi_sta();
 
-    // ── Step 3: GPIO ─────────────────────────────────────────────────────────
+    // ── Step 3: Event bus ────────────────────────────────────────────────────
+    // Must be initialised before GPIO so the sensor/wall-switch tasks can post
+    // telemetry events immediately on their first wakeup.
+    dsgv_events_init();
+
+    // ── Step 4: GPIO ─────────────────────────────────────────────────────────
     // sensor_task calls STATE_LOCK() as soon as it's created inside DSGV_gpio_init(),
     // which is before DSGV_mqtt_start() would normally create the mutex — so create
     // it here first.
@@ -127,10 +134,10 @@ void dsgv_app_main(void)
 
     ESP_LOGI(TAG, "Wi-Fi connected.");
 
-    // ── Step 5: Local HTTP server ─────────────────────────────────────────────
+    // ── Step 7: Local HTTP server ─────────────────────────────────────────────
     ESP_ERROR_CHECK(DSGV_http_server_start());
 
-    // ── Step 6: MQTT client ───────────────────────────────────────────────────
+    // ── Step 8: MQTT client ───────────────────────────────────────────────────
     // Best-effort — a failed MQTT init must NOT abort the device.
     // HTTP server and physical button control remain fully functional without cloud.
     esp_err_t mqtt_err = DSGV_mqtt_start();
