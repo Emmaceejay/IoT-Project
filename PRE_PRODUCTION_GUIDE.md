@@ -263,7 +263,7 @@ openssl s_client -connect your-bucket.s3.amazonaws.com:443 -showcerts </dev/null
 
 ### Step 2 — Embed it in the firmware
 
-Place `server_cert.pem` in `dsgv_firmware/main/ota/`. Add to `CMakeLists.txt`:
+Place `server_cert.pem` in `dsgv_firmware/components/dsgv_common/ota/`. Add to `CMakeLists.txt`:
 
 ```cmake
 target_add_binary_data(dsgv_firmware.elf "main/ota/server_cert.pem" TEXT)
@@ -298,7 +298,7 @@ The default config in `dsgv_config.h` uses public broker endpoints suitable for 
 
 ### Step 1 — Configure the firmware defaults
 
-Edit `dsgv_firmware/include/dsgv_config.h`:
+Edit `dsgv_firmware/components/dsgv_common/include/dsgv_config.h`:
 
 ```c
 #define MQTT_CLOUD_HOST     "your-broker.emqx.io"
@@ -315,7 +315,7 @@ Edit `dsgv_hub_app/lib/domain/models/mqtt_config.dart` to set your production br
 
 ### Step 3 — Enable TLS in the firmware MQTT client
 
-In `dsgv_firmware/main/mqtt/dsgv_mqtt.c`, ensure the cloud broker config has:
+In `dsgv_firmware/components/dsgv_common/mqtt/dsgv_mqtt.c`, ensure the cloud broker config has:
 
 ```c
 .transport = MQTT_TRANSPORT_OVER_SSL,

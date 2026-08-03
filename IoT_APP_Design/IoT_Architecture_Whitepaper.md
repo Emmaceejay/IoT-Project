@@ -12,6 +12,7 @@ The app is not hardcoded to support only specific hardware (e.g., ESP32, ESP8266
 - **The Concept:** When a new device is paired or sends its initial telemetry payload, it broadcasts a JSON capability string (e.g., `{"controls": ["relay_1", "dimmer"], "sensors": ["temperature_1"]}`).
 - **The Engine:** The Flutter App parses this schema dynamically and instantiates the correct UI control widgets on the fly. 
 - **The Result:** We can invent and ship entirely new hardware over time, and our existing App will instantly know how to control it without requiring any App Store updates.
+- **Current implementation status:** As of the `device_type_registry.dart` refactor, capability metadata (labels, icons, ranges) lives in a static Dart map (`DeviceTypeRegistry`) compiled into the app, not read from a device-broadcast JSON schema at runtime. This centralizes what used to be inlined in `schema_driven_ui_builder.dart` but does not yet deliver the "no App Store update needed" property described above — adding a new device type still requires an app release. Treat this section as the target architecture, not the shipped behavior, until the registry is sourced from device-supplied capability payloads.
 
 ## 3. Hybrid Dual-Broker MQTT Connectivity
 To guarantee reliability and flexibility, the app integrates both a Cloud connection and a Localized failover connection.

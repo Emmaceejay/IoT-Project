@@ -1,8 +1,8 @@
 ﻿# DSGV Hub Firmware — Flashing & Device Configuration Guide
 
 > Reference for configuring, building, and flashing DSGV Hub firmware to ESP32 devices.
-> Config file: `dsgv_firmware/include/dsgv_config.h`
-> Runtime config: `dsgv_firmware/include/dsgv_device_config.h`
+> Config file: `dsgv_firmware/components/dsgv_common/include/dsgv_config.h`
+> Runtime config: `dsgv_firmware/components/dsgv_common/include/dsgv_device_config.h`
 
 ---
 
@@ -60,7 +60,7 @@ cd path/to/IoT-Project/dsgv_firmware
 
 ## Part 3 — Configure Device Type
 
-Open `dsgv_firmware/include/dsgv_config.h` and edit the top two lines.
+Open `dsgv_firmware/components/dsgv_common/include/dsgv_config.h` and edit the top two lines.
 Optionally update relay count and pins in the chip section below.
 
 ### The two lines you always edit
