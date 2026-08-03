@@ -39,6 +39,11 @@ class SmartDevice {
   /// Firmware version string reported by the device, e.g. "1.0.0".
   final String firmwareVersion;
 
+  /// Product category identifier resolved from capabilities or firmware announce.
+  /// e.g. 'relay_1g', 'dimmer', 'thermostat'. Null for legacy/unknown devices.
+  /// Set by [DeviceManager.handleAnnounce] via [DeviceTypeRegistry.inferTypeId].
+  final String? typeId;
+
   /// What to show in the UI — user's custom label if set, firmware name otherwise.
   String get displayName =>
       (customName != null && customName!.isNotEmpty) ? customName! : deviceName;
@@ -55,6 +60,7 @@ class SmartDevice {
     this.powerRestoreMode = PowerRestoreMode.off,
     this.deviceType = '',
     this.firmwareVersion = '',
+    this.typeId,
   });
 
   factory SmartDevice.fromJson(Map<String, dynamic> json) {
@@ -68,6 +74,7 @@ class SmartDevice {
       powerRestoreMode: _parseRestoreMode(json['power_restore'] as String?),
       deviceType: json['device_type'] as String? ?? '',
       firmwareVersion: json['firmware'] as String? ?? '',
+      typeId: json['type_id'] as String?,
     );
   }
 
@@ -93,6 +100,7 @@ class SmartDevice {
     PowerRestoreMode? powerRestoreMode,
     String? deviceType,
     String? firmwareVersion,
+    Object? typeId = _sentinel,
   }) {
     return SmartDevice(
       uniqueDeviceId: uniqueDeviceId,
@@ -106,6 +114,7 @@ class SmartDevice {
       powerRestoreMode: powerRestoreMode ?? this.powerRestoreMode,
       deviceType: deviceType ?? this.deviceType,
       firmwareVersion: firmwareVersion ?? this.firmwareVersion,
+      typeId: typeId == _sentinel ? this.typeId : typeId as String?,
     );
   }
 

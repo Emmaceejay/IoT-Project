@@ -44,6 +44,10 @@ class DeviceEntity {
   /// Firmware version last reported by the device, e.g. "1.0.0".
   String firmwareVersion = '';
 
+  /// Product category identifier — e.g. 'relay_1g', 'dimmer', 'thermostat'.
+  /// Null for devices provisioned before the type registry was introduced.
+  String? typeId;
+
   // ── Conversions ───────────────────────────────────────────────────────────
 
   SmartDevice toDomain() => SmartDevice(
@@ -67,6 +71,7 @@ class DeviceEntity {
         ),
         deviceType: deviceType,
         firmwareVersion: firmwareVersion,
+        typeId: typeId,
       );
 
   static DeviceEntity fromDomain(SmartDevice d) => DeviceEntity()
@@ -81,5 +86,6 @@ class DeviceEntity {
     ..customName = d.customName
     ..powerRestoreModeStr = d.powerRestoreMode.name
     ..deviceType = d.deviceType
-    ..firmwareVersion = d.firmwareVersion;
+    ..firmwareVersion = d.firmwareVersion
+    ..typeId = d.typeId;
 }

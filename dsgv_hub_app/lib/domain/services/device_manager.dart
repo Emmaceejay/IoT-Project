@@ -6,6 +6,7 @@ import '../../core/objectbox_store_provider.dart';
 import '../../data/datasources/objectbox_device_datasource.dart';
 import '../../data/repositories/device_repository.dart';
 import '../models/smart_device.dart';
+import 'device_type_registry.dart';
 import 'firebase_config_service.dart';
 import 'local_http_service.dart';
 import 'mqtt_service.dart';
@@ -339,9 +340,19 @@ class DeviceManager extends AsyncNotifier<List<SmartDevice>> {
   /// Handles a device announce message from MQTT.
   /// Registers unknown devices or updates [localIp] for known ones.
   /// Attaches a pending auth token if this is a just-provisioned device.
+  /// Resolves [SmartDevice.typeId] via the registry when the firmware does not supply one.
   Future<void> handleAnnounce(SmartDevice announced) async {
     final devices = state.value ?? [];
     final normalised = announced.uniqueDeviceId.toUpperCase();
+
+    // Resolve typeId: use firmware-supplied value; fall back to registry inference.
+    final registry = ref.read(deviceTypeRegistryProvider);
+    final resolvedTypeId = announced.typeId ??
+        registry.inferTypeId(announced.capabilities);
+    final announced_ = resolvedTypeId != null && resolvedTypeId != announced.typeId
+        ? announced.copyWith(typeId: resolvedTypeId)
+        : announced;
+
     final pendingToken   = _pendingTokens.remove(normalised);
     final pendingName    = _pendingNames.remove(normalised);
 
@@ -360,8 +371,8 @@ class DeviceManager extends AsyncNotifier<List<SmartDevice>> {
             .firstOrNull;
 
     final withToken = pendingToken != null
-        ? announced.copyWith(authToken: pendingToken)
-        : announced;
+        ? announced_.copyWith(authToken: pendingToken)
+        : announced_;
 
     final existingIndex =
         devices.indexWhere((d) => d.uniqueDeviceId == normalised);
@@ -386,9 +397,9 @@ class DeviceManager extends AsyncNotifier<List<SmartDevice>> {
           // authority for online/offline to prevent a retained announce message
           // from overriding a retained LWT offline message on reconnect.
           return d.copyWith(
-            localIp: announced.localIp ?? d.localIp,
-            capabilities: announced.capabilities.isNotEmpty
-                ? announced.capabilities
+            localIp: announced_.localIp ?? d.localIp,
+            capabilities: announced_.capabilities.isNotEmpty
+                ? announced_.capabilities
                 : d.capabilities,
             authToken: resolvedToken ?? d.authToken,
             deviceType: announced.deviceType.isNotEmpty
@@ -397,13 +408,14 @@ class DeviceManager extends AsyncNotifier<List<SmartDevice>> {
             firmwareVersion: announced.firmwareVersion.isNotEmpty
                 ? announced.firmwareVersion
                 : d.firmwareVersion,
+            typeId: announced_.typeId ?? d.typeId,
             // customName left unchanged — copyWith sentinel keeps existing value
           );
         }).toList(),
       );
       await _repository.provisionDevice(
         withToken.copyWith(
-          localIp: announced.localIp,
+          localIp: announced_.localIp,
           authToken: resolvedToken,
           customName: existingCustomName, // explicitly carry forward
           deviceType: announced.deviceType.isNotEmpty ? announced.deviceType : null,

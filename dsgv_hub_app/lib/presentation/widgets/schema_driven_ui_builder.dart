@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import '../../domain/models/smart_device.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../domain/services/device_manager.dart';
+import '../../domain/services/device_type_registry.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 /// Schema-Driven UI Builder
 /// 
@@ -16,17 +17,17 @@ class SchemaDrivenUiBuilder extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final isOffline = device.status == DeviceStatus.offline;
+    final registry = ref.read(deviceTypeRegistryProvider);
 
     return AbsorbPointer(
-      absorbing: isOffline, // Disable all controls if device is offline
+      absorbing: isOffline,
       child: Opacity(
         opacity: isOffline ? 0.4 : 1.0,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Render a control widget for each declared capability
             ...device.capabilities.map(
-              (capability) => _buildCapabilityWidget(context, ref, capability),
+              (cap) => _buildCapabilityWidget(context, ref, cap, registry),
             ),
           ],
         ),
@@ -35,113 +36,127 @@ class SchemaDrivenUiBuilder extends ConsumerWidget {
   }
 
   Widget _buildCapabilityWidget(
-      BuildContext context, WidgetRef ref, String capability) {
+      BuildContext context, WidgetRef ref, String capability,
+      DeviceTypeRegistry registry) {
+    // All metadata (labels, icons, value ranges, telemetry/command keys) comes
+    // from the registry. Adding a new device type requires no changes here.
+    final capDef = registry.lookupCapability(capability);
+
     switch (capability) {
-      // ── On/off relay gang 1 ──────────────────────────────────────────
+      // ── On/off relay gangs (1–4) — unified via capDef keys ───────────────
       case 'relay':
-        final isOn = device.telemetry['power'] as bool? ?? false;
+      case 'relay_2':
+      case 'relay_3':
+      case 'relay_4':
+        if (capDef == null) break;
+        final isOn = device.telemetry[capDef.telemetryKey] as bool? ?? false;
         return _CapabilityTile(
-          icon: isOn ? Icons.power : Icons.power_off,
-          label: 'Switch 1',
+          icon: isOn ? capDef.icon : Icons.power_off,
+          label: capDef.label,
           child: _RelaySwitch(
             serverValue: isOn,
             onChanged: (v) => ref
                 .read(deviceManagerProvider.notifier)
-                .sendCommand(device.uniqueDeviceId, {'power': v}),
+                .sendCommand(device.uniqueDeviceId, {capDef.commandKey: v}),
           ),
         );
 
-      // ── On/off relay gang 2 ──────────────────────────────────────────
-      case 'relay_2':
-        final isOn2 = device.telemetry['power_2'] as bool? ?? false;
-        return _CapabilityTile(
-          icon: isOn2 ? Icons.power : Icons.power_off,
-          label: 'Switch 2',
-          child: _RelaySwitch(
-            serverValue: isOn2,
-            onChanged: (v) => ref
-                .read(deviceManagerProvider.notifier)
-                .sendCommand(device.uniqueDeviceId, {'power_2': v}),
-          ),
-        );
-
-      // ── On/off relay gang 3 ──────────────────────────────────────────
-      case 'relay_3':
-        final isOn3 = device.telemetry['power_3'] as bool? ?? false;
-        return _CapabilityTile(
-          icon: isOn3 ? Icons.power : Icons.power_off,
-          label: 'Switch 3',
-          child: _RelaySwitch(
-            serverValue: isOn3,
-            onChanged: (v) => ref
-                .read(deviceManagerProvider.notifier)
-                .sendCommand(device.uniqueDeviceId, {'power_3': v}),
-          ),
-        );
-
-      // ── On/off relay gang 4 ──────────────────────────────────────────
-      case 'relay_4':
-        final isOn4 = device.telemetry['power_4'] as bool? ?? false;
-        return _CapabilityTile(
-          icon: isOn4 ? Icons.power : Icons.power_off,
-          label: 'Switch 4',
-          child: _RelaySwitch(
-            serverValue: isOn4,
-            onChanged: (v) => ref
-                .read(deviceManagerProvider.notifier)
-                .sendCommand(device.uniqueDeviceId, {'power_4': v}),
-          ),
-        );
-
-      // ── Brightness dimmer ────────────────────────────────────────────
+      // ── Continuous sliders (brightness, color_temp) ───────────────────────
       case 'brightness':
-        final brightness = (device.telemetry['brightness'] as num?)?.toDouble() ?? 100.0;
-        return _CapabilityTile(
-          icon: Icons.brightness_medium,
-          label: 'Brightness  ${brightness.round()}%',
-          child: _ValueSlider(
-            serverValue: brightness,
-            min: 0,
-            max: 100,
-            divisions: 20,
-            onChangeEnd: (v) => ref
-                .read(deviceManagerProvider.notifier)
-                .sendCommand(device.uniqueDeviceId, {'brightness': v.round()}),
-          ),
-        );
-
-      // ── Color temperature ────────────────────────────────────────────
       case 'color_temp':
-        final kelvin = (device.telemetry['color_temp'] as num?)?.toDouble() ?? 4000;
+        if (capDef == null) break;
+        final sliderVal =
+            (device.telemetry[capDef.telemetryKey] as num?)?.toDouble() ??
+                capDef.min ??
+                0.0;
+        final step = capDef.step ?? 1.0;
+        final divisions = ((capDef.max! - capDef.min!) / step).round();
         return _CapabilityTile(
-          icon: Icons.wb_sunny_outlined,
-          label: 'Color Temp  ${kelvin.round()}K',
+          icon: capDef.icon,
+          label: '${capDef.label}  ${sliderVal.round()}${capDef.unit ?? ""}',
           child: _ValueSlider(
-            serverValue: kelvin,
-            min: 2000,
-            max: 6500,
-            divisions: 45,
+            serverValue: sliderVal,
+            min: capDef.min!,
+            max: capDef.max!,
+            divisions: divisions,
             onChangeEnd: (v) => ref
                 .read(deviceManagerProvider.notifier)
-                .sendCommand(device.uniqueDeviceId, {'color_temp': v.round()}),
+                .sendCommand(device.uniqueDeviceId, {capDef.commandKey: v.round()}),
           ),
         );
 
-      // ── Temperature sensor (read-only) ───────────────────────────────
+      // ── Temperature read-only ─────────────────────────────────────────────
       case 'temperature':
-        final temp = device.telemetry['current_temp'] ?? '—';
+        final tempVal = device.telemetry[capDef?.telemetryKey ?? 'current_temp'] ?? '—';
         return _CapabilityTile(
-          icon: Icons.thermostat,
-          label: 'Current Temp',
+          icon: capDef?.icon ?? Icons.thermostat,
+          label: capDef?.label ?? 'Temperature',
           child: Text(
-            '$temp °C',
-            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.white),
+            '$tempVal ${capDef?.unit ?? "°C"}',
+            style: const TextStyle(
+                fontSize: 18, fontWeight: FontWeight.w600, color: Colors.white),
           ),
         );
 
-      // ── HVAC control ─────────────────────────────────────────────────
+      // ── Humidity read-only ────────────────────────────────────────────────
+      case 'humidity':
+        final humVal =
+            (device.telemetry[capDef?.telemetryKey ?? 'humidity'] as num?)
+                    ?.toStringAsFixed(1) ??
+                '—';
+        return _CapabilityTile(
+          icon: capDef?.icon ?? Icons.water_drop_outlined,
+          label: capDef?.label ?? 'Humidity',
+          child: Text(
+            '$humVal ${capDef?.unit ?? "%"}',
+            style: const TextStyle(
+                fontSize: 18, fontWeight: FontWeight.w600, color: Colors.white),
+          ),
+        );
+
+      // ── Motion sensor ─────────────────────────────────────────────────────
+      case 'motion':
+        final motion =
+            device.telemetry[capDef?.telemetryKey ?? 'motion'] as bool? ?? false;
+        return _CapabilityTile(
+          icon: motion
+              ? (capDef?.icon ?? Icons.directions_run)
+              : Icons.accessibility_new,
+          label: capDef?.label ?? 'Motion',
+          child: _StatusBadge(
+            active: motion,
+            activeLabel: 'Detected',
+            inactiveLabel: 'Clear',
+            activeColor: const Color(0xFF00E5FF),
+            inactiveColor: Colors.white38,
+          ),
+        );
+
+      // ── Contact sensor ────────────────────────────────────────────────────
+      case 'contact':
+        final closed =
+            device.telemetry[capDef?.telemetryKey ?? 'contact'] as bool? ?? false;
+        return _CapabilityTile(
+          icon: closed ? Icons.lock : Icons.lock_open,
+          label: capDef?.label ?? 'Contact',
+          child: _StatusBadge(
+            active: closed,
+            activeLabel: 'Closed',
+            inactiveLabel: 'Open',
+            activeColor: Colors.greenAccent,
+            inactiveColor: Colors.orangeAccent,
+            activeBg: Colors.green.withValues(alpha: 0.15),
+            inactiveBg: Colors.orange.withValues(alpha: 0.15),
+          ),
+        );
+
+      // ── HVAC thermostat ───────────────────────────────────────────────────
       case 'hvac_mode':
-        final target = (device.telemetry['target_temp'] as num?)?.toDouble() ?? 22.0;
+        final target =
+            (device.telemetry[capDef?.telemetryKey ?? 'target_temp'] as num?)
+                    ?.toDouble() ??
+                22.0;
+        final step = capDef?.step ?? 0.5;
         final modeRaw = device.telemetry['mode'];
         final mode = modeRaw is String ? modeRaw : 'auto';
         return Column(
@@ -152,8 +167,9 @@ class SchemaDrivenUiBuilder extends ConsumerWidget {
                   ? Icons.ac_unit
                   : mode == 'heat'
                       ? Icons.local_fire_department
-                      : Icons.hvac,
-              label: 'Target  ${target.round()}°C',
+                      : capDef?.icon ?? Icons.hvac,
+              label:
+                  '${capDef?.label ?? "HVAC"}  ${target.toStringAsFixed(1)}${capDef?.unit ?? "°C"}',
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -161,17 +177,22 @@ class SchemaDrivenUiBuilder extends ConsumerWidget {
                     icon: const Icon(Icons.remove_circle_outline),
                     onPressed: () => ref
                         .read(deviceManagerProvider.notifier)
-                        .sendCommand(device.uniqueDeviceId, {'target_temp': target - 0.5}),
+                        .sendCommand(device.uniqueDeviceId,
+                            {capDef?.commandKey ?? 'target_temp': target - step}),
                   ),
                   Text(
                     '${target.toStringAsFixed(1)}°',
-                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
+                    style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white),
                   ),
                   IconButton(
                     icon: const Icon(Icons.add_circle_outline),
                     onPressed: () => ref
                         .read(deviceManagerProvider.notifier)
-                        .sendCommand(device.uniqueDeviceId, {'target_temp': target + 0.5}),
+                        .sendCommand(device.uniqueDeviceId,
+                            {capDef?.commandKey ?? 'target_temp': target + step}),
                   ),
                 ],
               ),
@@ -180,7 +201,7 @@ class SchemaDrivenUiBuilder extends ConsumerWidget {
           ],
         );
 
-      // ── RGB light ────────────────────────────────────────────────────────
+      // ── RGB light ─────────────────────────────────────────────────────────
       case 'rgb':
         final r = (device.telemetry['red']   as num?)?.round() ?? 255;
         final g = (device.telemetry['green'] as num?)?.round() ?? 255;
@@ -189,8 +210,8 @@ class SchemaDrivenUiBuilder extends ConsumerWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             _CapabilityTile(
-              icon: Icons.palette_outlined,
-              label: 'RGB  R:$r  G:$g  B:$b',
+              icon: capDef?.icon ?? Icons.palette_outlined,
+              label: '${capDef?.label ?? "RGB"}  R:$r  G:$g  B:$b',
               child: Container(
                 width: 22,
                 height: 22,
@@ -202,104 +223,35 @@ class SchemaDrivenUiBuilder extends ConsumerWidget {
               ),
             ),
             _RgbSlider(
-              label: 'R',
-              value: r.toDouble(),
-              color: Colors.red.shade300,
-              onChangeEnd: (v) => ref
-                  .read(deviceManagerProvider.notifier)
+              label: 'R', value: r.toDouble(), color: Colors.red.shade300,
+              onChangeEnd: (v) => ref.read(deviceManagerProvider.notifier)
                   .sendCommand(device.uniqueDeviceId, {'red': v.round()}),
             ),
             _RgbSlider(
-              label: 'G',
-              value: g.toDouble(),
-              color: Colors.green.shade300,
-              onChangeEnd: (v) => ref
-                  .read(deviceManagerProvider.notifier)
+              label: 'G', value: g.toDouble(), color: Colors.green.shade300,
+              onChangeEnd: (v) => ref.read(deviceManagerProvider.notifier)
                   .sendCommand(device.uniqueDeviceId, {'green': v.round()}),
             ),
             _RgbSlider(
-              label: 'B',
-              value: b.toDouble(),
-              color: Colors.blue.shade300,
-              onChangeEnd: (v) => ref
-                  .read(deviceManagerProvider.notifier)
+              label: 'B', value: b.toDouble(), color: Colors.blue.shade300,
+              onChangeEnd: (v) => ref.read(deviceManagerProvider.notifier)
                   .sendCommand(device.uniqueDeviceId, {'blue': v.round()}),
             ),
           ],
         );
 
-      // ── Humidity sensor (read-only) ──────────────────────────────────────
-      case 'humidity':
-        final humidity = (device.telemetry['humidity'] as num?)?.toStringAsFixed(1) ?? '—';
-        return _CapabilityTile(
-          icon: Icons.water_drop_outlined,
-          label: 'Humidity',
-          child: Text(
-            '$humidity %',
-            style: const TextStyle(
-                fontSize: 18, fontWeight: FontWeight.w600, color: Colors.white),
-          ),
-        );
-
-      // ── Motion sensor ────────────────────────────────────────────────────
-      case 'motion':
-        final motion = device.telemetry['motion'] as bool? ?? false;
-        return _CapabilityTile(
-          icon: motion ? Icons.directions_run : Icons.accessibility_new,
-          label: 'Motion',
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            decoration: BoxDecoration(
-              color: motion
-                  ? const Color(0xFF00E5FF).withValues(alpha: 0.15)
-                  : Colors.white12,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Text(
-              motion ? 'Detected' : 'Clear',
-              style: TextStyle(
-                color: motion ? const Color(0xFF00E5FF) : Colors.white38,
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-        );
-
-      // ── Contact sensor ───────────────────────────────────────────────────
-      case 'contact':
-        final closed = device.telemetry['contact'] as bool? ?? false;
-        return _CapabilityTile(
-          icon: closed ? Icons.lock : Icons.lock_open,
-          label: 'Contact',
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            decoration: BoxDecoration(
-              color: closed
-                  ? Colors.green.withValues(alpha: 0.15)
-                  : Colors.orange.withValues(alpha: 0.15),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Text(
-              closed ? 'Closed' : 'Open',
-              style: TextStyle(
-                color: closed ? Colors.greenAccent : Colors.orangeAccent,
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-        );
-
-      // ── Unknown capability — future-proofed graceful fallback ────────────
       default:
-        return _CapabilityTile(
-          icon: Icons.device_unknown_outlined,
-          label: capability,
-          child: const Text('Unsupported capability',
-              style: TextStyle(color: Colors.grey, fontSize: 12)),
-        );
+        break;
     }
+
+    // Unknown capability — graceful fallback so future firmware additions
+    // don't crash the UI; they simply show a placeholder row.
+    return _CapabilityTile(
+      icon: Icons.device_unknown_outlined,
+      label: capDef?.label ?? capability,
+      child: const Text('Unsupported capability',
+          style: TextStyle(color: Colors.grey, fontSize: 12)),
+    );
   }
 }
 
@@ -523,6 +475,49 @@ class _RgbSlider extends StatelessWidget {
                 style: const TextStyle(color: Colors.white54, fontSize: 11)),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Reusable badge for binary sensor states (motion detected/clear, contact closed/open).
+/// Consolidates the duplicated container+text pattern from the original builder.
+class _StatusBadge extends StatelessWidget {
+  final bool active;
+  final String activeLabel;
+  final String inactiveLabel;
+  final Color activeColor;
+  final Color inactiveColor;
+  final Color? activeBg;
+  final Color? inactiveBg;
+
+  const _StatusBadge({
+    required this.active,
+    required this.activeLabel,
+    required this.inactiveLabel,
+    required this.activeColor,
+    required this.inactiveColor,
+    this.activeBg,
+    this.inactiveBg,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: active
+            ? (activeBg ?? activeColor.withValues(alpha: 0.15))
+            : (inactiveBg ?? Colors.white12),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Text(
+        active ? activeLabel : inactiveLabel,
+        style: TextStyle(
+          color: active ? activeColor : inactiveColor,
+          fontSize: 13,
+          fontWeight: FontWeight.w600,
+        ),
       ),
     );
   }

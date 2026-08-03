@@ -15,6 +15,7 @@ import 'package:objectbox/objectbox.dart' as obx;
 import 'package:objectbox_flutter_libs/objectbox_flutter_libs.dart';
 
 import 'data/models/device_entity.dart';
+import 'data/models/device_group_entity.dart';
 
 export 'package:objectbox/objectbox.dart'; // so that callers only have to import this file
 
@@ -22,7 +23,7 @@ final _entities = <obx_int.ModelEntity>[
   obx_int.ModelEntity(
       id: const obx_int.IdUid(1, 861110254133854312),
       name: 'DeviceEntity',
-      lastPropertyId: const obx_int.IdUid(9, 6994224725990469923),
+      lastPropertyId: const obx_int.IdUid(13, 8914213233770304369),
       flags: 0,
       properties: <obx_int.ModelProperty>[
         obx_int.ModelProperty(
@@ -70,6 +71,56 @@ final _entities = <obx_int.ModelEntity>[
             id: const obx_int.IdUid(9, 6994224725990469923),
             name: 'customName',
             type: 9,
+            flags: 0),
+        obx_int.ModelProperty(
+            id: const obx_int.IdUid(10, 3788933501037223962),
+            name: 'powerRestoreModeStr',
+            type: 9,
+            flags: 0),
+        obx_int.ModelProperty(
+            id: const obx_int.IdUid(11, 3569863789617618864),
+            name: 'typeId',
+            type: 9,
+            flags: 0),
+        obx_int.ModelProperty(
+            id: const obx_int.IdUid(12, 2091619496737755653),
+            name: 'deviceType',
+            type: 9,
+            flags: 0),
+        obx_int.ModelProperty(
+            id: const obx_int.IdUid(13, 8914213233770304369),
+            name: 'firmwareVersion',
+            type: 9,
+            flags: 0)
+      ],
+      relations: <obx_int.ModelRelation>[],
+      backlinks: <obx_int.ModelBacklink>[]),
+  obx_int.ModelEntity(
+      id: const obx_int.IdUid(2, 1460955573890074879),
+      name: 'DeviceGroupEntity',
+      lastPropertyId: const obx_int.IdUid(4, 7996503302813182561),
+      flags: 0,
+      properties: <obx_int.ModelProperty>[
+        obx_int.ModelProperty(
+            id: const obx_int.IdUid(1, 4845781474436824501),
+            name: 'id',
+            type: 6,
+            flags: 1),
+        obx_int.ModelProperty(
+            id: const obx_int.IdUid(2, 4017806205329500840),
+            name: 'groupId',
+            type: 9,
+            flags: 34848,
+            indexId: const obx_int.IdUid(2, 143970839907561)),
+        obx_int.ModelProperty(
+            id: const obx_int.IdUid(3, 1770775257710283276),
+            name: 'name',
+            type: 9,
+            flags: 0),
+        obx_int.ModelProperty(
+            id: const obx_int.IdUid(4, 7996503302813182561),
+            name: 'deviceIdsJson',
+            type: 9,
             flags: 0)
       ],
       relations: <obx_int.ModelRelation>[],
@@ -111,8 +162,8 @@ Future<obx.Store> openStore(
 obx_int.ModelDefinition getObjectBoxModel() {
   final model = obx_int.ModelInfo(
       entities: _entities,
-      lastEntityId: const obx_int.IdUid(1, 861110254133854312),
-      lastIndexId: const obx_int.IdUid(1, 767293445575446884),
+      lastEntityId: const obx_int.IdUid(2, 1460955573890074879),
+      lastIndexId: const obx_int.IdUid(2, 143970839907561),
       lastRelationId: const obx_int.IdUid(0, 0),
       lastSequenceId: const obx_int.IdUid(0, 0),
       retiredEntityUids: const [],
@@ -147,7 +198,13 @@ obx_int.ModelDefinition getObjectBoxModel() {
           final customNameOffset = object.customName == null
               ? null
               : fbb.writeString(object.customName!);
-          fbb.startTable(10);
+          final powerRestoreModeStrOffset =
+              fbb.writeString(object.powerRestoreModeStr);
+          final typeIdOffset =
+              object.typeId == null ? null : fbb.writeString(object.typeId!);
+          final deviceTypeOffset = fbb.writeString(object.deviceType);
+          final firmwareVersionOffset = fbb.writeString(object.firmwareVersion);
+          fbb.startTable(14);
           fbb.addInt64(0, object.id);
           fbb.addOffset(1, uniqueDeviceIdOffset);
           fbb.addOffset(2, deviceNameOffset);
@@ -157,6 +214,10 @@ obx_int.ModelDefinition getObjectBoxModel() {
           fbb.addOffset(6, localIpOffset);
           fbb.addOffset(7, authTokenOffset);
           fbb.addOffset(8, customNameOffset);
+          fbb.addOffset(9, powerRestoreModeStrOffset);
+          fbb.addOffset(10, typeIdOffset);
+          fbb.addOffset(11, deviceTypeOffset);
+          fbb.addOffset(12, firmwareVersionOffset);
           fbb.finish(fbb.endTable());
           return object.id;
         },
@@ -181,7 +242,51 @@ obx_int.ModelDefinition getObjectBoxModel() {
             ..authToken = const fb.StringReader(asciiOptimization: true)
                 .vTableGetNullable(buffer, rootOffset, 18)
             ..customName = const fb.StringReader(asciiOptimization: true)
-                .vTableGetNullable(buffer, rootOffset, 20);
+                .vTableGetNullable(buffer, rootOffset, 20)
+            ..powerRestoreModeStr =
+                const fb.StringReader(asciiOptimization: true)
+                    .vTableGet(buffer, rootOffset, 22, '')
+            ..typeId = const fb.StringReader(asciiOptimization: true)
+                .vTableGetNullable(buffer, rootOffset, 24)
+            ..deviceType = const fb.StringReader(asciiOptimization: true)
+                .vTableGet(buffer, rootOffset, 26, '')
+            ..firmwareVersion = const fb.StringReader(asciiOptimization: true)
+                .vTableGet(buffer, rootOffset, 28, '');
+
+          return object;
+        }),
+    DeviceGroupEntity: obx_int.EntityDefinition<DeviceGroupEntity>(
+        model: _entities[1],
+        toOneRelations: (DeviceGroupEntity object) => [],
+        toManyRelations: (DeviceGroupEntity object) => {},
+        getId: (DeviceGroupEntity object) => object.id,
+        setId: (DeviceGroupEntity object, int id) {
+          object.id = id;
+        },
+        objectToFB: (DeviceGroupEntity object, fb.Builder fbb) {
+          final groupIdOffset = fbb.writeString(object.groupId);
+          final nameOffset = fbb.writeString(object.name);
+          final deviceIdsJsonOffset = fbb.writeString(object.deviceIdsJson);
+          fbb.startTable(5);
+          fbb.addInt64(0, object.id);
+          fbb.addOffset(1, groupIdOffset);
+          fbb.addOffset(2, nameOffset);
+          fbb.addOffset(3, deviceIdsJsonOffset);
+          fbb.finish(fbb.endTable());
+          return object.id;
+        },
+        objectFromFB: (obx.Store store, ByteData fbData) {
+          final buffer = fb.BufferContext(fbData);
+          final rootOffset = buffer.derefObject(0);
+
+          final object = DeviceGroupEntity()
+            ..id = const fb.Int64Reader().vTableGet(buffer, rootOffset, 4, 0)
+            ..groupId = const fb.StringReader(asciiOptimization: true)
+                .vTableGet(buffer, rootOffset, 6, '')
+            ..name = const fb.StringReader(asciiOptimization: true)
+                .vTableGet(buffer, rootOffset, 8, '')
+            ..deviceIdsJson = const fb.StringReader(asciiOptimization: true)
+                .vTableGet(buffer, rootOffset, 10, '');
 
           return object;
         })
@@ -227,4 +332,39 @@ class DeviceEntity_ {
   /// See [DeviceEntity.customName].
   static final customName =
       obx.QueryStringProperty<DeviceEntity>(_entities[0].properties[8]);
+
+  /// See [DeviceEntity.powerRestoreModeStr].
+  static final powerRestoreModeStr =
+      obx.QueryStringProperty<DeviceEntity>(_entities[0].properties[9]);
+
+  /// See [DeviceEntity.typeId].
+  static final typeId =
+      obx.QueryStringProperty<DeviceEntity>(_entities[0].properties[10]);
+
+  /// See [DeviceEntity.deviceType].
+  static final deviceType =
+      obx.QueryStringProperty<DeviceEntity>(_entities[0].properties[11]);
+
+  /// See [DeviceEntity.firmwareVersion].
+  static final firmwareVersion =
+      obx.QueryStringProperty<DeviceEntity>(_entities[0].properties[12]);
+}
+
+/// [DeviceGroupEntity] entity fields to define ObjectBox queries.
+class DeviceGroupEntity_ {
+  /// See [DeviceGroupEntity.id].
+  static final id =
+      obx.QueryIntegerProperty<DeviceGroupEntity>(_entities[1].properties[0]);
+
+  /// See [DeviceGroupEntity.groupId].
+  static final groupId =
+      obx.QueryStringProperty<DeviceGroupEntity>(_entities[1].properties[1]);
+
+  /// See [DeviceGroupEntity.name].
+  static final name =
+      obx.QueryStringProperty<DeviceGroupEntity>(_entities[1].properties[2]);
+
+  /// See [DeviceGroupEntity.deviceIdsJson].
+  static final deviceIdsJson =
+      obx.QueryStringProperty<DeviceGroupEntity>(_entities[1].properties[3]);
 }

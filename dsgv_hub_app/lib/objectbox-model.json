@@ -5,7 +5,7 @@
   "entities": [
     {
       "id": "1:861110254133854312",
-      "lastPropertyId": "9:6994224725990469923",
+      "lastPropertyId": "13:8914213233770304369",
       "name": "DeviceEntity",
       "properties": [
         {
@@ -55,13 +55,64 @@
           "id": "9:6994224725990469923",
           "name": "customName",
           "type": 9
+        },
+        {
+          "id": "10:3788933501037223962",
+          "name": "powerRestoreModeStr",
+          "type": 9
+        },
+        {
+          "id": "11:3569863789617618864",
+          "name": "typeId",
+          "type": 9
+        },
+        {
+          "id": "12:2091619496737755653",
+          "name": "deviceType",
+          "type": 9
+        },
+        {
+          "id": "13:8914213233770304369",
+          "name": "firmwareVersion",
+          "type": 9
+        }
+      ],
+      "relations": []
+    },
+    {
+      "id": "2:1460955573890074879",
+      "lastPropertyId": "4:7996503302813182561",
+      "name": "DeviceGroupEntity",
+      "properties": [
+        {
+          "id": "1:4845781474436824501",
+          "name": "id",
+          "type": 6,
+          "flags": 1
+        },
+        {
+          "id": "2:4017806205329500840",
+          "name": "groupId",
+          "type": 9,
+          "flags": 34848,
+          "indexId": "2:143970839907561"
+        },
+        {
+          "id": "3:1770775257710283276",
+          "name": "name",
+          "type": 9
+        },
+        {
+          "id": "4:7996503302813182561",
+          "name": "deviceIdsJson",
+          "type": 9
         }
       ],
       "relations": []
     }
   ],
-  "lastEntityId": "1:861110254133854312",
-  "lastIndexId": "1:767293445575446884",
+  "lastEntityId": "2:1460955573890074879",
+  "lastIndexId": "2:143970839907561",
   "lastRelationId": "0:0",
   "lastSequenceId": "0:0",
   "modelVersion": 5,
