@@ -1,10 +1,17 @@
 /**
- * dsgv_firebase.c — Firebase HTTPS config fetch
+ * dsgv_gateway.c — DSGV Hub device-config gateway fetch
  *
- * On every boot (after WiFi connects), this module calls the Firebase
- * Cloud Function to retrieve the latest broker config for this device.
- * The result is persisted to NVS so dsgv_mqtt.c always connects to the
- * correct broker, even after a firmware update that resets flash.
+ * On every boot (after WiFi connects), this module calls the DSGV Hub
+ * gateway's getDeviceConfig endpoint to retrieve the latest broker config
+ * for this device. The result is persisted to NVS so dsgv_mqtt.c always
+ * connects to the correct broker, even after a firmware update that resets
+ * flash.
+ *
+ * Deliberately named around what this does (fetch config from the gateway),
+ * not who hosts it — the gateway has already moved once (Firebase Cloud
+ * Functions -> Cloudflare Workers) and tying the module name to a specific
+ * backend is exactly the kind of thing that goes stale when it moves again.
+ * See cloudflare_gateway/ for the actual backend implementation.
  *
  * Authentication: device_id (WiFi MAC) + auth_token (hardware entropy,
  * generated on first boot, never transmitted over MQTT).
@@ -17,7 +24,7 @@
  *   CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
  */
 
-#include "dsgv_firebase.h"
+#include "dsgv_gateway.h"
 #include "dsgv_config.h"
 #include "dsgv_device_config.h"
 
@@ -33,7 +40,7 @@
 #include <stdio.h>
 #include <stdbool.h>
 
-static const char *TAG = "DSGV_Firebase";
+static const char *TAG = "DSGV_Gateway";
 
 // Response buffer — 512 bytes is enough for the JSON config payload
 #define RESP_BUF_SIZE 512
@@ -69,11 +76,11 @@ static esp_err_t _http_event_cb(esp_http_client_event_t *evt)
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-esp_err_t dsgv_firebase_fetch_config(void)
+esp_err_t dsgv_gateway_fetch_config(void)
 {
     // Need auth token to authenticate
     if (g_device_config.auth_token[0] == '\0') {
-        ESP_LOGW(TAG, "Auth token not set — skipping Firebase fetch");
+        ESP_LOGW(TAG, "Auth token not set — skipping gateway fetch");
         return ESP_FAIL;
     }
 
@@ -102,12 +109,12 @@ esp_err_t dsgv_firebase_fetch_config(void)
     s_resp_len = 0;
     memset(s_resp_buf, 0, sizeof(s_resp_buf));
 
-    // HTTPS POST with ESP-IDF built-in certificate bundle (covers Google/Firebase CAs)
+    // HTTPS POST with ESP-IDF built-in certificate bundle
     esp_http_client_config_t cfg = {
-        .url               = FIREBASE_GET_CONFIG_URL,
+        .url               = GATEWAY_GET_CONFIG_URL,
         .event_handler     = _http_event_cb,
         .crt_bundle_attach = esp_crt_bundle_attach,
-        .timeout_ms        = FIREBASE_TIMEOUT_MS,
+        .timeout_ms        = GATEWAY_TIMEOUT_MS,
         .method            = HTTP_METHOD_POST,
     };
 
@@ -133,7 +140,7 @@ esp_err_t dsgv_firebase_fetch_config(void)
     }
 
     if (http_code != 200) {
-        ESP_LOGW(TAG, "Firebase returned HTTP %d — using cached config", http_code);
+        ESP_LOGW(TAG, "Gateway returned HTTP %d — using cached config", http_code);
         return ESP_FAIL;
     }
 
@@ -141,7 +148,7 @@ esp_err_t dsgv_firebase_fetch_config(void)
 
     cJSON *resp = cJSON_Parse(s_resp_buf);
     if (!resp) {
-        ESP_LOGW(TAG, "Failed to parse Firebase response: %s", s_resp_buf);
+        ESP_LOGW(TAG, "Failed to parse gateway response: %s", s_resp_buf);
         return ESP_FAIL;
     }
 
@@ -152,7 +159,7 @@ esp_err_t dsgv_firebase_fetch_config(void)
     cJSON *j_pass = cJSON_GetObjectItem(resp, "broker_password");
 
     if (!cJSON_IsString(j_host) || !cJSON_IsNumber(j_port)) {
-        ESP_LOGW(TAG, "Incomplete config in Firebase response");
+        ESP_LOGW(TAG, "Incomplete config in gateway response");
         cJSON_Delete(resp);
         return ESP_FAIL;
     }

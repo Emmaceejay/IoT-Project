@@ -1,10 +1,10 @@
 <div align="center">
   <h1>DSGV Hub IoT Platform</h1>
-  <p><strong>Full-stack commercial IoT platform — Flutter mobile app · ESP-IDF firmware · Firebase cloud gateway</strong></p>
+  <p><strong>Full-stack commercial IoT platform — Flutter mobile app · ESP-IDF firmware · Cloudflare Workers gateway</strong></p>
   <p>
     Offline-first &nbsp;·&nbsp;
     BLE provisioning &nbsp;·&nbsp;
-    Firebase-secured config &nbsp;·&nbsp;
+    Token-secured config &nbsp;·&nbsp;
     Schema-driven UI &nbsp;·&nbsp;
     OTA updates &nbsp;·&nbsp;
     Multi-chip ESP32
@@ -19,14 +19,14 @@
 2. [How It Works — Architecture](#2-how-it-works--architecture)
 3. [Repository Structure](#3-repository-structure)
 4. [Prerequisites](#4-prerequisites)
-5. [Part A — Firebase Setup](#5-part-a--firebase-setup)
+5. [Part A — Cloudflare Gateway Setup](#5-part-a--cloudflare-gateway-setup)
 6. [Part B — Firmware Setup](#6-part-b--firmware-setup)
 7. [Part C — Mobile App Setup](#7-part-c--mobile-app-setup)
 8. [Provisioning a New Device](#8-provisioning-a-new-device)
 9. [Supported Hardware](#9-supported-hardware)
 10. [Supported Device Types](#10-supported-device-types)
 11. [Protocol Reference — MQTT Topics](#11-protocol-reference--mqtt-topics)
-12. [Firebase Data Structure](#12-firebase-data-structure)
+12. [Gateway Data Structure](#12-gateway-data-structure)
 13. [Security Model](#13-security-model)
 14. [Configuration Reference](#14-configuration-reference)
 15. [Adding a New Device Type](#15-adding-a-new-device-type)
@@ -44,13 +44,13 @@ DSGV Hub is a **production-ready, end-to-end IoT platform** built by De Socko Gl
 |------|-----------|---------|
 | **Mobile App** | Flutter / Dart | Control devices, provision new ones, manage broker settings |
 | **Firmware** | C / ESP-IDF 5.x | Runs on ESP32 devices — handles WiFi, MQTT, sensors, relays, OTA |
-| **Cloud Gateway** | Firebase (Node.js Cloud Functions + Realtime Database) | Securely stores and delivers broker configuration to each device |
+| **Cloud Gateway** | Cloudflare Workers + Workers KV | Securely stores and delivers broker configuration to each device |
 
 **The core idea is simple:**
 - Flash the same firmware binary to any ESP32 device
 - Scan a QR code in the app to provision it over Bluetooth
 - The device appears on the dashboard automatically — no computer needed after flashing
-- Change the MQTT broker at any time from the app — the change is written to Firebase and every device picks it up silently on its next boot
+- Change the MQTT broker at any time from the app — the change is written to the gateway and every device picks it up silently on its next boot
 
 ---
 
@@ -63,21 +63,27 @@ DSGV Hub is a **production-ready, end-to-end IoT platform** built by De Socko Gl
 │                          MOBILE APP (Flutter)                           │
 └───────────────┬─────────────────────────┬───────────────────────────────┘
                 │                         │
-   BLE (once,   │                         │  HTTPS (Cloud Functions)
+   BLE (once,   │                         │  HTTPS (Cloudflare Workers gateway)
    provisioning)│                         │  Register device
                 │                         │  Push broker config
                 │                         │  Restore factory broker
                 ▼                         ▼
-┌──────────────────────┐    ┌────────────────────────────┐
-│   ESP32 Device       │    │   Firebase                 │
-│                      │    │   ┌──────────────────────┐ │
-│  On boot:            │    │   │ device_registry      │ │
-│  1. WiFi connect     │    │   │  auth_token (private)│ │
-│  2. HTTPS fetch ─────┼────┼──►│ device_configs       │ │
-│     broker config    │◄───┼───│  broker settings     │ │
-│  3. MQTT connect     │    │   └──────────────────────┘ │
-│                      │    └────────────────────────────┘
-└──────────┬───────────┘
+┌──────────────────────┐    ┌──────────────────────────────┐
+│   ESP32 Device       │    │  cloudflare_gateway/          │
+│                      │    │  (Cloudflare Workers,          │
+│  On boot:            │    │   free tier)                   │
+│  1. WiFi connect     │    │                                │
+│  2. HTTPS fetch ─────┼────┼─►                               │
+│     broker config    │◄───┼───┐                            │
+│  3. MQTT connect     │    │   ▼                            │
+│                      │    │  Workers KV                    │
+└──────────┬───────────┘    │   ┌──────────────────────┐     │
+           │                │   │ device_registry:{id}  │     │
+           │                │   │  auth_token (private)│     │
+           │                │   │ device_configs:{id}    │     │
+           │                │   │  broker settings      │     │
+           │                │   └──────────────────────┘     │
+           │                └──────────────────────────────┘
            │  MQTT (ongoing)
            │  telemetry, commands, status
            ▼
@@ -88,15 +94,22 @@ DSGV Hub is a **production-ready, end-to-end IoT platform** built by De Socko Gl
 └──────────────────────┘
 ```
 
-### MQTT is for Control. Firebase is for Configuration.
+### MQTT is for Control. The Gateway is for Configuration.
 
 | Channel | Used for | Security |
 |---------|---------|---------|
 | **MQTT** | Live telemetry, relay commands, device status | Auth token in every config command |
-| **Firebase HTTPS** | Broker hostname, port, TLS flag, credentials | auth_token validated by Cloud Function |
+| **Gateway HTTPS** | Broker hostname, port, TLS flag, credentials | auth_token validated by the Cloudflare Worker against Workers KV |
 | **BLE** | First-time WiFi credentials, device type, auth token exchange | Physical proximity required |
 
-Credentials (broker username/password) **never travel over MQTT**. They live in Firebase and are fetched by the device directly over HTTPS.
+Credentials (broker username/password) **never travel over MQTT**. They live in
+Workers KV — Cloudflare's own key-value store, read/written directly by the
+Worker via a zero-config binding, no external auth needed — and are fetched by
+the device directly over HTTPS. This is not Firebase: the gateway used to be
+Firebase Cloud Functions + Realtime Database, but deploying *any* Cloud Function
+requires the Blaze (pay-as-you-go) plan, so the whole gateway — compute and
+storage — now runs on Cloudflare's free tier instead. No Firebase project is
+part of this architecture anymore. See [§5](#5-part-a--cloudflare-gateway-setup).
 
 ### Command Routing in the App
 
@@ -117,7 +130,7 @@ On first install, the app connects to the **manufacturer's MQTT broker** automat
 If a user (or installer) wants to use their own broker:
 - Settings → **Use custom broker** → unlocks the form
 - Enter host, port, TLS settings → **Save & Connect**
-- Tap **Push broker to all devices** → Firebase is updated → devices pick it up on next reboot
+- Tap **Push broker to all devices** → the gateway updates Workers KV → devices pick it up on next reboot
 
 To revert: Settings → **↩ Manufacturer** → devices reconnect to the factory broker.
 
@@ -146,7 +159,7 @@ IoT-Project/
 │   │   │       ├── room_service.dart            # Room assignment
 │   │   │       ├── schedule_service.dart        # Timed on/off schedules
 │   │   │       ├── mqtt_service.dart            # MQTT client + factory/custom mode
-│   │   │       ├── firebase_config_service.dart # Firebase Cloud Function client
+│   │   │       ├── gateway_config_service.dart  # Client for cloudflare_gateway/'s HTTP endpoints
 │   │   │       ├── ble_provisioning_service.dart
 │   │   │       ├── local_http_service.dart
 │   │   │       ├── ota_service.dart
@@ -158,29 +171,24 @@ IoT-Project/
 │   │           ├── device_card.dart            # Expandable device card
 │   │           ├── schedule_sheet.dart         # Schedule create/edit sheet
 │   │           └── schema_driven_ui_builder.dart # Renders controls from device_type_registry
-│   ├── functions/                   ← Firebase Cloud Functions (Node.js)
-│   │   ├── index.js                 # registerDevice, getDeviceConfig, updateDeviceConfig, revertDeviceToFactory
-│   │   └── package.json
-│   ├── firebase.json                # Firebase project config
-│   ├── .firebaserc                  # Firebase project ID binding
-│   ├── database.rules.json          # Realtime Database security rules
-│   └── FIREBASE_SETUP_GUIDE.md     # Full Firebase setup walkthrough
+│   └── (no backend project files here — the gateway lives in cloudflare_gateway/,
+│        not inside the Flutter project)
 │
 ├── dsgv_firmware/                   ← ESP32 firmware (C / ESP-IDF 5.x)
 │   ├── components/
 │   │   └── dsgv_common/             # Shared firmware logic, linked into every device build
 │   │       ├── dsgv_app_main.c      # Boot sequence: NVS → config → event bus → GPIO → WiFi → HTTP → MQTT
 │   │       ├── include/
-│   │       │   ├── dsgv_config.h          # GPIO maps, MQTT endpoints, Firebase URL
+│   │       │   ├── dsgv_config.h          # GPIO maps, MQTT endpoints, gateway URL
 │   │       │   ├── dsgv_device_config.h   # Runtime config struct
 │   │       │   ├── dsgv_events.h          # GPIO ↔ MQTT event bus API
-│   │       │   └── dsgv_firebase.h        # Firebase fetch API
+│   │       │   └── dsgv_gateway.h         # Gateway config-fetch API
 │   │       ├── config/
 │   │       │   └── dsgv_device_config.c   # NVS load/save with bounds validation
 │   │       ├── events/
 │   │       │   └── dsgv_events.c          # Decouples GPIO from MQTT via a FreeRTOS queue
-│   │       ├── firebase/
-│   │       │   └── dsgv_firebase.c        # HTTPS fetch broker config from Firebase
+│   │       ├── gateway/
+│   │       │   └── dsgv_gateway.c         # HTTPS fetch broker config from cloudflare_gateway/
 │   │       ├── gpio/
 │   │       │   └── dsgv_gpio.c            # LEDC PWM, relay, ISR sensors
 │   │       ├── mqtt/
@@ -203,10 +211,20 @@ IoT-Project/
 │       ├── contact_sensor/          # Reed switch contact sensor
 │       └── thermostat/              # HVAC controller
 │
+├── cloudflare_gateway/               ← Device-config gateway (Cloudflare Workers + KV)
+│   ├── wrangler.toml                # Worker name, entry point, DSGV_KV binding
+│   ├── package.json                 # zero runtime dependencies
+│   ├── SETUP_GUIDE.md               # Full deploy walkthrough (CLI + dashboard)
+│   └── src/
+│       ├── index.js                 # Router: registerDevice, getDeviceConfig,
+│       │                            #   updateDeviceConfig, revertDeviceToFactory
+│       ├── store.js                 # Workers KV read/write wrapper
+│       └── safeEqual.js             # Constant-time auth_token comparison
+│
 ├── IoT_APP_Design/                  ← Architecture whitepaper + engineering review docs
 │   ├── IoT_Architecture_Whitepaper.md
 │   ├── Critical_Review.md           # Principal-engineer pass over architecture + in-flight changes
-│   ├── Security_Review.md           # Static security review (firmware, app, Firebase)
+│   ├── Security_Review.md           # Static security review (firmware, app, cloud gateway)
 │   └── Production_Readiness_GoNoGo.md # Go/No-Go checklist ahead of shipping
 │
 ├── FLASHING_GUIDE.md               ← Wiring diagrams + flash commands for every device type
@@ -225,7 +243,7 @@ IoT-Project/
 |------|---------|---------|
 | Git | Any | https://git-scm.com |
 | Node.js | 20+ | https://nodejs.org |
-| Firebase CLI | Latest | `npm install -g firebase-tools` |
+| Wrangler CLI (Cloudflare) | Latest | `npm install -g wrangler` |
 
 ### For App Development
 
@@ -256,70 +274,68 @@ idf.py --version
 
 ---
 
-## 5. Part A — Firebase Setup
+## 5. Part A — Cloudflare Gateway Setup
 
-> **Do this first.** Both the app and firmware need a deployed Firebase project.
+> **Do this first.** The app and firmware both need a working device-config gateway.
 
-### Step 1 — Create Firebase Project
+The gateway (`cloudflare_gateway/`) runs entirely on **Cloudflare Workers +
+Workers KV** — no Firebase, no other cloud provider, no paid plan of any kind.
+Workers hosts the four HTTP endpoints (`registerDevice`, `getDeviceConfig`,
+`updateDeviceConfig`, `revertDeviceToFactory`); Workers KV stores
+`device_registry` (auth tokens) and `device_configs` (broker settings per
+device), read and written directly via a zero-config binding — no external
+auth step needed. Free tier: 100k requests/day, no credit card required to
+sign up or deploy.
 
-1. Go to https://console.firebase.google.com
-2. Click **Add project** → name it (e.g. `dsgv-hub`) → disable Google Analytics → **Create project**
+This is a condensed version — for the full walkthrough (including the current
+Cloudflare dashboard UI as an alternative to each CLI step, plus
+troubleshooting) see **[cloudflare_gateway/SETUP_GUIDE.md](./cloudflare_gateway/SETUP_GUIDE.md)**.
 
-### Step 2 — Enable Realtime Database
-
-In the Firebase Console left sidebar:
-**Build → Realtime Database → Create database** → choose a region → **Start in locked mode** → **Enable**
-
-### Step 3 — Get Your Project ID
-
-Click the **gear icon** (top-left) → **Project Settings → General** → copy your **Project ID** (e.g. `dsgv-hub-a1b2c`).
-
-### Step 4 — Update the Three Constants
-
-Replace `YOUR_PROJECT_ID` in these files:
-
-```
-dsgv_hub_app/.firebaserc                          line 3
-dsgv_hub_app/lib/domain/services/firebase_config_service.dart   line 10
-dsgv_firmware/components/dsgv_common/include/dsgv_config.h      line 33
-```
-
-Also replace `mqtt.dsgv.io` with your real MQTT broker hostname in:
-```
-dsgv_hub_app/lib/domain/models/mqtt_config.dart                 line 10
-dsgv_firmware/components/dsgv_common/include/dsgv_config.h      line 39
-dsgv_hub_app/functions/index.js                                 line 18
-```
-
-> All three broker hostname values must be identical or "Restore factory broker"
-> will send devices to a different address than the firmware factory default.
-
-### Step 5 — Deploy Cloud Functions and Database Rules
+### Step 1 — Cloudflare Account and Wrangler
 
 ```bash
-# Log in to Firebase
-firebase login
+npm install -g wrangler
+wrangler login
+```
 
-# Install Cloud Function dependencies
-cd dsgv_hub_app/functions
+### Step 2 — Create the KV Namespace
+
+```bash
+cd cloudflare_gateway
+wrangler kv namespace create DSGV_KV
+```
+
+Paste the `id` it prints into `wrangler.toml`'s `[[kv_namespaces]]` block.
+
+### Step 3 — Set Secrets and Deploy
+
+```bash
 npm install
-cd ..
-
-# Deploy everything
-firebase deploy
+wrangler secret put MQTT_BROKER_USERNAME
+wrangler secret put MQTT_BROKER_PASSWORD
+wrangler deploy
 ```
 
-Expected output:
+First deploy prints your Worker's URL:
+`https://dsgv-hub-gateway.<your-subdomain>.workers.dev`
+
+### Step 4 — Point the App and Firmware at the Gateway
+
+Replace the base URL in these two files with the URL from Step 3:
+
 ```
-✔  functions[registerDevice]:        Deployed
-✔  functions[getDeviceConfig]:       Deployed
-✔  functions[updateDeviceConfig]:    Deployed
-✔  functions[revertDeviceToFactory]: Deployed
-✔  database: Rules deployed
+dsgv_hub_app/lib/domain/services/gateway_config_service.dart   _kGatewayBase
+dsgv_firmware/components/dsgv_common/include/dsgv_config.h     GATEWAY_GET_CONFIG_URL (append /getDeviceConfig)
 ```
 
-For the full Firebase walkthrough including verification steps and troubleshooting,
-see **[dsgv_hub_app/FIREBASE_SETUP_GUIDE.md](./dsgv_hub_app/FIREBASE_SETUP_GUIDE.md)**.
+Also replace the HiveMQ broker hostname with your own in these three locations —
+they must all match, or "Restore factory broker" will send devices to a
+different address than the firmware factory default:
+```
+dsgv_hub_app/lib/domain/models/mqtt_config.dart              factoryDefault.host
+dsgv_firmware/components/dsgv_common/include/dsgv_config.h   MQTT_CLOUD_HOST
+cloudflare_gateway/src/index.js                               FACTORY_CONFIG_BASE.broker_host
+```
 
 ---
 
@@ -377,17 +393,12 @@ sequence shared by every SKU — you don't add per-device wiring:
 3. Event bus init (dsgv_events — must come before GPIO)
 4. GPIO init (relays, LEDC PWM, ADC, sensors)
 5. WiFi connect — falls back to BLE provisioning or captive-portal AP if it fails
-6. Local HTTP server (Tasmota-compatible REST API, port 80)
-7. MQTT client (best-effort — a failed connect does not block local control)
+6. Local HTTP server (Tasmota-compatible REST API, port 80) — live before anything below
+7. Gateway config fetch (dsgv_gateway.c, best-effort) — pulls broker host/port/tls/
+   credentials from cloudflare_gateway/ into NVS; failure just means MQTT uses
+   whatever's cached from a previous successful fetch
+8. MQTT client (best-effort — a failed connect does not block local control)
 ```
-
-> **Known gap:** `dsgv_firebase.c` implements the HTTPS broker-config fetch described
-> in [§2](#2-how-it-works--architecture) but is **not currently called** from
-> `dsgv_app_main()` or compiled into any device's `CMakeLists.txt`. Until it is wired
-> in, devices use the compile-time `MQTT_CLOUD_HOST`/`MQTT_CLOUD_PORT` from
-> `dsgv_config.h` rather than a Firebase-delivered value. See
-> [`IoT_APP_Design/Critical_Review.md`](./IoT_APP_Design/Critical_Review.md) §5 before
-> relying on the Firebase config-push flow in production.
 
 ### Step 6 — Build and Flash
 
@@ -398,7 +409,7 @@ idf.py -p COM5 flash monitor    # Replace COM5 with your port (COMx on Windows, 
 
 On first boot you should see:
 ```
-I (xxxx) DSGV_Firebase: Broker config updated: mqtt.yourdomain.com:8883 (TLS=1)
+I (xxxx) DSGV_Gateway: Broker config updated: mqtt.yourdomain.com:8883 (TLS=1)
 I (xxxx) DSGV_MQTT: Connected to mqtt.yourdomain.com:8883
 ```
 
@@ -452,8 +463,8 @@ Go to **Settings** to verify the connection status shows "Connected · Manufactu
 
 ## 8. Provisioning a New Device
 
-Provisioning gives a fresh ESP32 its WiFi credentials, registers it in Firebase,
-and makes it appear on the dashboard. Three entry methods are supported — all
+Provisioning gives a fresh ESP32 its WiFi credentials, registers it with the
+gateway, and makes it appear on the dashboard. Three entry methods are supported — all
 lead to the same BLE provisioning flow.
 
 ### Method A — QR Code (standard)
@@ -488,13 +499,13 @@ Step 3 — Continue as above
 App ──(BLE)──► Device: { ssid, password, device_type, capabilities, relay_count }
 Device connects to WiFi
 Device ──(BLE)──► App: "success:<auth_token>:<wifi_mac>"
-App ──(HTTPS)──► Firebase registerDevice: { device_id, auth_token }
-Firebase: creates device_registry + device_configs entries
-Device reboots ──► fetches broker config from Firebase ──► connects to MQTT
+App ──(HTTPS)──► Gateway registerDevice: { device_id, auth_token }
+Gateway: creates device_registry + device_configs entries in Workers KV
+Device reboots ──► fetches broker config from the gateway ──► connects to MQTT
 Device appears on Dashboard automatically
 ```
 
-The **auth_token** is a 32-character hex string generated on the ESP32 using hardware entropy (`esp_random()`). It is exchanged only over BLE during provisioning — never over MQTT. It is the device's permanent credential for all future Firebase and MQTT config operations.
+The **auth_token** is a 32-character hex string generated on the ESP32 using hardware entropy (`esp_random()`). It is exchanged only over BLE during provisioning — never over MQTT. It is the device's permanent credential for all future gateway and MQTT config operations.
 
 ---
 
@@ -547,7 +558,7 @@ device's WiFi MAC address as uppercase hex without separators (e.g. `AABBCCDDEEF
 | `devices/{id}/status` | Device → Broker → App | LWT on disconnect | `"offline"` |
 
 > **Note:** The `devices/{id}/config` topic (used in older firmware for broker changes
-> over MQTT) is superseded by Firebase. New firmware fetches config via HTTPS on boot.
+> over MQTT) is superseded by the gateway. New firmware fetches config via HTTPS on boot.
 > Do not send broker credentials over MQTT.
 
 ### Telemetry Payload Fields
@@ -568,41 +579,41 @@ device's WiFi MAC address as uppercase hex without separators (e.g. `AABBCCDDEEF
 
 ---
 
-## 12. Firebase Data Structure
+## 12. Gateway Data Structure
 
-The Realtime Database has two top-level paths. Both are locked to direct client access —
-all reads and writes go through Cloud Functions.
+`cloudflare_gateway/` stores two kinds of Workers KV keys. Both are only
+reachable through the Worker's own route logic — KV has no public REST API of
+its own the way Firebase RTDB did, so there's no separate "security rules"
+layer to configure; the Worker's auth_token checks in `src/index.js` are the
+only gate.
 
 ```
-{
-  "device_registry": {
-    "AABBCCDDEEFF": {
-      "auth_token":    "3F8A...C2D1",   ← 32-char hex, hardware entropy, PRIVATE
-      "registered_at": 1717430400000,   ← Unix timestamp ms
-      "last_seen":     1717516800000    ← Updated on every getDeviceConfig call
-    }
-  },
-  "device_configs": {
-    "AABBCCDDEEFF": {
-      "broker_host":     "mqtt.yourdomain.com",
-      "broker_port":     8883,
-      "broker_tls":      true,
-      "broker_username": "device_user",
-      "broker_password": "s3cur3p@ss",
-      "is_factory":      false,
-      "updated_at":      1717516800000
-    }
-  }
+device_registry:AABBCCDDEEFF → {
+  "auth_token":    "3F8A...C2D1",   ← 32-char hex, hardware entropy, PRIVATE
+  "registered_at": 1717430400000,   ← Unix timestamp ms
+  "last_seen":     1717430400000    ← Set once at registration, not updated per-boot
+                                     ←   (keeps writes flat regardless of boot frequency —
+                                     ←   see index.js's getDeviceConfig comment)
+}
+
+device_configs:AABBCCDDEEFF → {
+  "broker_host":     "mqtt.yourdomain.com",
+  "broker_port":     8883,
+  "broker_tls":      true,
+  "broker_username": "device_user",
+  "broker_password": "s3cur3p@ss",
+  "is_factory":      false,
+  "updated_at":      1717516800000
 }
 ```
 
-### Cloud Functions
+### Gateway Routes
 
-| Function | Called by | Purpose |
+| Route | Called by | Purpose |
 |----------|-----------|---------|
 | `registerDevice` | App (after BLE provisioning) | Creates registry + seeds factory config |
 | `getDeviceConfig` | Firmware (every boot) | Returns broker config after validating auth_token |
-| `updateDeviceConfig` | App (Settings → Push broker) | Updates device's config in Firebase |
+| `updateDeviceConfig` | App (Settings → Push broker) | Updates device's config in Workers KV |
 | `revertDeviceToFactory` | App (Settings → Restore factory) | Resets config to factory broker |
 
 ---
@@ -617,18 +628,18 @@ Understanding the security design is important before deploying to customers.
 - 128 bits (32 hex chars), unique per device, permanent
 - Stored in NVS `DSGV_cfg` namespace — survives reboots, survives OTA
 - **Never transmitted over MQTT** — only ever sent over BLE during provisioning
-- Used as the authentication credential for all Firebase Cloud Function calls
-- Compared using constant-time comparison in the Cloud Function to prevent timing attacks
+- Used as the authentication credential for all gateway route calls
+- Compared using constant-time comparison (`safeEqual()`) in the Worker to prevent timing attacks
 
-### Firebase
+### Cloudflare Gateway
 
-- `device_registry` auth tokens are stored in a path that security rules lock to `false` — no client (app or device) can read them directly, only Cloud Functions via Admin SDK
-- `device_configs` is similarly locked — all config reads and writes go through Cloud Functions
-- The Cloud Function URL and the Firebase `apiKey` are not secrets — security relies entirely on the per-device auth_token
+- `device_registry`/`device_configs` live in Workers KV, which has no public REST API of its own — the only way to read or write them is through the Worker's route handlers in `cloudflare_gateway/src/index.js`, which enforce the auth_token check on every route except the initial `registerDevice`
+- The gateway's URL is not a secret — security relies entirely on the per-device auth_token
+- No service account, no OAuth bridge, no third-party cloud provider in the trust chain — Workers reads/writes its own KV namespace directly
 
 ### MQTT
 
-- Credentials (broker username/password) are stored in NVS after being fetched from Firebase over HTTPS
+- Credentials (broker username/password) are stored in NVS after being fetched from the gateway over HTTPS
 - They never travel over the MQTT wire
 - TLS is enforced on the factory broker connection (`broker_tls: true` by default)
 - The LWT topic (`devices/{id}/status = "offline"`) is the only MQTT message that does not carry auth
@@ -641,7 +652,7 @@ Understanding the security design is important before deploying to customers.
 
 ### Recommendations for Production
 
-- Enable **Firebase App Check** to prevent unauthorised callers hitting your Cloud Functions
+- Add a **Cloudflare Rate Limiting rule** (dashboard → your zone/Worker → Security → WAF → Rate limiting rules) to slow down brute-force `auth_token` guessing against the gateway — the Worker itself has no rate limiting built in
 - Enable **NVS encryption** on the ESP32 (`idf.py menuconfig → Security → Enable flash encryption`) to protect stored credentials if flash is physically extracted
 - Use **TLS client certificates** (mTLS) on your MQTT broker for zero-trust device authentication at scale
 
@@ -655,9 +666,9 @@ Located at `dsgv_firmware/components/dsgv_common/include/dsgv_config.h`.
 
 | Constant | What it does | Default / Example |
 |----------|-------------|-------------------|
-| `FIREBASE_GET_CONFIG_URL` | Cloud Function URL for broker config fetch | `https://us-central1-{id}.cloudfunctions.net/getDeviceConfig` |
-| `FIREBASE_TIMEOUT_MS` | How long to wait for Firebase before using cached config | `10000` |
-| `MQTT_CLOUD_HOST` | Factory MQTT broker hostname (must match app + Firebase) | `mqtt.yourdomain.com` |
+| `GATEWAY_GET_CONFIG_URL` | Cloudflare Worker URL for broker config fetch | `https://dsgv-hub-gateway.{subdomain}.workers.dev/getDeviceConfig` |
+| `GATEWAY_TIMEOUT_MS` | How long to wait for the gateway before using cached config | `10000` |
+| `MQTT_CLOUD_HOST` | Factory MQTT broker hostname (must match app + gateway) | `mqtt.yourdomain.com` |
 | `MQTT_CLOUD_PORT` | Factory MQTT broker port | `8883` |
 | `MQTT_KEEPALIVE_SEC` | MQTT keep-alive interval | `60` |
 | `DSGV_TELEMETRY_INTERVAL_MS` | How often devices publish sensor data | `30000` |
@@ -677,13 +688,13 @@ Located at `dsgv_hub_app/lib/domain/models/mqtt_config.dart`.
 | `factoryDefault.port` | Factory broker port (default `8883`) |
 | `factoryDefault.useTls` | TLS on factory broker (default `true`) |
 
-### `firebase_config_service.dart` — App Cloud Function URL
+### `gateway_config_service.dart` — Gateway URL
 
-Located at `dsgv_hub_app/lib/domain/services/firebase_config_service.dart`.
+Located at `dsgv_hub_app/lib/domain/services/gateway_config_service.dart`.
 
 | Constant | What it does |
 |----------|-------------|
-| `_kFunctionsBase` | Firebase Cloud Functions base URL — must contain your project ID |
+| `_kGatewayBase` | `cloudflare_gateway/`'s deployed Worker URL (`https://<name>.<subdomain>.workers.dev`) |
 
 ---
 
@@ -729,7 +740,7 @@ Key log tags to watch:
 
 | Tag | What it reports |
 |-----|----------------|
-| `DSGV_Firebase` | Firebase HTTPS fetch result, broker config applied |
+| `DSGV_Gateway` | Gateway HTTPS fetch result, broker config applied |
 | `DSGV_MQTT` | Connection attempts, topic publishes, incoming commands |
 | `DSGV_cfg` | NVS config load/save, auth token generation |
 | `DSGV_Prov` | BLE provisioning steps, credential receipt |
@@ -742,13 +753,15 @@ flutter run --verbose          # Full Flutter output
 flutter logs                   # Device logs only
 ```
 
-### Firebase Function Logs
+### Gateway Logs
 
 ```bash
-firebase functions:log
-# Or live stream:
-firebase functions:log --follow
+cd cloudflare_gateway
+wrangler tail
 ```
+
+Streams live logs from the deployed Worker — every request, including
+errors thrown inside route handlers.
 
 ### MQTT Debugging
 
@@ -763,7 +776,7 @@ Use [MQTT Explorer](https://mqtt-explorer.com) (free desktop app) to:
 |---------|-------------|-----|
 | App shows "Disconnected" in Settings | Wrong broker host or no internet | Check `MQTT_CLOUD_HOST` / custom broker settings |
 | Device not appearing on dashboard after provisioning | BLE provisioning failed silently | Check serial monitor for `DSGV_Prov` logs |
-| Firebase fetch fails on every boot | Wrong `FIREBASE_GET_CONFIG_URL` | Verify project ID in `dsgv_config.h` |
+| Gateway fetch fails on every boot | Wrong `GATEWAY_GET_CONFIG_URL` | Verify the Worker URL/subdomain in `dsgv_config.h` |
 | Device connects to wrong broker after firmware update | NVS `mqtt_cfg` retained old config | Factory reset (hold BOOT 5 s) or call `nvs_flash_erase()` in debug |
 | Build error: `esp_crt_bundle_attach` not found | Certificate bundle not enabled | Add `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y` to `sdkconfig.defaults` |
 | `flutter doctor` shows Android SDK missing | `ANDROID_HOME` not set | Set env var (see Part C, Step 2) |
@@ -774,28 +787,28 @@ Use [MQTT Explorer](https://mqtt-explorer.com) (free desktop app) to:
 
 | File | Purpose | Edit when |
 |------|---------|----------|
-| `dsgv_config.h` | Firmware constants — GPIO, broker URL, Firebase URL | Porting to new hardware, changing broker |
+| `dsgv_config.h` | Firmware constants — GPIO, broker URL, gateway URL | Porting to new hardware, changing broker |
 | `dsgv_app_main.c` | Shared boot sequence, called by every device's `main.c` stub | Changing startup order or adding a global init step |
 | `dsgv_events.c` / `.h` | GPIO ↔ MQTT event bus (decouples hardware from transport) | Adding a new event type or telemetry source |
 | `mqtt_config.dart` | App's factory broker constant | Changing manufacturer broker |
-| `firebase_config_service.dart` | Cloud Function base URL | After creating Firebase project |
-| `.firebaserc` | Firebase project ID | After creating Firebase project |
-| `functions/index.js` | Cloud Function logic + `FACTORY_CONFIG` constant | Changing broker, adding new functions |
-| `database.rules.json` | Realtime Database security rules | Never — rules are intentionally fully locked |
+| `gateway_config_service.dart` | `cloudflare_gateway/` Worker base URL | After deploying the gateway |
+| `cloudflare_gateway/wrangler.toml` | Worker name, entry point, `DSGV_KV` namespace binding | After creating the KV namespace |
+| `cloudflare_gateway/src/index.js` | Gateway route logic + `FACTORY_CONFIG_BASE` constant | Changing broker, adding new routes |
+| `cloudflare_gateway/src/store.js` | Workers KV read/write wrapper | Rarely — only if the KV key scheme changes |
+| `cloudflare_gateway/SETUP_GUIDE.md` | Full deploy walkthrough (CLI + dashboard) | Reference only |
 | `device_type_registry.dart` | Single source of truth for capabilities + device types | Adding new device types |
 | `schema_driven_ui_builder.dart` | Renders controls by reading the registry | Rarely — only for new *control widget kinds* |
 | `device_group_notifier.dart` / `groups_screen.dart` | Rooms/groups state + batch commands | Changing group/room behaviour |
 | `schedule_service.dart` / `schedule_sheet.dart` | Timed on/off schedules | Adding new schedule recurrence rules |
 | `dsgv_mqtt.c` | MQTT connection, topic handling, telemetry, commands | Adding new MQTT features |
-| `dsgv_firebase.c` | HTTPS fetch from Firebase Cloud Function (not yet called from `dsgv_app_main()` — see §6) | Extending config fields (e.g. adding auth credentials) |
+| `dsgv_gateway.c` | HTTPS fetch from the gateway's `getDeviceConfig` route, called from `dsgv_app_main()` | Extending config fields |
 | `dsgv_provisioning.c` | BLE GATT provisioning protocol | Changing provisioning payload fields |
 | `dsgv_captive_portal.c` | AP mode credential entry portal | Modifying the setup web page |
 | `wifi_manager.c` | Wi-Fi connection, AP mode, credential storage | Adding connection modes |
-| `FIREBASE_SETUP_GUIDE.md` | Step-by-step Firebase setup with verification | Reference only |
 | `FLASHING_GUIDE.md` | Wiring + flash commands per device type | Reference only |
 | `PRE_PRODUCTION_GUIDE.md` | Production readiness checklist | Before shipping hardware |
-| `IoT_APP_Design/Critical_Review.md` | Principal-engineer review of architecture + in-flight changes | Reference — read before relying on Firebase config push |
-| `IoT_APP_Design/Security_Review.md` | Static security review across firmware/app/Firebase | Reference — before a security-sensitive release |
+| `IoT_APP_Design/Critical_Review.md` | Principal-engineer review of architecture + in-flight changes | Reference — predates the Cloudflare migration, historical context only |
+| `IoT_APP_Design/Security_Review.md` | Static security review across firmware/app/gateway | Reference — before a security-sensitive release |
 | `IoT_APP_Design/Production_Readiness_GoNoGo.md` | Go/No-Go checklist, updated per release candidate | Before shipping hardware |
 | `TEST_CHECKLIST.md` | Hardware + app test checklist for all features | Before every release |
 
@@ -834,14 +847,29 @@ Use [MQTT Explorer](https://mqtt-explorer.com) (free desktop app) to:
 - **Relay/power-restore sync fix**, **COM port + IDF lock hardening** for the
   1-gang switch build, and other stability fixes — see `git log` for the full list.
 
-### Engineering Review Docs (new)
+### Gateway migrated off Firebase to Cloudflare (new)
 
-`IoT_APP_Design/` now includes three review documents worth reading before a
-production release: `Critical_Review.md` (architecture pass, includes the open
-Firebase-wiring gap noted in [§6](#6-part-b--firmware-setup)), `Security_Review.md`
-(static security review of firmware/app/Firebase), and
-`Production_Readiness_GoNoGo.md` (release checklist, currently **No-Go** pending
-the items those reviews raised).
+The device-config gateway (`registerDevice`, `getDeviceConfig`,
+`updateDeviceConfig`, `revertDeviceToFactory`) was Firebase Cloud Functions +
+Realtime Database. Deploying Cloud Functions turned out to require the Blaze
+(pay-as-you-go) plan — confirmed by direct deploy attempts — so the gateway
+was rebuilt from scratch on **Cloudflare Workers + Workers KV**
+(`cloudflare_gateway/`), which is free with no card required. No Firebase
+project is part of this architecture anymore — `dsgv_gateway.c` (firmware,
+renamed from `dsgv_firebase.c`) and `gateway_config_service.dart` (app,
+renamed from `firebase_config_service.dart`) both talk to the Cloudflare
+Worker now. See [§5](#5-part-a--cloudflare-gateway-setup) and
+[`cloudflare_gateway/SETUP_GUIDE.md`](./cloudflare_gateway/SETUP_GUIDE.md).
+
+### Engineering Review Docs
+
+`IoT_APP_Design/` includes three review documents worth reading before a
+production release: `Critical_Review.md` and `Security_Review.md` (both
+predate the Cloudflare migration above — read for historical architecture
+context, not as a description of the current gateway), and
+`Production_Readiness_GoNoGo.md` (release checklist, currently **No-Go**
+pending the items those reviews raised, principally around firmware OTA/Secure
+Boot — unrelated to the gateway change).
 
 ---
 

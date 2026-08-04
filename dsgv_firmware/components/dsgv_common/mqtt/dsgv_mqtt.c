@@ -141,23 +141,27 @@ static void init_state_mutex(void) {
  * @param host      Hostname or IP
  * @param port      Port number
  * @param use_tls   true → MQTT_TRANSPORT_OVER_SSL, false → plain TCP
+ * @param username  Broker username, or NULL/"" for an anonymous connection.
+ * @param password  Broker password, or NULL/"" for an anonymous connection.
+ *
+ * No compile-time broker credential exists anywhere in this firmware —
+ * host/port/tls/username/password all come from the caller, which sources
+ * them from NVS (mqtt_cfg namespace), itself populated either by
+ * dsgv_gateway_fetch_config() (factory broker) or handle_config() (a
+ * user-pushed custom broker). If NVS has never been populated (device has
+ * never reached the internet), the caller passes NULL/NULL here and this
+ * connects anonymously — which the broker will reject until the device
+ * completes one successful gateway fetch.
  */
-static esp_err_t connect_to_broker(const char *host, int port, bool use_tls) {
+static esp_err_t connect_to_broker(const char *host, int port, bool use_tls,
+                                    const char *username, const char *password) {
     if (s_client) {
         esp_mqtt_client_destroy(s_client);
         s_client = NULL;
     }
 
-    // Only the compile-time factory broker gets the factory credentials —
-    // a user-configured broker (handle_config's mqtt_host/port/tls payload)
-    // has no credential storage path yet in the mqtt_cfg NVS schema, so it
-    // stays anonymous-only until that's added.
-    bool is_factory_broker = (strcmp(host, MQTT_CLOUD_HOST) == 0) &&
-                              (port == MQTT_CLOUD_PORT);
-    const char *username = (is_factory_broker && MQTT_CLOUD_USERNAME[0])
-                                ? MQTT_CLOUD_USERNAME : NULL;
-    const char *password = (is_factory_broker && MQTT_CLOUD_PASSWORD[0])
-                                ? MQTT_CLOUD_PASSWORD : NULL;
+    if (username && !username[0]) username = NULL;
+    if (password && !password[0]) password = NULL;
 
     esp_mqtt_client_config_t cfg = {
         .broker = {
@@ -218,9 +222,16 @@ esp_err_t DSGV_mqtt_start(void) {
         }
     }
 
-    // Check for user-configured broker in NVS (set by app broker-change command).
-    // Fall back to compile-time MQTT_CLOUD_HOST when namespace is absent.
+    // Resolve the broker to connect to from NVS (mqtt_cfg namespace). This is
+    // the single unified "broker config currently in effect" — populated
+    // either by dsgv_gateway_fetch_config() (factory broker + credentials
+    // fetched over HTTPS) or by handle_config() (an app-pushed custom
+    // broker). Falls back to the compile-time factory host/port/tls with no
+    // credentials only if NVS has never been populated at all (device has
+    // never completed a successful gateway fetch or custom-broker push).
     char    nvs_host[65] = {0};
+    char    nvs_user[65] = {0};
+    char    nvs_pass[65] = {0};
     int     nvs_port     = MQTT_CLOUD_PORT;
     bool    nvs_tls      = true;
     bool    has_nvs_cfg  = false;
@@ -230,20 +241,26 @@ esp_err_t DSGV_mqtt_start(void) {
         size_t hlen = sizeof(nvs_host);
         if (nvs_get_str(hcfg, "host", nvs_host, &hlen) == ESP_OK && nvs_host[0]) {
             int32_t p; uint8_t t;
-            if (nvs_get_i32(hcfg, "port", &p) == ESP_OK) nvs_port = (int)p;
-            if (nvs_get_u8 (hcfg, "tls",  &t) == ESP_OK) nvs_tls  = (bool)t;
+            size_t  ulen = sizeof(nvs_user);
+            size_t  plen = sizeof(nvs_pass);
+            if (nvs_get_i32(hcfg, "port",     &p) == ESP_OK) nvs_port = (int)p;
+            if (nvs_get_u8 (hcfg, "tls",      &t) == ESP_OK) nvs_tls  = (bool)t;
+            nvs_get_str(hcfg, "username", nvs_user, &ulen);
+            nvs_get_str(hcfg, "password", nvs_pass, &plen);
             has_nvs_cfg = true;
         }
         nvs_close(hcfg);
     }
 
     if (has_nvs_cfg) {
-        ESP_LOGI(TAG, "Connecting to user-configured broker %s:%d (TLS=%d)",
-                 nvs_host, nvs_port, nvs_tls);
-        return connect_to_broker(nvs_host, nvs_port, nvs_tls);
+        ESP_LOGI(TAG, "Connecting to broker %s:%d (TLS=%d, auth=%d) from NVS cache",
+                 nvs_host, nvs_port, nvs_tls, nvs_user[0] != '\0');
+        return connect_to_broker(nvs_host, nvs_port, nvs_tls, nvs_user, nvs_pass);
     }
-    ESP_LOGI(TAG, "Connecting to broker %s:%d", MQTT_CLOUD_HOST, MQTT_CLOUD_PORT);
-    return connect_to_broker(MQTT_CLOUD_HOST, MQTT_CLOUD_PORT, MQTT_CLOUD_TLS);
+    ESP_LOGW(TAG, "No cached broker config — connecting to %s:%d anonymously "
+             "(will be rejected until a gateway fetch succeeds)",
+             MQTT_CLOUD_HOST, MQTT_CLOUD_PORT);
+    return connect_to_broker(MQTT_CLOUD_HOST, MQTT_CLOUD_PORT, MQTT_CLOUD_TLS, NULL, NULL);
 }
 
 // ── Event handler ─────────────────────────────────────────────────────────────
@@ -629,6 +646,26 @@ typedef struct {
     bool is_rollback;
 } _broker_switch_args_t;
 
+// Reads username/password from the mqtt_cfg NVS namespace. Callers that
+// already resolved host/port/tls (from NVS or otherwise) use this to pick
+// up the matching credentials — the caller is always responsible for having
+// written the correct username/password to NVS *before* triggering a
+// broker switch (handle_config's custom-broker path and the rollback
+// restore path both do this), so this always reflects the broker we're
+// about to connect to, not a stale value.
+static void nvs_get_mqtt_credentials(char *user, size_t user_sz,
+                                      char *pass, size_t pass_sz) {
+    user[0] = '\0';
+    pass[0] = '\0';
+    nvs_handle_t h;
+    if (nvs_open(MQTT_CFG_NVS_NS, NVS_READONLY, &h) == ESP_OK) {
+        size_t ulen = user_sz, plen = pass_sz;
+        nvs_get_str(h, "username", user, &ulen);
+        nvs_get_str(h, "password", pass, &plen);
+        nvs_close(h);
+    }
+}
+
 // One-shot task: destroys the current MQTT client and reconnects to new broker.
 // Must run outside the MQTT task context — never call esp_mqtt_client_stop/destroy
 // from within an MQTT event handler.
@@ -640,7 +677,10 @@ static void _broker_switch_task(void *arg) {
         esp_mqtt_client_destroy(s_client);
         s_client = NULL;
     }
-    connect_to_broker(args->host, args->port, args->tls);
+
+    char username[65], password[65];
+    nvs_get_mqtt_credentials(username, sizeof(username), password, sizeof(password));
+    connect_to_broker(args->host, args->port, args->tls, username, password);
 
     if (args->is_rollback) {
         ESP_LOGW(TAG, "Broker rollback: reconnected to %s:%d", args->host, args->port);
@@ -674,15 +714,21 @@ static void broker_rollback_timer_cb(TimerHandle_t timer) {
     ESP_LOGW(TAG, "Broker rollback: new broker unreachable after 60 s — reverting");
 
     char    prev_host[65] = {0};
+    char    prev_user[65] = {0};
+    char    prev_pass[65] = {0};
     int32_t prev_port_v   = MQTT_CLOUD_PORT;
     uint8_t prev_tls_v    = 1;
 
     nvs_handle_t hprev;
     if (nvs_open("prev_mqtt_cfg", NVS_READONLY, &hprev) == ESP_OK) {
         size_t hlen = sizeof(prev_host);
+        size_t ulen = sizeof(prev_user);
+        size_t plen = sizeof(prev_pass);
         nvs_get_str(hprev, "host", prev_host, &hlen);
         nvs_get_i32(hprev, "port", &prev_port_v);
         nvs_get_u8 (hprev, "tls",  &prev_tls_v);
+        nvs_get_str(hprev, "username", prev_user, &ulen);
+        nvs_get_str(hprev, "password", prev_pass, &plen);
         nvs_close(hprev);
     }
 
@@ -690,11 +736,15 @@ static void broker_rollback_timer_cb(TimerHandle_t timer) {
     nvs_handle_t hcfg;
     if (nvs_open(MQTT_CFG_NVS_NS, NVS_READWRITE, &hcfg) == ESP_OK) {
         if (prev_host[0]) {
-            nvs_set_str(hcfg, "host", prev_host);
-            nvs_set_i32(hcfg, "port", prev_port_v);
-            nvs_set_u8 (hcfg, "tls",  prev_tls_v);
+            nvs_set_str(hcfg, "host",     prev_host);
+            nvs_set_i32(hcfg, "port",     prev_port_v);
+            nvs_set_u8 (hcfg, "tls",      prev_tls_v);
+            nvs_set_str(hcfg, "username", prev_user);
+            nvs_set_str(hcfg, "password", prev_pass);
         } else {
-            // Previous config was the factory default — erase user namespace
+            // Previous config was the factory default with no cached
+            // credentials — erase the namespace so the next connect attempt
+            // is anonymous rather than reusing a stale password.
             nvs_erase_all(hcfg);
         }
         nvs_commit(hcfg);
@@ -713,7 +763,11 @@ static void broker_rollback_timer_cb(TimerHandle_t timer) {
  * Handles authenticated broker-reconfiguration commands from the DSGV Hub App.
  *
  * Payload variants:
- *   Broker change:   {"auth_token":"<32hex>","mqtt_host":"host","mqtt_port":8883,"mqtt_use_tls":true}
+ *   Broker change:   {"auth_token":"<32hex>","mqtt_host":"host","mqtt_port":8883,"mqtt_use_tls":true,
+ *                      "mqtt_username":"optional","mqtt_password":"optional"}
+ *                    mqtt_username/mqtt_password default to "" (anonymous) if omitted — always
+ *                    explicitly set (never left as whatever the previous broker's credentials were),
+ *                    so switching brokers never leaks one broker's credentials to another.
  *   Broker revert:   {"auth_token":"<32hex>","revert_to_factory":true}
  *   WiFi change:     {"auth_token":"<32hex>","wifi_ssid":"NewNet","wifi_password":"newpass"}
  *   Re-provision:    {"auth_token":"<32hex>","reprovision":true}
@@ -807,6 +861,8 @@ static void handle_config(const char *payload, int len) {
     const cJSON *j_host = cJSON_GetObjectItemCaseSensitive(root, "mqtt_host");
     const cJSON *j_port = cJSON_GetObjectItemCaseSensitive(root, "mqtt_port");
     const cJSON *j_tls  = cJSON_GetObjectItemCaseSensitive(root, "mqtt_use_tls");
+    const cJSON *j_user = cJSON_GetObjectItemCaseSensitive(root, "mqtt_username");
+    const cJSON *j_pass = cJSON_GetObjectItemCaseSensitive(root, "mqtt_password");
 
     if (!cJSON_IsString(j_host) || !j_host->valuestring || !j_host->valuestring[0]) {
         cJSON_Delete(root);
@@ -825,26 +881,46 @@ static void handle_config(const char *payload, int len) {
     }
     if (cJSON_IsBool(j_tls)) new_tls = cJSON_IsTrue(j_tls);
 
+    // Always explicit — "" (anonymous) if omitted, never inherited from
+    // whatever broker was previously configured (that would leak the old
+    // broker's credentials to the new host).
+    char new_user[65] = {0};
+    char new_pass[65] = {0};
+    if (cJSON_IsString(j_user) && j_user->valuestring) {
+        strlcpy(new_user, j_user->valuestring, sizeof(new_user));
+    }
+    if (cJSON_IsString(j_pass) && j_pass->valuestring) {
+        strlcpy(new_pass, j_pass->valuestring, sizeof(new_pass));
+    }
+
     cJSON_Delete(root);
 
     // ── 6. Copy current broker to rollback store ──────────────────────────────
     nvs_handle_t hprev;
     if (nvs_open("prev_mqtt_cfg", NVS_READWRITE, &hprev) == ESP_OK) {
         char    cur_host[65] = {0};
+        char    cur_user[65] = {0};
+        char    cur_pass[65] = {0};
         int32_t cur_port     = MQTT_CLOUD_PORT;
         uint8_t cur_tls      = 1;
         nvs_handle_t hcur;
         if (nvs_open(MQTT_CFG_NVS_NS, NVS_READONLY, &hcur) == ESP_OK) {
             size_t hlen = sizeof(cur_host);
+            size_t ulen = sizeof(cur_user);
+            size_t plen = sizeof(cur_pass);
             nvs_get_str(hcur, "host", cur_host, &hlen);
             nvs_get_i32(hcur, "port", &cur_port);
             nvs_get_u8 (hcur, "tls",  &cur_tls);
+            nvs_get_str(hcur, "username", cur_user, &ulen);
+            nvs_get_str(hcur, "password", cur_pass, &plen);
             nvs_close(hcur);
         }
         // If no user config exists, save factory defaults as rollback target
-        nvs_set_str(hprev, "host", cur_host[0] ? cur_host : MQTT_CLOUD_HOST);
-        nvs_set_i32(hprev, "port", cur_host[0] ? cur_port : (int32_t)MQTT_CLOUD_PORT);
-        nvs_set_u8 (hprev, "tls",  cur_host[0] ? cur_tls  : (uint8_t)1);
+        nvs_set_str(hprev, "host",     cur_host[0] ? cur_host : MQTT_CLOUD_HOST);
+        nvs_set_i32(hprev, "port",     cur_host[0] ? cur_port : (int32_t)MQTT_CLOUD_PORT);
+        nvs_set_u8 (hprev, "tls",      cur_host[0] ? cur_tls  : (uint8_t)1);
+        nvs_set_str(hprev, "username", cur_user);
+        nvs_set_str(hprev, "password", cur_pass);
         nvs_commit(hprev);
         nvs_close(hprev);
     }
@@ -852,9 +928,11 @@ static void handle_config(const char *payload, int len) {
     // ── 7. Write new broker to mqtt_cfg ──────────────────────────────────────
     nvs_handle_t hnew;
     if (nvs_open(MQTT_CFG_NVS_NS, NVS_READWRITE, &hnew) == ESP_OK) {
-        nvs_set_str(hnew, "host", new_host);
-        nvs_set_i32(hnew, "port", (int32_t)new_port);
-        nvs_set_u8 (hnew, "tls",  (uint8_t)new_tls);
+        nvs_set_str(hnew, "host",     new_host);
+        nvs_set_i32(hnew, "port",     (int32_t)new_port);
+        nvs_set_u8 (hnew, "tls",      (uint8_t)new_tls);
+        nvs_set_str(hnew, "username", new_user);
+        nvs_set_str(hnew, "password", new_pass);
         nvs_commit(hnew);
         nvs_close(hnew);
     }

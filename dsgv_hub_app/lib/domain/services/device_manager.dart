@@ -7,7 +7,7 @@ import '../../data/datasources/objectbox_device_datasource.dart';
 import '../../data/repositories/device_repository.dart';
 import '../models/smart_device.dart';
 import 'device_type_registry.dart';
-import 'firebase_config_service.dart';
+import 'gateway_config_service.dart';
 import 'local_http_service.dart';
 import 'mqtt_service.dart';
 import 'telemetry_service.dart';
@@ -426,49 +426,49 @@ class DeviceManager extends AsyncNotifier<List<SmartDevice>> {
     }
   }
 
-  /// Registers a newly provisioned device in Firebase.
+  /// Registers a newly provisioned device with the gateway.
   /// Called immediately after BLE provisioning succeeds so the device
   /// gets a config entry before its first HTTPS fetch on boot.
   Future<void> registerDevice(String deviceId, String authToken) async {
-    await ref.read(firebaseConfigServiceProvider).registerDevice(
+    await ref.read(gatewayConfigServiceProvider).registerDevice(
       deviceId: deviceId,
       authToken: authToken,
     );
-    debugPrint('[DeviceManager] Firebase registration triggered for $deviceId');
+    debugPrint('[DeviceManager] Gateway registration triggered for $deviceId');
   }
 
-  /// Writes the current custom broker config to Firebase for every provisioned
-  /// device. Devices pick it up on their next reboot or config poll.
+  /// Writes the current custom broker config to the gateway for every
+  /// provisioned device. Devices pick it up on their next reboot or config poll.
   ///
   /// Returns the number of devices updated.
   Future<int> pushBrokerConfig() async {
     final devices = state.valueOrNull ?? [];
     final config  = ref.read(mqttConfigProvider);
-    final firebase = ref.read(firebaseConfigServiceProvider);
+    final gateway = ref.read(gatewayConfigServiceProvider);
 
     int sent = 0;
     for (final device in devices) {
       if (device.authToken == null) continue;
-      final ok = await firebase.updateDeviceConfig(
+      final ok = await gateway.updateDeviceConfig(
         deviceId:  device.uniqueDeviceId,
         authToken: device.authToken!,
         config:    config,
       );
       if (ok) {
         sent++;
-        debugPrint('[DeviceManager] Firebase config updated for ${device.uniqueDeviceId}');
+        debugPrint('[DeviceManager] Gateway config updated for ${device.uniqueDeviceId}');
       }
     }
     return sent;
   }
 
-  /// Resets a single device's broker config to the factory default in Firebase.
+  /// Resets a single device's broker config to the factory default via the gateway.
   Future<void> revertDeviceBroker(String deviceId, String authToken) async {
-    await ref.read(firebaseConfigServiceProvider).revertDeviceToFactory(
+    await ref.read(gatewayConfigServiceProvider).revertDeviceToFactory(
       deviceId:  deviceId,
       authToken: authToken,
     );
-    debugPrint('[DeviceManager] Firebase factory revert triggered for $deviceId');
+    debugPrint('[DeviceManager] Gateway factory revert triggered for $deviceId');
   }
 }
 

@@ -27,28 +27,33 @@
 #define DSGV_DEVICE_TYPE         CONFIG_DSGV_DEVICE_TYPE
 #define DSGV_DEVICE_CAPABILITIES CONFIG_DSGV_DEVICE_CAPABILITIES
 
-// ── Firebase Config Gateway ───────────────────────────────────────────────────
-// Replace YOUR_PROJECT_ID with your Firebase project ID.
-// Find it at: Firebase Console → Project Settings → General → Project ID.
+// ── Device-Config Gateway ─────────────────────────────────────────────────────
+// URL of the deployed Cloudflare Worker's getDeviceConfig route — see
+// cloudflare_gateway/ (wrangler deploy prints this after first deploy).
 // This URL is not a secret — security is enforced by the auth_token.
-#define FIREBASE_GET_CONFIG_URL \
-    "https://us-central1-dsgv-hub.cloudfunctions.net/getDeviceConfig"
+#define GATEWAY_GET_CONFIG_URL \
+    "https://dsgv-hub-gateway.YOUR_SUBDOMAIN.workers.dev/getDeviceConfig"
 
-// How long (ms) to wait for a Firebase response before falling back to NVS cache
-#define FIREBASE_TIMEOUT_MS      10000
+// How long (ms) to wait for a gateway response before falling back to NVS cache
+#define GATEWAY_TIMEOUT_MS       10000
 
 // ── MQTT Broker (factory default — user can override via handle_config) ───────
 // PRODUCTION: HiveMQ Cloud private cluster — TLS required, and unlike the old
 // public test broker it does NOT accept anonymous connections.
-// Must match MqttConfig.factoryDefault in mqtt_config.dart and FACTORY_CONFIG
-// in functions/index.js.
+// Host/port/tls are compile-time bootstrap values only — must match
+// MqttConfig.factoryDefault in mqtt_config.dart and FACTORY_CONFIG_BASE in
+// cloudflare_gateway/src/index.js. There is deliberately NO compile-time
+// broker credential here: dsgv_gateway.c fetches broker_username/
+// broker_password from the gateway's getDeviceConfig route (authenticated
+// with this device's own auth_token) and caches them in NVS — see
+// dsgv_app_main.c step 8 and dsgv_mqtt.c's connect_to_broker(). A device
+// connects anonymously (and gets rejected by HiveMQ Cloud) until its first
+// successful gateway fetch; this is intentional — no shared broker secret
+// is ever compiled into firmware, so one flash dump doesn't expose every
+// device's credential.
 #define MQTT_CLOUD_HOST          "ebcc0da5f0064096845e7234ab714b7b.s1.eu.hivemq.cloud"
 #define MQTT_CLOUD_PORT          8883
 #define MQTT_CLOUD_TLS           true
-// HiveMQ Cloud requires a username/password credential set (created under
-// the cluster's "Access Management" tab).
-#define MQTT_CLOUD_USERNAME      "admin1"
-#define MQTT_CLOUD_PASSWORD      "idontknow"
 #define MQTT_KEEPALIVE_SEC       15   // broker publishes LWT after ~22 s (1.5×)
 #define MQTT_QOS_AT_LEAST_ONCE   1
 #define MQTT_RECONNECT_DELAY_MS  5000

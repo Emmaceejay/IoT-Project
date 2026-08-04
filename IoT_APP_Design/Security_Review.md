@@ -25,8 +25,14 @@ Combined with the missing hash verification above, this is the same gap from two
 `components/dsgv_common/http/dsgv_http_server.c` previously exposed a Tasmota-compatible REST API (`/api/status`, `/api/cmd`, `/cm?cmnd=`) on port 80 with no auth check. All three routes now require `Authorization: Bearer <auth_token>`, validated against the same per-device token the MQTT config-command handler already trusts (`request_is_authorized()` in `dsgv_http_server.c`). `local_http_service.dart` (app side) now sends the header using `SmartDevice.authToken`; if the device has no token yet (mid-pairing), local HTTP is skipped and the command falls through to MQTT rather than failing silently.
 - **Residual risk:** `memcmp()` token comparison is not constant-time (matches the existing pattern in `dsgv_mqtt.c`'s config-command handler — see that file's misleading "constant-time memcmp" comment). Low practical risk given the token is 128 bits and LAN-only, but worth a follow-up pass if a stricter threat model is adopted.
 
-### 🟡 Firebase client is dead code, not a live gap — but don't let it rot
-`components/dsgv_common/firebase/dsgv_firebase.c` (fetches broker config via `device_id` + `auth_token`, persists to NVS) is not referenced in any `CMakeLists.txt` in the component or any device target — it isn't compiled into any current build. Not an active vulnerability, but it means the "Firebase-secured config" data path described in `README.md` §2 either isn't live yet on-device or is implemented elsewhere; worth confirming which is true before it's assumed shipped.
+### ✅ Firebase client wired up — broker credential no longer compiled into firmware — CLOSED
+`dsgv_firebase.c` is now built into every device target and called from `dsgv_app_main.c` after the local HTTP server starts (so a slow/absent internet connection never blocks local control). It fetches `broker_username`/`broker_password` from `getDeviceConfig` (authenticated with the device's own `auth_token`) and caches them in the `mqtt_cfg` NVS namespace, which `connect_to_broker()` now reads directly — `MQTT_CLOUD_USERNAME`/`PASSWORD` no longer exist in `dsgv_config.h` at all. A device connects anonymously (and is rejected) until its first successful Firebase fetch — accepted tradeoff, matches the existing internet requirement BLE provisioning already has via `registerDevice`.
+
+Two related bugs found and fixed while wiring this up: the custom-broker-change command (`handle_config`) was overwriting `host`/`port`/`tls` in NVS without touching `username`/`password`, which would have leaked the factory HiveMQ credential to any third-party broker a user pointed a device at; and the 60-second broker-rollback timer wasn't preserving credentials across a rollback. Both now handle all five fields consistently.
+
+Cloud Function side: `functions/index.js`'s `FACTORY_CONFIG` no longer hardcodes the credential either — moved to Secret Manager via `runWith({ secrets: [...] })`, read from `process.env` per-request. Real values are set with `firebase functions:secrets:set MQTT_BROKER_USERNAME`/`..._PASSWORD` (not stored in source).
+
+**Residual/accepted:** the app itself (`mqtt_config.dart`'s `MqttConfig.factoryDefault`) still ships the broker password as a compiled-in constant — fixing that needs new infrastructure (Firebase Anonymous Auth + App Check) and was explicitly scoped out of this pass.
 
 ### 🟢 Confirmed adequate (per PRE_PRODUCTION_GUIDE.md §7, spot-checked)
 Auth-token generation via `esp_fill_random()`, BLE-only exchange, constant-time `memcmp()` validation, NVS namespace isolation, and the 60s broker-rollback timer are all documented as in place. Flash Encryption is the one still-open item gating full protection of the token at rest — same root cause as the OTA item above (Secure Boot/Flash Encryption not yet enabled).
@@ -60,7 +66,7 @@ Not independently reviewed here — `PRE_PRODUCTION_GUIDE.md` and the whitepaper
 1. 🔴 OTA hash/signature verification (or confirm+enable Secure Boot as the real control)
 2. 🟠 OTA TLS cert pinning
 3. ~~🟠 Auth on the local HTTP/Tasmota API~~ ✅ Closed
-4. 🟡 Confirm live broker-config delivery path (Firebase client dead code question)
+4. ~~🟡 Confirm live broker-config delivery path (Firebase client dead code question)~~ ✅ Closed — wired up, no compile-time broker credential remains
 5. ~~🟡 Fix multi-gang/non-relay no-op in group bulk control~~ ✅ Closed
 6. 🟡 Decide on secure storage for any sensitive local app data
 7. 🟢 Flash Encryption (closes the auth-token-at-rest gap)

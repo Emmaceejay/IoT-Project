@@ -13,8 +13,13 @@
  *   4. Event bus (dsgv_events — GPIO-to-MQTT telemetry bridge)
  *   5. GPIO init (relays, LEDC PWM, ADC, sensors)
  *   6. Wi-Fi connect — enters BLE provisioning mode if no credentials found
- *   7. HTTP server (Tasmota-compatible REST API, port 80)
- *   8. MQTT client (cloud TLS → local Mosquitto fallback)
+ *   7. HTTP server (Tasmota-compatible REST API, port 80) — local control is
+ *      live from this point on, independent of everything below
+ *   8. Gateway config fetch (best-effort, up to GATEWAY_TIMEOUT_MS) — pulls
+ *      the broker host/port/tls/credentials for this device into NVS. Runs
+ *      after the HTTP server so a slow/absent internet connection never
+ *      delays local control. Failure just means MQTT uses whatever's cached.
+ *   9. MQTT client (cloud TLS → local Mosquitto fallback)
  */
 
 #include "nvs_flash.h"
@@ -34,6 +39,7 @@
 #include "dsgv_http_server.h"
 #include "dsgv_provisioning.h"
 #include "dsgv_captive_portal.h"
+#include "dsgv_gateway.h"
 
 esp_err_t DSGV_mqtt_start(void);
 void      DSGV_gpio_init(void);
@@ -135,9 +141,26 @@ void dsgv_app_main(void)
     ESP_LOGI(TAG, "Wi-Fi connected.");
 
     // ── Step 7: Local HTTP server ─────────────────────────────────────────────
+    // Local control is live from here regardless of what happens below —
+    // it authenticates with auth_token, never the MQTT broker credential.
     ESP_ERROR_CHECK(DSGV_http_server_start());
 
-    // ── Step 8: MQTT client ───────────────────────────────────────────────────
+    // ── Step 8: Gateway config fetch ─────────────────────────────────────────
+    // Best-effort. Populates mqtt_cfg NVS (host/port/tls/username/password)
+    // for DSGV_mqtt_start() below. On failure (no internet, gateway down),
+    // whatever's already cached in NVS from a previous successful fetch is
+    // used unchanged — see dsgv_gateway.h. No compile-time broker credential
+    // exists as a fallback by design: a device needs one successful
+    // internet-connected boot before cloud MQTT works, same requirement
+    // BLE provisioning already has via registerDevice.
+    esp_err_t gw_err = dsgv_gateway_fetch_config();
+    if (gw_err != ESP_OK) {
+        ESP_LOGW(TAG, "Gateway config fetch failed (%s) — MQTT will use cached NVS "
+                 "credentials, or stay disconnected if none have ever been fetched",
+                 esp_err_to_name(gw_err));
+    }
+
+    // ── Step 9: MQTT client ───────────────────────────────────────────────────
     // Best-effort — a failed MQTT init must NOT abort the device.
     // HTTP server and physical button control remain fully functional without cloud.
     esp_err_t mqtt_err = DSGV_mqtt_start();

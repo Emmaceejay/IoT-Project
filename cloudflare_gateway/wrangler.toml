@@ -1,0 +1,13 @@
+name = "dsgv-hub-gateway"
+main = "src/index.js"
+compatibility_date = "2024-09-23"
+
+# Create with: wrangler kv namespace create DSGV_KV
+# Paste the "id" it prints below.
+[[kv_namespaces]]
+binding = "DSGV_KV"
+id = "REPLACE_WITH_ID_FROM_wrangler_kv_namespace_create"
+
+# Secrets (never go in this file) — set with:
+#   wrangler secret put MQTT_BROKER_USERNAME
+#   wrangler secret put MQTT_BROKER_PASSWORD

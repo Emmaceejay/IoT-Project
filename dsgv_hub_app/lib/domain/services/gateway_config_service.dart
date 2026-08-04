@@ -4,26 +4,27 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import '../models/mqtt_config.dart';
 
-// ── Cloud Function base URL ───────────────────────────────────────────────────
-// Replace YOUR_PROJECT_ID with your Firebase project ID.
-// Find it at: Firebase Console → Project Settings → General → Project ID
-const _kFunctionsBase =
-    'https://us-central1-dsgv-hub.cloudfunctions.net';
+// ── Gateway base URL ──────────────────────────────────────────────────────────
+// The deployed Cloudflare Worker URL — see ../../../../cloudflare_gateway/.
+// `wrangler deploy` prints this after first deploy:
+//   https://dsgv-hub-gateway.<your-subdomain>.workers.dev
+const _kGatewayBase =
+    'https://dsgv-hub-gateway.YOUR_SUBDOMAIN.workers.dev';
 
 // ── Service ───────────────────────────────────────────────────────────────────
 
-/// Secure gateway to Firebase for device broker configuration.
+/// Client for the DSGV Hub device-config gateway (cloudflare_gateway/).
 ///
-/// All sensitive data stays in Firebase (never in MQTT).
+/// All sensitive data stays server-side (never in MQTT).
 /// Devices authenticate with their hardware-generated auth_token.
 /// The app uses the same token (obtained via BLE provisioning) for all writes.
-class FirebaseConfigService {
+class GatewayConfigService {
   final http.Client _client;
 
-  FirebaseConfigService({http.Client? client})
+  GatewayConfigService({http.Client? client})
       : _client = client ?? http.Client();
 
-  /// Registers a newly provisioned device in Firebase.
+  /// Registers a newly provisioned device with the gateway.
   /// Called by the app immediately after BLE provisioning succeeds.
   /// Idempotent — safe to call multiple times for the same device.
   Future<void> registerDevice({
@@ -33,7 +34,7 @@ class FirebaseConfigService {
     try {
       final res = await _client
           .post(
-            Uri.parse('$_kFunctionsBase/registerDevice'),
+            Uri.parse('$_kGatewayBase/registerDevice'),
             headers: {'Content-Type': 'application/json'},
             body: jsonEncode({
               'device_id':   deviceId.toUpperCase(),
@@ -43,16 +44,16 @@ class FirebaseConfigService {
           .timeout(const Duration(seconds: 15));
 
       if (res.statusCode != 200) {
-        debugPrint('[Firebase] registerDevice failed: ${res.statusCode} ${res.body}');
+        debugPrint('[Gateway] registerDevice failed: ${res.statusCode} ${res.body}');
       } else {
-        debugPrint('[Firebase] Device $deviceId registered successfully.');
+        debugPrint('[Gateway] Device $deviceId registered successfully.');
       }
     } catch (e) {
-      debugPrint('[Firebase] registerDevice error: $e');
+      debugPrint('[Gateway] registerDevice error: $e');
     }
   }
 
-  /// Pushes a new broker config to a single device in Firebase.
+  /// Pushes a new broker config to a single device via the gateway.
   /// The device will pick it up on its next reboot or config poll.
   Future<bool> updateDeviceConfig({
     required String deviceId,
@@ -62,7 +63,7 @@ class FirebaseConfigService {
     try {
       final res = await _client
           .post(
-            Uri.parse('$_kFunctionsBase/updateDeviceConfig'),
+            Uri.parse('$_kGatewayBase/updateDeviceConfig'),
             headers: {'Content-Type': 'application/json'},
             body: jsonEncode({
               'device_id':       deviceId.toUpperCase(),
@@ -77,18 +78,18 @@ class FirebaseConfigService {
           .timeout(const Duration(seconds: 15));
 
       if (res.statusCode == 200) {
-        debugPrint('[Firebase] Config updated for $deviceId → ${config.host}:${config.port}');
+        debugPrint('[Gateway] Config updated for $deviceId → ${config.host}:${config.port}');
         return true;
       }
-      debugPrint('[Firebase] updateDeviceConfig failed: ${res.statusCode} ${res.body}');
+      debugPrint('[Gateway] updateDeviceConfig failed: ${res.statusCode} ${res.body}');
       return false;
     } catch (e) {
-      debugPrint('[Firebase] updateDeviceConfig error: $e');
+      debugPrint('[Gateway] updateDeviceConfig error: $e');
       return false;
     }
   }
 
-  /// Resets a device's config back to the factory broker in Firebase.
+  /// Resets a device's config back to the factory broker via the gateway.
   Future<bool> revertDeviceToFactory({
     required String deviceId,
     required String authToken,
@@ -96,7 +97,7 @@ class FirebaseConfigService {
     try {
       final res = await _client
           .post(
-            Uri.parse('$_kFunctionsBase/revertDeviceToFactory'),
+            Uri.parse('$_kGatewayBase/revertDeviceToFactory'),
             headers: {'Content-Type': 'application/json'},
             body: jsonEncode({
               'device_id':  deviceId.toUpperCase(),
@@ -106,18 +107,18 @@ class FirebaseConfigService {
           .timeout(const Duration(seconds: 15));
 
       if (res.statusCode == 200) {
-        debugPrint('[Firebase] Factory broker restored for $deviceId');
+        debugPrint('[Gateway] Factory broker restored for $deviceId');
         return true;
       }
-      debugPrint('[Firebase] revertDeviceToFactory failed: ${res.statusCode} ${res.body}');
+      debugPrint('[Gateway] revertDeviceToFactory failed: ${res.statusCode} ${res.body}');
       return false;
     } catch (e) {
-      debugPrint('[Firebase] revertDeviceToFactory error: $e');
+      debugPrint('[Gateway] revertDeviceToFactory error: $e');
       return false;
     }
   }
 }
 
-final firebaseConfigServiceProvider = Provider<FirebaseConfigService>((ref) {
-  return FirebaseConfigService();
+final gatewayConfigServiceProvider = Provider<GatewayConfigService>((ref) {
+  return GatewayConfigService();
 });

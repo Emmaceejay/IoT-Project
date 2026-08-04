@@ -1,0 +1,12 @@
+{
+  "name": "dsgv-hub-cloudflare-gateway",
+  "private": true,
+  "description": "Device-config gateway (registerDevice, getDeviceConfig, updateDeviceConfig, revertDeviceToFactory) on Cloudflare Workers + Workers KV — no Firebase, no paid plan required.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^3.90.0"
+  }
+}
