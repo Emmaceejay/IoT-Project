@@ -1,9 +1,15 @@
 {
-    "cmake.sourceDirectory": "C:/Users/ojike/OneDrive/Documents/AI_projects/IoT-Project/dsgv_firmware",
-    "idf.espIdfPath": "/home/ceejay/.espressif/v6.0.1/esp-idf",
-    "idf.toolsPath": "/home/ceejay/.espressif",
-    "idf.customExtraPaths": "/home/ceejay/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/bin",
-    "idf.adapterTargetName": "esp32",
-    "C_Cpp.intelliSenseEngine": "default",
-    "idf.currentSetup": "C:/Espressif/frameworks/esp-idf-v5.4.4/"
+  "cmake.sourceDirectory": "C:/Users/Chijioke/Documents/IoT-Project/dsgv_firmware",
+  "idf.espIdfPath": "/home/ceejay/.espressif/v6.0.1/esp-idf",
+  "idf.toolsPath": "/home/ceejay/.espressif",
+  "idf.customExtraPaths": "/home/ceejay/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/bin",
+  "idf.adapterTargetName": "esp32",
+  "C_Cpp.intelliSenseEngine": "default",
+  "idf.currentSetup": "C:\\esp\\v6.0.1\\esp-idf",
+  "clangd.path": "C:\\Espressif\\tools\\esp-clang\\esp-20.1.1_20250829\\esp-clang\\bin\\clangd.exe",
+  "clangd.arguments": [
+    "--background-index",
+    "--query-driver=**",
+    "--compile-commands-dir=c:\\Users\\Chijioke\\Documents\\IoT-Project\\build"
+  ]
 }
