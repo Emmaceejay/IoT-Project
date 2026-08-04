@@ -32,6 +32,7 @@
 15. [Adding a New Device Type](#15-adding-a-new-device-type)
 16. [Debugging and Monitoring](#16-debugging-and-monitoring)
 17. [Project Files at a Glance](#17-project-files-at-a-glance)
+18. [Recent Updates](#18-recent-updates)
 
 ---
 
@@ -131,13 +132,19 @@ IoT-Project/
 │   ├── lib/
 │   │   ├── core/                    # ObjectBox store initialisation
 │   │   ├── data/
-│   │   │   ├── datasources/         # ObjectBox implementation
-│   │   │   ├── models/              # DeviceEntity (database schema)
-│   │   │   └── repositories/        # DeviceRepository interface
+│   │   │   ├── datasources/         # ObjectBox implementation (devices + groups)
+│   │   │   ├── models/              # DeviceEntity, DeviceGroupEntity (database schema)
+│   │   │   └── repositories/        # DeviceRepository, DeviceGroupRepository
 │   │   ├── domain/
-│   │   │   ├── models/              # MatterDevice, MqttConfig
+│   │   │   ├── models/              # MatterDevice, MqttConfig, DeviceGroup, Room,
+│   │   │   │                        # DeviceSchedule, DeviceTypeDefinition
 │   │   │   └── services/
 │   │   │       ├── device_manager.dart          # Central state engine (AsyncNotifier)
+│   │   │       ├── device_type_registry.dart    # Single source of truth for capabilities
+│   │   │       │                                #   → labels, icons, ranges, telemetry/command keys
+│   │   │       ├── device_group_notifier.dart   # Group state + batch commands
+│   │   │       ├── room_service.dart            # Room assignment
+│   │   │       ├── schedule_service.dart        # Timed on/off schedules
 │   │   │       ├── mqtt_service.dart            # MQTT client + factory/custom mode
 │   │   │       ├── firebase_config_service.dart # Firebase Cloud Function client
 │   │   │       ├── ble_provisioning_service.dart
@@ -145,11 +152,12 @@ IoT-Project/
 │   │   │       ├── ota_service.dart
 │   │   │       └── telemetry_service.dart
 │   │   └── presentation/
-│   │       ├── screens/             # Dashboard, Pairing, Settings, Device Detail
+│   │       ├── screens/             # Dashboard, Pairing, Settings, Device Detail, Groups
 │   │       └── widgets/
 │   │           ├── app_shell.dart              # Root nav shell (3 tabs)
 │   │           ├── device_card.dart            # Expandable device card
-│   │           └── schema_driven_ui_builder.dart # Renders controls from capabilities
+│   │           ├── schedule_sheet.dart         # Schedule create/edit sheet
+│   │           └── schema_driven_ui_builder.dart # Renders controls from device_type_registry
 │   ├── functions/                   ← Firebase Cloud Functions (Node.js)
 │   │   ├── index.js                 # registerDevice, getDeviceConfig, updateDeviceConfig, revertDeviceToFactory
 │   │   └── package.json
@@ -160,13 +168,17 @@ IoT-Project/
 │
 ├── dsgv_firmware/                   ← ESP32 firmware (C / ESP-IDF 5.x)
 │   ├── components/
-│   │   └── dsgv_common/
+│   │   └── dsgv_common/             # Shared firmware logic, linked into every device build
+│   │       ├── dsgv_app_main.c      # Boot sequence: NVS → config → event bus → GPIO → WiFi → HTTP → MQTT
 │   │       ├── include/
 │   │       │   ├── dsgv_config.h          # GPIO maps, MQTT endpoints, Firebase URL
 │   │       │   ├── dsgv_device_config.h   # Runtime config struct
+│   │       │   ├── dsgv_events.h          # GPIO ↔ MQTT event bus API
 │   │       │   └── dsgv_firebase.h        # Firebase fetch API
 │   │       ├── config/
 │   │       │   └── dsgv_device_config.c   # NVS load/save with bounds validation
+│   │       ├── events/
+│   │       │   └── dsgv_events.c          # Decouples GPIO from MQTT via a FreeRTOS queue
 │   │       ├── firebase/
 │   │       │   └── dsgv_firebase.c        # HTTPS fetch broker config from Firebase
 │   │       ├── gpio/
@@ -179,13 +191,23 @@ IoT-Project/
 │   │       ├── provisioning/
 │   │       │   └── dsgv_provisioning.c    # NimBLE GATT WiFi provisioning
 │   │       └── ota/
-│   │           └── dsgv_ota.c             # HTTPS OTA with SHA-256 verification
-│   └── devices/
-│       ├── switch/                  # 1–4 gang relay switch
+│   │           └── dsgv_ota.c             # HTTPS OTA, manifest-based version/URL/hash
+│   └── devices/                     # One ESP-IDF project per SKU — each main.c is a
+│       │                            # thin stub that just calls dsgv_app_main()
+│       ├── 1gang_switch/ … 4gang_switch/  # 1–4 gang relay switches
 │       ├── dimmer/                  # LEDC PWM dimmer
-│       ├── rgb/                     # RGB + CCT light
-│       ├── sensor/                  # Temperature, humidity, motion, contact
+│       ├── colour_temp/             # Warm/cool colour-temperature light
+│       ├── rgb_light/               # RGB + CCT light
+│       ├── temp_sensor/             # Temperature / humidity sensor
+│       ├── motion_sensor/           # PIR motion sensor
+│       ├── contact_sensor/          # Reed switch contact sensor
 │       └── thermostat/              # HVAC controller
+│
+├── IoT_APP_Design/                  ← Architecture whitepaper + engineering review docs
+│   ├── IoT_Architecture_Whitepaper.md
+│   ├── Critical_Review.md           # Principal-engineer pass over architecture + in-flight changes
+│   ├── Security_Review.md           # Static security review (firmware, app, Firebase)
+│   └── Production_Readiness_GoNoGo.md # Go/No-Go checklist ahead of shipping
 │
 ├── FLASHING_GUIDE.md               ← Wiring diagrams + flash commands for every device type
 ├── QUICKSTART_GUIDE.md             ← 5-minute setup for experienced developers
@@ -336,39 +358,38 @@ CONFIG_ESP_HTTP_CLIENT_ENABLE_HTTPS=y
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
 ```
 
-### Step 5 — Wire Up the Firebase Fetch in main.c
+### Step 5 — Boot Sequence (already wired — nothing to edit)
 
-In each device's `main.c`, call `dsgv_firebase_fetch_config()` **after WiFi connects, before starting MQTT**:
+Every device's `main.c` is a thin stub:
 
 ```c
-#include "dsgv_firebase.h"
+#include "dsgv_common.h"
 
-// After wifi_connect() returns successfully:
-ESP_LOGI(TAG, "Fetching broker config from Firebase...");
-dsgv_firebase_fetch_config();   // Uses NVS cache automatically if Firebase is unreachable
-
-// Then start MQTT as usual:
-dsgv_mqtt_start();
+void app_main(void) { dsgv_app_main(); }
 ```
 
-### Step 6 — Add the Firebase Source File to CMakeLists.txt
+`dsgv_app_main()` (in `components/dsgv_common/dsgv_app_main.c`) runs the full boot
+sequence shared by every SKU — you don't add per-device wiring:
 
-In `components/dsgv_common/CMakeLists.txt`, add to `SRCS` and `REQUIRES`:
-
-```cmake
-idf_component_register(
-    SRCS
-        # ... existing files ...
-        "firebase/dsgv_firebase.c"      # ← ADD
-    INCLUDE_DIRS "include"
-    REQUIRES
-        # ... existing requires ...
-        esp_http_client                 # ← ADD
-        mbedtls                         # ← ADD
-)
+```
+1. NVS init + device config load (compile-time defaults → NVS overlay)
+2. TCP/IP stack + default event loop
+3. Event bus init (dsgv_events — must come before GPIO)
+4. GPIO init (relays, LEDC PWM, ADC, sensors)
+5. WiFi connect — falls back to BLE provisioning or captive-portal AP if it fails
+6. Local HTTP server (Tasmota-compatible REST API, port 80)
+7. MQTT client (best-effort — a failed connect does not block local control)
 ```
 
-### Step 7 — Build and Flash
+> **Known gap:** `dsgv_firebase.c` implements the HTTPS broker-config fetch described
+> in [§2](#2-how-it-works--architecture) but is **not currently called** from
+> `dsgv_app_main()` or compiled into any device's `CMakeLists.txt`. Until it is wired
+> in, devices use the compile-time `MQTT_CLOUD_HOST`/`MQTT_CLOUD_PORT` from
+> `dsgv_config.h` rather than a Firebase-delivered value. See
+> [`IoT_APP_Design/Critical_Review.md`](./IoT_APP_Design/Critical_Review.md) §5 before
+> relying on the Firebase config-push flow in production.
+
+### Step 6 — Build and Flash
 
 ```bash
 idf.py build
@@ -670,12 +691,16 @@ Located at `dsgv_hub_app/lib/domain/services/firebase_config_service.dart`.
 
 The platform is designed to support new hardware with minimal code changes.
 
-### App Side — Add a new capability control
+### App Side — Add a new capability
 
-1. Open `lib/presentation/widgets/schema_driven_ui_builder.dart`
-2. Add a new `case 'your_capability':` in the `_buildControl()` switch
-3. Return the appropriate Flutter widget (slider, toggle, display, etc.)
-4. The control will appear automatically for any device that broadcasts this capability
+`device_type_registry.dart` is the single source of truth for every capability and
+device type — the UI builder no longer hardcodes a switch-case per capability.
+
+1. Open `lib/domain/services/device_type_registry.dart`
+2. If the capability is new, add a `CapabilityDef` entry to `_capabilities` (label,
+   icon, telemetry/command key, and min/max/step/unit if it's a range control)
+3. Add (or extend) a `DeviceTypeDef` entry for the device type
+4. `schema_driven_ui_builder.dart` reads the registry automatically — no UI code to write
 
 ### Firmware Side — Handle the new capability
 
@@ -750,22 +775,73 @@ Use [MQTT Explorer](https://mqtt-explorer.com) (free desktop app) to:
 | File | Purpose | Edit when |
 |------|---------|----------|
 | `dsgv_config.h` | Firmware constants — GPIO, broker URL, Firebase URL | Porting to new hardware, changing broker |
+| `dsgv_app_main.c` | Shared boot sequence, called by every device's `main.c` stub | Changing startup order or adding a global init step |
+| `dsgv_events.c` / `.h` | GPIO ↔ MQTT event bus (decouples hardware from transport) | Adding a new event type or telemetry source |
 | `mqtt_config.dart` | App's factory broker constant | Changing manufacturer broker |
 | `firebase_config_service.dart` | Cloud Function base URL | After creating Firebase project |
 | `.firebaserc` | Firebase project ID | After creating Firebase project |
 | `functions/index.js` | Cloud Function logic + `FACTORY_CONFIG` constant | Changing broker, adding new functions |
 | `database.rules.json` | Realtime Database security rules | Never — rules are intentionally fully locked |
-| `schema_driven_ui_builder.dart` | Maps capability strings to UI controls | Adding new device types |
+| `device_type_registry.dart` | Single source of truth for capabilities + device types | Adding new device types |
+| `schema_driven_ui_builder.dart` | Renders controls by reading the registry | Rarely — only for new *control widget kinds* |
+| `device_group_notifier.dart` / `groups_screen.dart` | Rooms/groups state + batch commands | Changing group/room behaviour |
+| `schedule_service.dart` / `schedule_sheet.dart` | Timed on/off schedules | Adding new schedule recurrence rules |
 | `dsgv_mqtt.c` | MQTT connection, topic handling, telemetry, commands | Adding new MQTT features |
-| `dsgv_firebase.c` | HTTPS fetch from Firebase Cloud Function | Extending config fields (e.g. adding auth credentials) |
+| `dsgv_firebase.c` | HTTPS fetch from Firebase Cloud Function (not yet called from `dsgv_app_main()` — see §6) | Extending config fields (e.g. adding auth credentials) |
 | `dsgv_provisioning.c` | BLE GATT provisioning protocol | Changing provisioning payload fields |
 | `dsgv_captive_portal.c` | AP mode credential entry portal | Modifying the setup web page |
 | `wifi_manager.c` | Wi-Fi connection, AP mode, credential storage | Adding connection modes |
 | `FIREBASE_SETUP_GUIDE.md` | Step-by-step Firebase setup with verification | Reference only |
 | `FLASHING_GUIDE.md` | Wiring + flash commands per device type | Reference only |
 | `PRE_PRODUCTION_GUIDE.md` | Production readiness checklist | Before shipping hardware |
-| `BLE_PROVISIONING_AND_FIXES.md` | All firmware/app fixes + provisioning protocol detail | Reference only |
+| `IoT_APP_Design/Critical_Review.md` | Principal-engineer review of architecture + in-flight changes | Reference — read before relying on Firebase config push |
+| `IoT_APP_Design/Security_Review.md` | Static security review across firmware/app/Firebase | Reference — before a security-sensitive release |
+| `IoT_APP_Design/Production_Readiness_GoNoGo.md` | Go/No-Go checklist, updated per release candidate | Before shipping hardware |
 | `TEST_CHECKLIST.md` | Hardware + app test checklist for all features | Before every release |
+
+---
+
+## 18. Recent Updates
+
+### App
+
+- **Rooms & Groups** — devices can be assigned to rooms and batch-controlled via
+  named groups (`device_group.dart`, `device_group_notifier.dart`, `groups_screen.dart`).
+  Groups are local-only (ObjectBox), never synced to the broker.
+- **Device Type Registry** — capability-to-UI mapping was centralized into
+  `device_type_registry.dart`. Adding a device type is now a one-file change
+  instead of editing the UI builder's switch statement directly (see [§15](#15-adding-a-new-device-type)).
+- **Schedules** — timed on/off schedules per device (`schedule_service.dart`,
+  `schedule_sheet.dart`); the scheduler was fixed to align firing to clock-minute
+  boundaries and to catch up correctly after the app resumes from background.
+- **WiFi management** — in-app WiFi network scan list and bulk WiFi credential
+  change across multiple devices at once.
+- **Dashboard polish** — device naming, Matter-related naming cleanup, lazy camera
+  init on the add-device flow, and general dashboard UI refinement.
+- **OTA** — moved to a firmware-manifest approach (version/URL/hash resolved from
+  a manifest) instead of hardcoding the binary URL per release.
+
+### Firmware
+
+- **`dsgv_common` component consolidation** — the old per-device `main/` and
+  `include/` trees were fully migrated into the shared `dsgv_common` component.
+  Every device's `main.c` is now a thin stub that calls `dsgv_app_main()`; the
+  actual boot sequence lives in one place (`dsgv_app_main.c`).
+- **Event-driven telemetry (`dsgv_events`)** — GPIO code no longer calls the MQTT
+  publish function directly. It posts telemetry JSON onto a FreeRTOS queue; a
+  consumer task publishes it asynchronously. This removes the hard compile-time
+  dependency of GPIO on MQTT.
+- **Relay/power-restore sync fix**, **COM port + IDF lock hardening** for the
+  1-gang switch build, and other stability fixes — see `git log` for the full list.
+
+### Engineering Review Docs (new)
+
+`IoT_APP_Design/` now includes three review documents worth reading before a
+production release: `Critical_Review.md` (architecture pass, includes the open
+Firebase-wiring gap noted in [§6](#6-part-b--firmware-setup)), `Security_Review.md`
+(static security review of firmware/app/Firebase), and
+`Production_Readiness_GoNoGo.md` (release checklist, currently **No-Go** pending
+the items those reviews raised).
 
 ---
 
