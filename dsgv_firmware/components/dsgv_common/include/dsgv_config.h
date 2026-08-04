@@ -32,19 +32,23 @@
 // Find it at: Firebase Console → Project Settings → General → Project ID.
 // This URL is not a secret — security is enforced by the auth_token.
 #define FIREBASE_GET_CONFIG_URL \
-    "https://us-central1-YOUR_PROJECT_ID.cloudfunctions.net/getDeviceConfig"
+    "https://us-central1-dsgv-hub.cloudfunctions.net/getDeviceConfig"
 
 // How long (ms) to wait for a Firebase response before falling back to NVS cache
 #define FIREBASE_TIMEOUT_MS      10000
 
 // ── MQTT Broker (factory default — user can override via handle_config) ───────
-// TEST PHASE: HiveMQ public broker — free, no auth required.
-// PRODUCTION:  Replace with a private broker (HiveMQ Cloud, AWS IoT, etc.)
-//              that enforces authentication and TLS client certificates.
-// Must match MqttConfig.factoryDefault.host in mqtt_config.dart.
-#define MQTT_CLOUD_HOST          "broker.hivemq.com"
-#define MQTT_CLOUD_PORT          1883
-#define MQTT_CLOUD_TLS           false   // set true when using a production broker with cert
+// PRODUCTION: HiveMQ Cloud private cluster — TLS required, and unlike the old
+// public test broker it does NOT accept anonymous connections.
+// Must match MqttConfig.factoryDefault in mqtt_config.dart and FACTORY_CONFIG
+// in functions/index.js.
+#define MQTT_CLOUD_HOST          "ebcc0da5f0064096845e7234ab714b7b.s1.eu.hivemq.cloud"
+#define MQTT_CLOUD_PORT          8883
+#define MQTT_CLOUD_TLS           true
+// HiveMQ Cloud requires a username/password credential set (created under
+// the cluster's "Access Management" tab).
+#define MQTT_CLOUD_USERNAME      "admin1"
+#define MQTT_CLOUD_PASSWORD      "idontknow"
 #define MQTT_KEEPALIVE_SEC       15   // broker publishes LWT after ~22 s (1.5×)
 #define MQTT_QOS_AT_LEAST_ONCE   1
 #define MQTT_RECONNECT_DELAY_MS  5000

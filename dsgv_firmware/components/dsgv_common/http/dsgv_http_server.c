@@ -12,11 +12,17 @@
  *
  * After any state change the updated state is published via MQTT telemetry
  * so the cloud/local broker view stays in sync with direct-HTTP changes.
+ *
+ * Auth: every route requires "Authorization: Bearer <auth_token>" — the same
+ * 32-char hex per-device token exchanged over BLE during provisioning and
+ * used to authenticate MQTT config commands (see dsgv_mqtt.c). Without it,
+ * anyone on the same WiFi network could read device state or drive relays.
  */
 
 #include "dsgv_http_server.h"
 #include "dsgv_config.h"
 #include "dsgv_device_state.h"
+#include "dsgv_device_config.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "cJSON.h"
@@ -38,6 +44,45 @@ static void build_status_json(char *buf, size_t buf_size);
 // view stays in sync.
 extern void DSGV_mqtt_publish_telemetry(const char *json_payload);
 extern void DSGV_gpio_apply_state(void);
+
+// ── Auth ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Checks the "Authorization: Bearer <auth_token>" header against the
+ * device's provisioned auth_token. Same 32-char hex credential the MQTT
+ * config-command handler validates (dsgv_mqtt.c) — no separate secret to
+ * provision. auth_token is always populated by DSGV_device_config_load()
+ * before the HTTP server starts (generated on first boot if not already in
+ * NVS), so an empty token here means state we don't trust — reject it.
+ */
+static bool request_is_authorized(httpd_req_t *req) {
+    if (g_device_config.auth_token[0] == '\0') {
+        return false;
+    }
+
+    char hdr[64] = {0};
+    if (httpd_req_get_hdr_value_str(req, "Authorization", hdr, sizeof(hdr)) != ESP_OK) {
+        return false;
+    }
+
+    static const char prefix[] = "Bearer ";
+    if (strncmp(hdr, prefix, sizeof(prefix) - 1) != 0) {
+        return false;
+    }
+
+    const char *token = hdr + sizeof(prefix) - 1;
+    return strlen(token) == 32 &&
+           memcmp(token, g_device_config.auth_token, 32) == 0;
+}
+
+static esp_err_t reject_unauthorized(httpd_req_t *req) {
+    httpd_resp_set_status(req, "401 Unauthorized");
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_sendstr(req, "{\"error\":\"unauthorized\"}");
+    ESP_LOGW(TAG, "Rejected unauthorized request to %s", req->uri);
+    return ESP_OK;
+}
 
 // ── Route table ──────────────────────────────────────────────────────────────
 
@@ -91,6 +136,10 @@ void DSGV_http_server_stop(void) {
 // ── GET /api/status ───────────────────────────────────────────────────────────
 
 static esp_err_t handle_status_get(httpd_req_t *req) {
+    if (!request_is_authorized(req)) {
+        return reject_unauthorized(req);
+    }
+
     char buf[HTTP_MAX_RESP_SIZE];
     build_status_json(buf, sizeof(buf));
 
@@ -105,6 +154,10 @@ static esp_err_t handle_status_get(httpd_req_t *req) {
 // ── POST /api/cmd ─────────────────────────────────────────────────────────────
 
 static esp_err_t handle_cmd_post(httpd_req_t *req) {
+    if (!request_is_authorized(req)) {
+        return reject_unauthorized(req);
+    }
+
     char body[HTTP_MAX_BODY_SIZE] = {0};
     int  received = httpd_req_recv(req, body,
                                    sizeof(body) - 1 < (size_t)req->content_len
@@ -156,6 +209,10 @@ static esp_err_t handle_cmd_post(httpd_req_t *req) {
 // Tasmota compatibility: Power ON/OFF, Dimmer N, CT N (mired)
 
 static esp_err_t handle_tasmota_get(httpd_req_t *req) {
+    if (!request_is_authorized(req)) {
+        return reject_unauthorized(req);
+    }
+
     char query[128] = {0};
     if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing query string");

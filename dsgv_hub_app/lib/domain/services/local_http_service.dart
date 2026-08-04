@@ -41,18 +41,28 @@ class LocalHttpService {
 
   /// Sends [capability] = [value] to the device at [deviceIp].
   /// Returns true if the command was acknowledged by the device.
+  ///
+  /// [authToken] is the device's per-device BLE-provisioned credential.
+  /// The DSGV firmware's HTTP server requires it on every route (see
+  /// dsgv_http_server.c) — without it every call below 401s and silently
+  /// falls through to MQTT. A device with no [authToken] yet (mid-pairing)
+  /// simply skips local HTTP and lets the MQTT path handle the command.
   Future<bool> sendCommand(
     String deviceIp,
     String capability,
-    dynamic value,
-  ) async {
+    dynamic value, {
+    String? authToken,
+  }) async {
+    if (authToken == null || authToken.isEmpty) return false;
+    final authHeader = {'Authorization': 'Bearer $authToken'};
+
     // ── DSGV REST API (preferred) ──────────────────────────────────────────
     try {
       final body = jsonEncode({'capability': capability, 'value': value});
       final res = await http
           .post(
             Uri.parse('http://$deviceIp/api/cmd'),
-            headers: {'Content-Type': 'application/json'},
+            headers: {'Content-Type': 'application/json', ...authHeader},
             body: body,
           )
           .timeout(_timeout);
@@ -70,8 +80,11 @@ class LocalHttpService {
     }
     try {
       final res = await http
-          .get(Uri.parse(
-              'http://$deviceIp/cm?cmnd=${Uri.encodeComponent(tasmotaCmd)}'))
+          .get(
+            Uri.parse(
+                'http://$deviceIp/cm?cmnd=${Uri.encodeComponent(tasmotaCmd)}'),
+            headers: authHeader,
+          )
           .timeout(_timeout);
       if (res.statusCode == 200) {
         debugPrint('[HTTP] ✓ Tasmota cmd → $deviceIp $tasmotaCmd');
@@ -84,10 +97,17 @@ class LocalHttpService {
   }
 
   /// Fetches the current telemetry/state from a device.
-  Future<Map<String, dynamic>?> getTelemetry(String deviceIp) async {
+  Future<Map<String, dynamic>?> getTelemetry(
+    String deviceIp, {
+    String? authToken,
+  }) async {
+    if (authToken == null || authToken.isEmpty) return null;
     try {
       final res = await http
-          .get(Uri.parse('http://$deviceIp/api/status'))
+          .get(
+            Uri.parse('http://$deviceIp/api/status'),
+            headers: {'Authorization': 'Bearer $authToken'},
+          )
           .timeout(_timeout);
       if (res.statusCode == 200) {
         return jsonDecode(res.body) as Map<String, dynamic>;

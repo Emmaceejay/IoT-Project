@@ -3,11 +3,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../domain/services/mqtt_service.dart';
 import '../../domain/services/schedule_service.dart';
 import '../screens/dashboard_screen.dart';
+import '../screens/groups_screen.dart';
 import '../screens/settings_screen.dart';
 
-/// Root shell with a 2-tab bottom navigation bar: Dashboard and Settings.
-/// Device pairing is accessed via the "+" button on the dashboard — not via
-/// a persistent tab — so the camera never opens unexpectedly.
+/// Root shell with a 3-tab bottom navigation bar: Dashboard, Groups, and
+/// Settings. Device pairing is accessed via the "+" button on the dashboard —
+/// not via a persistent tab — so the camera never opens unexpectedly.
 class AppShell extends ConsumerStatefulWidget {
   const AppShell({super.key});
 
@@ -29,6 +30,7 @@ class _AppShellState extends ConsumerState<AppShell> {
 
   final List<Widget> _screens = const [
     DashboardScreen(),
+    GroupsScreen(),
     SettingsScreen(),
   ];
 
@@ -49,6 +51,11 @@ class _AppShellState extends ConsumerState<AppShell> {
             icon: Icon(Icons.dashboard_outlined),
             selectedIcon: Icon(Icons.dashboard, color: Color(0xFF00E5FF)),
             label: 'Dashboard',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.group_work_outlined),
+            selectedIcon: Icon(Icons.group_work, color: Color(0xFF00E5FF)),
+            label: 'Groups',
           ),
           NavigationDestination(
             icon: Icon(Icons.settings_outlined),

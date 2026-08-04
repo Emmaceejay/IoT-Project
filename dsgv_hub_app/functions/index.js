@@ -11,13 +11,14 @@ const DEVICE_ID_RE   = /^[A-Fa-f0-9]{12}$/;
 const AUTH_TOKEN_RE  = /^[A-Fa-f0-9]{32}$/;
 
 // Factory broker shipped in every firmware binary.
-// Must match MQTT_CLOUD_HOST in dsgv_config.h and factoryDefault in mqtt_config.dart.
+// Must match MQTT_CLOUD_HOST/PORT/TLS/USERNAME/PASSWORD in dsgv_config.h and
+// factoryDefault in mqtt_config.dart.
 const FACTORY_CONFIG = {
-  broker_host: "mqtt.dsgv.io",
+  broker_host: "ebcc0da5f0064096845e7234ab714b7b.s1.eu.hivemq.cloud",
   broker_port: 8883,
   broker_tls: true,
-  broker_username: "",
-  broker_password: "",
+  broker_username: "admin1",
+  broker_password: "idontknow",
 };
 
 /**

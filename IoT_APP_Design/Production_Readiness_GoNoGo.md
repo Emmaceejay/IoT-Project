@@ -14,11 +14,11 @@ Not because the platform is weak — the architecture (component-based firmware,
 |---|---|---|---|
 | 1 | OTA payload hash/signature not actually verified; Secure Boot not confirmed enabled | Firmware | 🔴 Open — `dsgv_ota.c:28-29` |
 | 2 | OTA TLS certificate pinning commented out | Firmware | 🔴 Open — `dsgv_ota.c:65`, tracked in `PRE_PRODUCTION_GUIDE.md` §5 |
-| 3 | Local HTTP/Tasmota API has no authentication | Firmware | 🟠 Open — `dsgv_http_server.c` |
-| 4 | Device Groups feature (`GroupsScreen`) is fully built but not wired into app navigation | Mobile | 🟠 Open — dead code as of this diff, ship-or-cut decision needed |
+| 3 | ~~Local HTTP/Tasmota API has no authentication~~ | Firmware | ✅ Closed — `dsgv_http_server.c` now requires `Authorization: Bearer <auth_token>` on all routes; app updated to send it |
+| 4 | ~~Device Groups feature (`GroupsScreen`) is fully built but not wired into app navigation~~ | Mobile | ✅ Closed — wired into `AppShell`'s bottom nav as a 3rd tab; bulk-control multi-gang no-op also fixed |
 | 5 | Flash Encryption / Secure Boot not enabled in `sdkconfig.defaults` | Firmware | 🔴 Open — `PRE_PRODUCTION_GUIDE.md` §4, unchecked |
 
-Items 1, 2, 5 are one root cause wearing three hats — enabling Secure Boot v2 + Flash Encryption and pinning the OTA cert closes all three at once. That's the single highest-leverage piece of remaining work.
+Items 1, 2, 5 are one root cause wearing three hats — enabling Secure Boot v2 + Flash Encryption and pinning the OTA cert closes all three at once. That's the single highest-leverage piece of remaining work now that items 3 and 4 are closed.
 
 ---
 
@@ -32,10 +32,10 @@ Items 1, 2, 5 are one root cause wearing three hats — enabling Secure Boot v2 
 - Everything else in this section (BLE naming, factory reset, GPIO) — unchanged from last verified state per `TEST_CHECKLIST.md`, not re-verified here
 
 ### Mobile App
-- [ ] Groups feature unreachable — either wire up navigation or exclude from this release
+- [x] Groups feature wired into `AppShell` navigation (3rd bottom-nav tab)
 - [x] ObjectBox schema change (new `DeviceGroupEntity`, additive `DeviceEntity.typeId`) confirmed additive/safe for existing installs — no migration risk
-- [ ] `flutter analyze` / build verification — **not run as part of this review**; run before sign-off
-- [ ] Group bulk-control multi-gang no-op (see Security Review) — functional bug, not launch-blocking for a *cut* Groups feature, but blocking if Groups ships this release
+- [ ] `flutter analyze` / build verification — run after this pass's changes; confirm clean before sign-off
+- [x] Group bulk-control multi-gang no-op (see Security Review) — fixed, now expands per device's actual relay capabilities
 
 ### Security (from PRE_PRODUCTION_GUIDE §9)
 - [ ] No hardcoded credentials — spot-checked clean, not exhaustively scanned
@@ -57,8 +57,8 @@ Items 1, 2, 5 are one root cause wearing three hats — enabling Secure Boot v2 
 
 ## Recommended Path to Go
 
-1. Enable Secure Boot v2 + Flash Encryption, pin the OTA cert (closes items 1, 2, 5).
-2. Add minimal auth to the local HTTP API, or gate it to provisioning-mode only (item 3).
-3. Decide: ship Groups this release (wire up navigation + fix multi-gang bulk control) or cut it from this build and ship it complete next release (item 4).
+1. Enable Secure Boot v2 + Flash Encryption, pin the OTA cert (closes items 1, 2, 5) — the one remaining blocking item.
+2. ~~Add minimal auth to the local HTTP API~~ — done (item 3).
+3. ~~Decide on Groups~~ — shipped: navigation wired up, bulk-control bug fixed (item 4).
 4. Run `idf.py build` across all 11 device targets and `flutter analyze` + a full app build as a final gate — neither was executed as part of this review.
 5. Re-run this checklist; flip to Go once all 🔴/🟠 rows clear.

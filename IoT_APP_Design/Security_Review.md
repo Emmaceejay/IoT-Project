@@ -21,9 +21,9 @@ Severity: 🔴 Critical (ship-blocking) · 🟠 High (fix before general release
 ```
 Combined with the missing hash verification above, this is the same gap from two angles: nothing stops a MITM (rogue AP, compromised DNS, CA-store trust abuse) from serving a malicious binary that the device will accept. `PRE_PRODUCTION_GUIDE.md` §5 already documents the fix — it just isn't applied yet.
 
-### 🟠 Local HTTP server has no authentication
-`components/dsgv_common/http/dsgv_http_server.c` exposes a Tasmota-compatible REST API (`/api/status`, `/api/cmd`, `/cm?cmnd=`) on port 80 with no visible auth check. Anyone on the same LAN/WiFi (including a compromised IoT VLAN neighbor, or anyone who joins the setup AP during provisioning) can query state and issue relay/GPIO commands directly, bypassing MQTT auth entirely.
-- **Fix:** at minimum HTTP Basic Auth with a per-device credential provisioned over BLE alongside the MQTT auth token, or disable the endpoint outside of provisioning mode.
+### ✅ Local HTTP server now requires authentication — CLOSED
+`components/dsgv_common/http/dsgv_http_server.c` previously exposed a Tasmota-compatible REST API (`/api/status`, `/api/cmd`, `/cm?cmnd=`) on port 80 with no auth check. All three routes now require `Authorization: Bearer <auth_token>`, validated against the same per-device token the MQTT config-command handler already trusts (`request_is_authorized()` in `dsgv_http_server.c`). `local_http_service.dart` (app side) now sends the header using `SmartDevice.authToken`; if the device has no token yet (mid-pairing), local HTTP is skipped and the command falls through to MQTT rather than failing silently.
+- **Residual risk:** `memcmp()` token comparison is not constant-time (matches the existing pattern in `dsgv_mqtt.c`'s config-command handler — see that file's misleading "constant-time memcmp" comment). Low practical risk given the token is 128 bits and LAN-only, but worth a follow-up pass if a stricter threat model is adopted.
 
 ### 🟡 Firebase client is dead code, not a live gap — but don't let it rot
 `components/dsgv_common/firebase/dsgv_firebase.c` (fetches broker config via `device_id` + `auth_token`, persists to NVS) is not referenced in any `CMakeLists.txt` in the component or any device target — it isn't compiled into any current build. Not an active vulnerability, but it means the "Firebase-secured config" data path described in `README.md` §2 either isn't live yet on-device or is implemented elsewhere; worth confirming which is true before it's assumed shipped.
@@ -38,8 +38,8 @@ Auth-token generation via `esp_fill_random()`, BLE-only exchange, constant-time 
 
 ## Mobile App
 
-### 🟡 Group bulk-control has a silent partial-failure mode
-`device_group_notifier.dart:50` (`sendCommandToGroup`) sends `{'power': bool}` to every device in a group regardless of device type. Multi-gang switches (`power_2`, `power_3`, `power_4`) and non-relay device types silently no-op. Not a security defect, but a group "all off" that appears to succeed while leaving some devices powered on is a safety-adjacent correctness issue worth fixing before the feature ships (see also Critical Review).
+### ✅ Group bulk-control silent partial-failure — CLOSED
+`device_group_notifier.dart` (`sendCommandToGroup`) previously sent `{'power': bool}` to every device in a group regardless of device type, silently no-op'ing multi-gang switches' extra gangs (`power_2`/`power_3`/`power_4`) and non-relay device types. It now expands a bare `'power'` command per device to every relay capability that device actually has (via `DeviceTypeRegistry`), and skips devices with no relay capability entirely instead of sending a command they can't act on.
 
 ### 🟢 No hardcoded secrets found
 Spot-checked the modified/new files for this review (device group stack, device_manager.dart, registry) — no embedded credentials, API keys, or broker passwords. Consistent with `PRE_PRODUCTION_GUIDE.md` §9 checklist item.
@@ -59,8 +59,8 @@ Not independently reviewed here — `PRE_PRODUCTION_GUIDE.md` and the whitepaper
 
 1. 🔴 OTA hash/signature verification (or confirm+enable Secure Boot as the real control)
 2. 🟠 OTA TLS cert pinning
-3. 🟠 Auth on the local HTTP/Tasmota API
+3. ~~🟠 Auth on the local HTTP/Tasmota API~~ ✅ Closed
 4. 🟡 Confirm live broker-config delivery path (Firebase client dead code question)
-5. 🟡 Fix multi-gang/non-relay no-op in group bulk control
+5. ~~🟡 Fix multi-gang/non-relay no-op in group bulk control~~ ✅ Closed
 6. 🟡 Decide on secure storage for any sensitive local app data
 7. 🟢 Flash Encryption (closes the auth-token-at-rest gap)

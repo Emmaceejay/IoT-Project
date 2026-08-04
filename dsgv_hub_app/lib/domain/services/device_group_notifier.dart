@@ -4,7 +4,12 @@ import '../../core/objectbox_store_provider.dart';
 import '../../data/datasources/objectbox_group_datasource.dart';
 import '../../data/repositories/device_group_repository.dart';
 import '../models/device_group.dart';
+import '../models/smart_device.dart';
 import 'device_manager.dart';
+import 'device_type_registry.dart';
+
+/// Relay capability IDs in gang order — matches device_type_registry.dart.
+const _relayCapabilityIds = ['relay', 'relay_2', 'relay_3', 'relay_4'];
 
 final deviceGroupRepositoryProvider = Provider<DeviceGroupRepository>((ref) {
   final store = ref.watch(objectboxStoreProvider);
@@ -47,6 +52,13 @@ class DeviceGroupNotifier extends AsyncNotifier<List<DeviceGroup>> {
   }
 
   /// Sends [command] to every device in the group via [DeviceManager.sendCommand].
+  ///
+  /// A bare `{'power': value}` — what the group's all-on/all-off buttons send —
+  /// is expanded per device to every relay capability it actually has
+  /// (power, power_2, power_3, power_4), so a multi-gang switch's extra gangs
+  /// aren't silently left in their previous state. Devices with no relay
+  /// capability at all (sensors) are skipped rather than sent a no-op 'power'
+  /// command. Any other command shape passes through unchanged.
   Future<void> sendCommandToGroup(
       String groupId, Map<String, dynamic> command) async {
     final group = (state.valueOrNull ?? [])
@@ -55,9 +67,40 @@ class DeviceGroupNotifier extends AsyncNotifier<List<DeviceGroup>> {
     if (group == null) return;
 
     final manager = ref.read(deviceManagerProvider.notifier);
-    await Future.wait(
-        group.deviceIds.map((id) => manager.sendCommand(id, command)));
-    debugPrint('[Groups] Sent $command to ${group.deviceIds.length} device(s) in "${group.name}"');
+    final devices = ref.read(deviceManagerProvider).valueOrNull ?? [];
+    final registry = ref.read(deviceTypeRegistryProvider);
+
+    final targets = group.deviceIds
+        .map((id) => devices.where((d) => d.uniqueDeviceId == id).firstOrNull)
+        .whereType<SmartDevice>();
+
+    var sentCount = 0;
+    await Future.wait(targets.map((device) {
+      final resolved = _resolveCommand(device, command, registry);
+      if (resolved.isEmpty) return Future<void>.value();
+      sentCount++;
+      return manager.sendCommand(device.uniqueDeviceId, resolved);
+    }));
+    debugPrint('[Groups] Sent $command to $sentCount device(s) in "${group.name}"');
+  }
+
+  Map<String, dynamic> _resolveCommand(
+    SmartDevice device,
+    Map<String, dynamic> command,
+    DeviceTypeRegistry registry,
+  ) {
+    if (command.length != 1 || !command.containsKey('power')) {
+      return command;
+    }
+
+    final value = command['power'];
+    final expanded = <String, dynamic>{};
+    for (final capId in _relayCapabilityIds) {
+      if (device.capabilities.contains(capId)) {
+        expanded[registry.lookupCapability(capId)!.commandKey] = value;
+      }
+    }
+    return expanded;
   }
 
   Future<void> _refresh() async {

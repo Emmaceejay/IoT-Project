@@ -148,6 +148,17 @@ static esp_err_t connect_to_broker(const char *host, int port, bool use_tls) {
         s_client = NULL;
     }
 
+    // Only the compile-time factory broker gets the factory credentials —
+    // a user-configured broker (handle_config's mqtt_host/port/tls payload)
+    // has no credential storage path yet in the mqtt_cfg NVS schema, so it
+    // stays anonymous-only until that's added.
+    bool is_factory_broker = (strcmp(host, MQTT_CLOUD_HOST) == 0) &&
+                              (port == MQTT_CLOUD_PORT);
+    const char *username = (is_factory_broker && MQTT_CLOUD_USERNAME[0])
+                                ? MQTT_CLOUD_USERNAME : NULL;
+    const char *password = (is_factory_broker && MQTT_CLOUD_PASSWORD[0])
+                                ? MQTT_CLOUD_PASSWORD : NULL;
+
     esp_mqtt_client_config_t cfg = {
         .broker = {
             .address = {
@@ -159,6 +170,10 @@ static esp_err_t connect_to_broker(const char *host, int port, bool use_tls) {
         },
         .credentials = {
             .client_id = s_device_id,
+            .username  = username,
+            .authentication = {
+                .password = password,
+            },
         },
         .session = {
             .keepalive = MQTT_KEEPALIVE_SEC,

@@ -8,7 +8,7 @@
  * Local HTTP transport layer — Tasmota-compatible REST API.
  * Activated when the DSGV Hub App is on the same Wi-Fi as the device.
  *
- * Routes:
+ * Routes (all require "Authorization: Bearer <auth_token>"):
  *   GET  /api/status     → Full JSON state snapshot
  *   POST /api/cmd        → {"capability": "power", "value": true}
  *   GET  /cm?cmnd=<cmd>  → Tasmota compatibility (Power ON/OFF, Dimmer N, CT N)

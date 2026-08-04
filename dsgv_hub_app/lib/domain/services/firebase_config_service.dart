@@ -8,7 +8,7 @@ import '../models/mqtt_config.dart';
 // Replace YOUR_PROJECT_ID with your Firebase project ID.
 // Find it at: Firebase Console → Project Settings → General → Project ID
 const _kFunctionsBase =
-    'https://us-central1-YOUR_PROJECT_ID.cloudfunctions.net';
+    'https://us-central1-dsgv-hub.cloudfunctions.net';
 
 // ── Service ───────────────────────────────────────────────────────────────────
 

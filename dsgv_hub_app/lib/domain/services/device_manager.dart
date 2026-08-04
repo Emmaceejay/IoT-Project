@@ -136,7 +136,8 @@ class DeviceManager extends AsyncNotifier<List<SmartDevice>> {
         bool allDelivered = true;
         for (final entry in command.entries) {
           final ok = await httpService.sendCommand(
-              localIp, entry.key, entry.value);
+              localIp, entry.key, entry.value,
+              authToken: device?.authToken);
           if (!ok) {
             allDelivered = false;
             break;
