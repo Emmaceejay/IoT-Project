@@ -1,10 +1,121 @@
 # Cloudflare Gateway Setup Guide
 
-Full walkthrough for deploying `cloudflare_gateway/` — the device-config
-gateway (`registerDevice`, `getDeviceConfig`, `updateDeviceConfig`,
-`revertDeviceToFactory`) that the app and firmware both talk to. Runs
-entirely on Cloudflare's free tier: **no credit card, no Firebase, no paid
-plan of any kind.**
+This is the device-config gateway: a small server (`registerDevice`,
+`getDeviceConfig`, `updateDeviceConfig`, `revertDeviceToFactory`) that both
+the DSGV Hub app and every device's firmware talk to, so devices can get
+their MQTT broker credential without that credential ever being compiled
+into firmware. Runs entirely on Cloudflare's free tier: **no credit card, no
+Firebase, no paid plan of any kind.**
+
+## Why this exists (read this first — for future-you)
+
+### The problem it solves
+Devices need MQTT broker credentials (host, port, TLS, username, password)
+to talk to HiveMQ Cloud. The naive approach — compile one shared
+username/password into every device's firmware — has a real security cost:
+**a single flash dump or leaked firmware binary from any one device exposes
+the login for the entire fleet**, since HiveMQ Cloud uses one credential per
+cluster. Not acceptable for a commercial product.
+
+The fix: every device already gets its own unique `auth_token` at
+BLE-provisioning time (this token also gates the device's local HTTP API —
+see `Security_Review.md`). This gateway is what a device calls, authenticated
+with *that* per-device token, to fetch the *shared* broker credential
+server-side. The broker credential itself never lives in firmware. If one
+device is compromised, only its own `auth_token` leaks — not the fleet's
+broker password.
+
+A second, related benefit: **credential rotation.** If the broker password
+ever needs to change (suspected leak, routine rotation), it's one
+`wrangler secret put` here — every device picks up the new value on its next
+boot/reconnect. Without this gateway, rotation would mean re-flashing every
+device in the field.
+
+### Why Cloudflare, and not Firebase (the first thing tried)
+Firebase Cloud Functions was the original design and was fully built before
+being abandoned: **Firebase requires the paid "Blaze" (pay-as-you-go) plan to
+deploy *any* Cloud Function at all** — not just ones that touch paid
+features. Confirmed empirically (not assumed) via two separate
+`firebase deploy` attempts, both blocked on Google Cloud trying to enable
+`secretmanager.googleapis.com` / `artifactregistry.googleapis.com`, which
+only provision on Blaze.
+
+Cloudflare Workers has no equivalent restriction. Verified directly against
+Cloudflare's own pricing docs before committing to this migration:
+
+| Resource | Free tier limit |
+|---|---|
+| Workers requests | 100,000 / day |
+| Workers CPU time | 10 ms / invocation |
+| Workers KV reads | 100,000 / day |
+| Workers KV writes | 1,000 / day |
+| Workers KV deletes | 1,000 / day |
+| Workers KV storage | 1 GB |
+| Credit card required | No |
+
+This project's usage (register a device once at provisioning, occasional
+broker-config pushes, one config fetch per boot) sits far inside every one
+of those limits.
+
+### Why Workers KV, and not Cloudflare Workers + Firebase Realtime Database
+An intermediate design used Cloudflare Workers for compute but kept Firebase
+Realtime Database for storage, bridged with a Firebase service-account/OAuth
+flow. That still meant a Firebase project, a service-account key, and
+Firebase-specific setup for something meant to be simple and free. Moving
+storage onto **Workers KV** (Cloudflare's own key-value store, bound to the
+Worker with a one-line config, no separate account or credential) removed
+Firebase from the architecture entirely — no service account, no JWT
+signing, no extra dependency (`jose` was dropped). One platform to sign up
+for, not two.
+
+The one real tradeoff: KV is *eventually consistent* (a write can take up to
+~60s to reach all edge locations) and caps writes at 1,000/day. Neither
+matters here — broker changes are rare and user-initiated, and the device
+already treats a broker change as "takes effect next reboot" with a 60s
+rollback watchdog already built into the firmware (`dsgv_mqtt.c`).
+
+### Why `getDeviceConfig` doesn't update `last_seen` on every call
+It's called on **every device boot**, so a write there would scale with
+fleet size × reboot frequency and could realistically burn through the
+1,000-writes/day cap on a large fleet. `last_seen` is written once, in
+`registerDevice` (provisioning-time only), and was never read back by app or
+firmware anyway — so dropping the per-boot write costs nothing and keeps
+write volume flat regardless of usage.
+
+### Other problems fixed in the same effort (bundled into this migration)
+- **Local HTTP API had no authentication** — any device on the same WiFi
+  network could hit a device's local REST endpoints with no credential.
+  Fixed by requiring `Authorization: Bearer <auth_token>` on every route
+  (`dsgv_http_server.c`) — the same token this gateway uses.
+- **Broker-credential leak across broker switches** — when a user pushed a
+  custom MQTT broker from the app, the device didn't always overwrite its
+  stored username/password, so it could silently keep using a *previous*
+  broker's credential against a *new* host. Fixed: `handle_config()` now
+  always explicitly writes (or clears) username/password on every broker
+  change, and snapshots the prior ones for the rollback watchdog.
+
+### Where this sits in the device boot sequence
+NVS init → device config load → TCP/IP + event loop → GPIO → WiFi connect →
+**HTTP server starts** → **gateway fetch (this service)** → MQTT connect.
+
+The HTTP server deliberately starts *before* the gateway fetch, so local
+WiFi control keeps working even if this gateway is unreachable (no internet,
+Worker down, etc.) — only the cloud/MQTT path depends on it.
+
+### Quick recall reference (fill in as your own deployment changes)
+| What | Where |
+|---|---|
+| Live gateway URL | `https://dsgv-hub-gateway.tectinkers.workers.dev` |
+| KV namespace | `DSGV_KV` — id recorded in `wrangler.toml` |
+| Broker | HiveMQ Cloud — host in `MQTT_CLOUD_HOST` (`dsgv_config.h`) and `FACTORY_CONFIG_BASE` (`src/index.js`), must match |
+| Secrets | Only in Cloudflare (`wrangler secret put`) — never committed to this repo |
+| Firmware call site | `dsgv_gateway.c`, URL constant `GATEWAY_GET_CONFIG_URL` in `dsgv_config.h` |
+| App call site | `gateway_config_service.dart`, URL constant `_kGatewayBase` |
+| Auth | Per-device `auth_token` from BLE provisioning, reused for both local HTTP API and gateway calls |
+
+---
+
+## Setup Steps
 
 Every step below shows the CLI command (what this project has used
 throughout — reproducible, scriptable) with the equivalent Cloudflare
