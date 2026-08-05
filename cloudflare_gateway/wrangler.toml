@@ -6,7 +6,7 @@ compatibility_date = "2024-09-23"
 # Paste the "id" it prints below.
 [[kv_namespaces]]
 binding = "DSGV_KV"
-id = "REPLACE_WITH_ID_FROM_wrangler_kv_namespace_create"
+id = "99343417e0194e8988b127fbbfeb23eb"
 
 # Secrets (never go in this file) — set with:
 #   wrangler secret put MQTT_BROKER_USERNAME

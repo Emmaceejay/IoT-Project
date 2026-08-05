@@ -32,7 +32,7 @@
 // cloudflare_gateway/ (wrangler deploy prints this after first deploy).
 // This URL is not a secret — security is enforced by the auth_token.
 #define GATEWAY_GET_CONFIG_URL \
-    "https://dsgv-hub-gateway.YOUR_SUBDOMAIN.workers.dev/getDeviceConfig"
+    "https://dsgv-hub-gateway.tectinkers.workers.dev/getDeviceConfig"
 
 // How long (ms) to wait for a gateway response before falling back to NVS cache
 #define GATEWAY_TIMEOUT_MS       10000

@@ -9,7 +9,7 @@ import '../models/mqtt_config.dart';
 // `wrangler deploy` prints this after first deploy:
 //   https://dsgv-hub-gateway.<your-subdomain>.workers.dev
 const _kGatewayBase =
-    'https://dsgv-hub-gateway.YOUR_SUBDOMAIN.workers.dev';
+    'https://dsgv-hub-gateway.tectinkers.workers.dev';
 
 // ── Service ───────────────────────────────────────────────────────────────────
 
