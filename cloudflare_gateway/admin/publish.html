@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DSGV Hub — Publish Firmware</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: #0A0E1A; color: #E6EDF3; max-width: 720px; margin: 40px auto;
+    padding: 0 20px;
+  }
+  h1 { font-size: 1.4rem; margin-bottom: 4px; }
+  p.sub { color: #8B98A9; margin-top: 0; }
+  section {
+    background: #131A2A; border: 1px solid #1E2A3A; border-radius: 12px;
+    padding: 20px; margin-bottom: 20px;
+  }
+  label { display: block; font-size: 0.85rem; color: #8B98A9; margin: 14px 0 6px; }
+  input, select, textarea {
+    width: 100%; box-sizing: border-box; background: #0A0E1A; color: #E6EDF3;
+    border: 1px solid #1E2A3A; border-radius: 8px; padding: 10px; font-size: 0.95rem;
+  }
+  textarea { resize: vertical; min-height: 60px; }
+  button {
+    margin-top: 18px; width: 100%; padding: 12px; border: none; border-radius: 8px;
+    background: #00E5FF; color: #000; font-weight: 600; font-size: 0.95rem; cursor: pointer;
+  }
+  button:disabled { background: #1E2A3A; color: #556; cursor: not-allowed; }
+  #status { margin-top: 12px; font-size: 0.9rem; white-space: pre-wrap; }
+  #status.ok { color: #4ADE80; }
+  #status.err { color: #FF6B6B; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid #1E2A3A; }
+  th { color: #8B98A9; font-weight: 500; }
+  code { background: #0A0E1A; padding: 1px 5px; border-radius: 4px; font-size: 0.8rem; }
+  .key-row { display: flex; gap: 8px; align-items: center; }
+  .key-row input { flex: 1; }
+  .key-row button { width: auto; margin-top: 0; padding: 10px 16px; }
+</style>
+</head>
+<body>
+
+<h1>DSGV Hub — Publish Firmware</h1>
+<p class="sub">Upload a built .bin, and it becomes the version every device in the fleet can pull. No git, no command line.</p>
+
+<section>
+  <label for="workerBase">Gateway URL</label>
+  <input id="workerBase" value="https://dsgv-hub-gateway.tectinkers.workers.dev" />
+
+  <label for="adminKey">Admin key</label>
+  <div class="key-row">
+    <input id="adminKey" type="password" placeholder="Paste the admin key here" />
+    <button type="button" onclick="saveKey()">Remember for this tab</button>
+  </div>
+</section>
+
+<section>
+  <h2 style="font-size:1rem;margin-top:0;">Publish a new version</h2>
+
+  <label for="deviceType">Device type</label>
+  <select id="deviceType">
+    <option value="1gang_switch">1gang_switch</option>
+    <option value="2gang_switch">2gang_switch</option>
+    <option value="3gang_switch">3gang_switch</option>
+    <option value="4gang_switch">4gang_switch</option>
+    <option value="dimmer">dimmer</option>
+    <option value="colour_temp">colour_temp</option>
+    <option value="rgb_light">rgb_light</option>
+    <option value="temp_sensor">temp_sensor</option>
+    <option value="motion_sensor">motion_sensor</option>
+    <option value="contact_sensor">contact_sensor</option>
+    <option value="thermostat">thermostat</option>
+  </select>
+
+  <label for="version">Version</label>
+  <input id="version" placeholder="e.g. 1.3.0" />
+
+  <label for="notes">Release notes (optional)</label>
+  <textarea id="notes" placeholder="What changed in this release"></textarea>
+
+  <label for="file">Firmware file (.bin)</label>
+  <input id="file" type="file" accept=".bin" />
+
+  <button id="publishBtn" onclick="publish()">Publish</button>
+  <div id="status"></div>
+</section>
+
+<section>
+  <h2 style="font-size:1rem;margin-top:0;">Currently published</h2>
+  <table id="manifestTable">
+    <thead>
+      <tr><th>Device type</th><th>Version</th><th>SHA-256</th><th>Uploaded</th></tr>
+    </thead>
+    <tbody id="manifestBody">
+      <tr><td colspan="4" style="color:#556;">Loading…</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<script>
+function base() {
+  return document.getElementById('workerBase').value.replace(/\/$/, '');
+}
+
+function saveKey() {
+  sessionStorage.setItem('dsgv_admin_key', document.getElementById('adminKey').value);
+  setStatus('Key remembered for this browser tab only.', 'ok');
+}
+
+function setStatus(msg, cls) {
+  const el = document.getElementById('status');
+  el.textContent = msg;
+  el.className = cls || '';
+}
+
+async function loadManifest() {
+  const body = document.getElementById('manifestBody');
+  try {
+    const res = await fetch(base() + '/getFirmwareManifest');
+    const data = await res.json();
+    const entries = Object.entries(data.devices || {});
+    if (entries.length === 0) {
+      body.innerHTML = '<tr><td colspan="4" style="color:#556;">Nothing published yet.</td></tr>';
+      return;
+    }
+    body.innerHTML = entries.map(([type, e]) => `
+      <tr>
+        <td>${type}</td>
+        <td>${e.version}</td>
+        <td><code>${e.hash.slice(0, 12)}…</code></td>
+        <td>${e.notes ? e.notes : ''}</td>
+      </tr>
+    `).join('');
+  } catch (err) {
+    body.innerHTML = '<tr><td colspan="4" style="color:#FF6B6B;">Could not load manifest: ' + err + '</td></tr>';
+  }
+}
+
+async function publish() {
+  const key = document.getElementById('adminKey').value || sessionStorage.getItem('dsgv_admin_key') || '';
+  const deviceType = document.getElementById('deviceType').value;
+  const version = document.getElementById('version').value.trim();
+  const notes = document.getElementById('notes').value.trim();
+  const fileInput = document.getElementById('file');
+  const file = fileInput.files[0];
+
+  if (!key) { setStatus('Enter the admin key first.', 'err'); return; }
+  if (!version) { setStatus('Enter a version.', 'err'); return; }
+  if (!file) { setStatus('Choose a .bin file.', 'err'); return; }
+
+  const btn = document.getElementById('publishBtn');
+  btn.disabled = true;
+  setStatus('Uploading and publishing…');
+
+  try {
+    const form = new FormData();
+    form.append('device_type', deviceType);
+    form.append('version', version);
+    form.append('notes', notes);
+    form.append('file', file);
+
+    const res = await fetch(base() + '/publishFirmware', {
+      method: 'POST',
+      headers: { 'X-Admin-Key': key },
+      body: form,
+    });
+    const data = await res.json();
+
+    if (!res.ok) {
+      setStatus('Failed: ' + (data.error || res.status), 'err');
+    } else {
+      setStatus(`Published ${deviceType} v${version}\nSHA-256: ${data.hash}`, 'ok');
+      fileInput.value = '';
+      loadManifest();
+    }
+  } catch (err) {
+    setStatus('Failed: ' + err, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// Restore a remembered key for this tab, and load the current manifest.
+document.getElementById('adminKey').value = sessionStorage.getItem('dsgv_admin_key') || '';
+loadManifest();
+</script>
+
+</body>
+</html>

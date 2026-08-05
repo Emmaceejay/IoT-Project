@@ -1,3 +1,9 @@
 build/
 sdkconfig
 managed_components/
+
+# Secure Boot v2 / Flash Encryption keys (Phase 2 — never commit these)
+*.pem
+secure_boot_signing_key*
+*.key
+flash_encryption_key.bin

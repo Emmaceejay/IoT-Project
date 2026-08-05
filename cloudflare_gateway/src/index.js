@@ -58,6 +58,28 @@ async function readJson(request) {
 const registryKey = (deviceId) => `device_registry:${deviceId}`;
 const configKey   = (deviceId) => `device_configs:${deviceId}`;
 
+// Single KV key holding the whole firmware manifest, keyed by device_type —
+// mirrors the shape dsgv_hub_app's FirmwareManifest.fromJson() expects.
+// One key (not one-per-device) keeps publishFirmware a single read-merge-write,
+// same pattern as store.js's updateRecord but nested one level deeper.
+const FIRMWARE_MANIFEST_KEY = "firmware_manifest";
+
+// Must match CONFIG_DSGV_DEVICE_TYPE values / firmware_manifest.json's old keys.
+const KNOWN_DEVICE_TYPES = new Set([
+  "1gang_switch", "2gang_switch", "3gang_switch", "4gang_switch",
+  "dimmer", "colour_temp", "rgb_light",
+  "temp_sensor", "motion_sensor", "contact_sensor", "thermostat",
+]);
+
+// 4MB cap — generous above the largest OTA partition slot (3MB on the 8MB
+// layout, ~1.9MB on 4MB) any device in this fleet actually has, just a sanity
+// ceiling against accidental wrong-file uploads, not a hard product limit.
+const MAX_FIRMWARE_BYTES = 4 * 1024 * 1024;
+
+function toHex(buf) {
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 // ── registerDevice ────────────────────────────────────────────────────────────
 // Called by the Flutter app immediately after BLE provisioning succeeds.
 // Stores the device's auth token in the private registry and seeds a factory
@@ -124,12 +146,23 @@ async function handleGetDeviceConfig(request, env) {
   const token    = auth_token.toUpperCase();
   const factory  = getFactoryConfig(env);
 
-  // Verify auth token against private registry
+  // Verify auth token against private registry.
+  //
+  // SECURITY: an unregistered device_id must NEVER get broker_username/
+  // broker_password back — device_id is just a 12-hex WiFi MAC, so almost
+  // any guessed value is "unregistered", and an unauthenticated caller could
+  // otherwise harvest the live broker credential with a single POST. Only
+  // broker_host/port/tls (already public — compiled into every firmware
+  // binary) go out on this path; credentials require a registry match below.
   const registry = await getRecord(env, registryKey(deviceId));
   if (!registry) {
-    // Return factory config to un-registered devices so they still work
-    // (handles the case where the app hasn't registered the device yet)
-    return json(factory);
+    return json({
+      broker_host: factory.broker_host,
+      broker_port: factory.broker_port,
+      broker_tls:  factory.broker_tls,
+      broker_username: "",
+      broker_password: "",
+    });
   }
   if (!safeEqual(registry.auth_token, token)) {
     return json({ error: "Unauthorized" }, 401);
@@ -213,13 +246,141 @@ async function handleRevertDeviceToFactory(request, env) {
   return json({ success: true });
 }
 
+// ── publishFirmware ──────────────────────────────────────────────────────────
+// Called by the admin/publish.html page (not by the app or a device). Accepts
+// a multipart/form-data upload: device_type, version, notes (optional), and
+// the .bin file itself. Stores the binary as a raw value in Workers KV
+// (deliberately not R2 — R2 requires a credit card on file to enable, even
+// within its free tier, which breaks the "genuinely free, no card" bar this
+// whole project holds itself to; KV's 25MiB-per-value limit comfortably
+// covers these binaries, which top out around 3MB per check_binary_size.py's
+// OTA partition limits). Computes SHA-256 server-side (never trusts a
+// client-supplied hash for this — the whole point is this becomes the value
+// every device verifies against), and records the new current version for
+// that device type in the firmware manifest.
+//
+// Auth: X-Admin-Key header, checked with the same constant-time safeEqual()
+// every other credential check in this file uses. This is a different,
+// higher-privilege secret than any device's auth_token — anyone who can
+// publish here controls what code every device in the fleet will run.
+async function handlePublishFirmware(request, env) {
+  const adminKey = request.headers.get("X-Admin-Key") || "";
+  if (!env.ADMIN_PUBLISH_KEY || !safeEqual(adminKey, env.ADMIN_PUBLISH_KEY)) {
+    return json({ error: "Unauthorized" }, 401);
+  }
+
+  let form;
+  try {
+    form = await request.formData();
+  } catch {
+    return json({ error: "Expected multipart/form-data" }, 400);
+  }
+
+  const deviceType = String(form.get("device_type") || "");
+  const version    = String(form.get("version") || "").trim();
+  const notes      = String(form.get("notes") || "").trim();
+  const file       = form.get("file");
+
+  if (!KNOWN_DEVICE_TYPES.has(deviceType)) {
+    return json({ error: `Unknown device_type. Must be one of: ${[...KNOWN_DEVICE_TYPES].join(", ")}` }, 400);
+  }
+  if (!version) {
+    return json({ error: "Missing version" }, 400);
+  }
+  if (!file || typeof file.arrayBuffer !== "function") {
+    return json({ error: "Missing file" }, 400);
+  }
+  if (file.size === 0 || file.size > MAX_FIRMWARE_BYTES) {
+    return json({ error: `File must be between 1 byte and ${MAX_FIRMWARE_BYTES} bytes` }, 400);
+  }
+
+  const fileBuf = await file.arrayBuffer();
+  const hashHex = toHex(await crypto.subtle.digest("SHA-256", fileBuf));
+  const binKey  = `firmware_bin:${deviceType}:${version}`;
+
+  // Raw binary value, not JSON — putRecord/getRecord (store.js) always
+  // JSON-encode, so this goes straight through the KV binding instead.
+  await env.DSGV_KV.put(binKey, fileBuf);
+
+  const manifest = (await getRecord(env, FIRMWARE_MANIFEST_KEY)) || {};
+  manifest[deviceType] = {
+    version,
+    hash: hashHex,
+    notes,
+    bin_key: binKey,
+    size: file.size,
+    uploaded_at: Date.now(),
+  };
+  await putRecord(env, FIRMWARE_MANIFEST_KEY, manifest);
+
+  return json({ success: true, device_type: deviceType, version, hash: hashHex });
+}
+
+// ── getFirmwareManifest ──────────────────────────────────────────────────────
+// Called by the app (ota_service.dart). Public — this is the same trust level
+// as the old public GitHub-hosted firmware_manifest.json (version/hash aren't
+// secret; every download is hash-verified on-device regardless of who fetches
+// this). Builds the download URL for each entry from the current request's
+// own origin, so it never needs the deployed hostname hardcoded anywhere.
+async function handleGetFirmwareManifest(request, env) {
+  const manifest = (await getRecord(env, FIRMWARE_MANIFEST_KEY)) || {};
+  const origin = new URL(request.url).origin;
+
+  const devices = {};
+  for (const [deviceType, entry] of Object.entries(manifest)) {
+    devices[deviceType] = {
+      version: entry.version,
+      hash: entry.hash,
+      notes: entry.notes || "",
+      url: `${origin}/firmware/${deviceType}`,
+    };
+  }
+  return json({ devices });
+}
+
+// ── firmware download ────────────────────────────────────────────────────────
+// GET /firmware/{device_type} — streams the current binary for that device
+// type from KV. Called by ESP-IDF's esp_https_ota on the device (TLS verified
+// via esp_crt_bundle_attach, hash re-verified on-device before the image can
+// boot — this route being unauthenticated is not a new exposure, the old
+// GitHub-hosted .bin was equally public).
+async function handleFirmwareDownload(deviceType, env) {
+  if (!KNOWN_DEVICE_TYPES.has(deviceType)) {
+    return json({ error: "Unknown device_type" }, 404);
+  }
+  const manifest = (await getRecord(env, FIRMWARE_MANIFEST_KEY)) || {};
+  const entry = manifest[deviceType];
+  if (!entry) {
+    return json({ error: "No firmware published for this device_type yet" }, 404);
+  }
+
+  const bin = await env.DSGV_KV.get(entry.bin_key, "arrayBuffer");
+  if (!bin) {
+    return json({ error: "Firmware binary missing from storage" }, 500);
+  }
+
+  return new Response(bin, {
+    status: 200,
+    headers: {
+      "Content-Type": "application/octet-stream",
+      "Content-Length": String(entry.size),
+      "Access-Control-Allow-Origin": "*",
+    },
+  });
+}
+
 // ── Router ───────────────────────────────────────────────────────────────────
 
-const ROUTES = {
+const POST_ROUTES = {
   "/registerDevice":        handleRegisterDevice,
   "/getDeviceConfig":       handleGetDeviceConfig,
   "/updateDeviceConfig":    handleUpdateDeviceConfig,
   "/revertDeviceToFactory": handleRevertDeviceToFactory,
+  "/publishFirmware":       handlePublishFirmware,
+};
+
+const GET_ROUTES = {
+  "/getFirmwareManifest": (request, env) => handleGetFirmwareManifest(request, env),
 };
 
 export default {
@@ -230,24 +391,31 @@ export default {
       return new Response(null, {
         headers: {
           "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "POST, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type",
+          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type, X-Admin-Key",
         },
       });
     }
 
-    if (request.method !== "POST") {
-      return json({ error: "Method not allowed" }, 405);
-    }
-
     const { pathname } = new URL(request.url);
-    const handler = ROUTES[pathname];
-    if (!handler) {
-      return json({ error: "Not found" }, 404);
-    }
 
     try {
-      return await handler(request, env);
+      if (request.method === "GET") {
+        if (pathname.startsWith("/firmware/")) {
+          return await handleFirmwareDownload(pathname.slice("/firmware/".length), env);
+        }
+        const getHandler = GET_ROUTES[pathname];
+        if (getHandler) return await getHandler(request, env);
+        return json({ error: "Not found" }, 404);
+      }
+
+      if (request.method === "POST") {
+        const postHandler = POST_ROUTES[pathname];
+        if (!postHandler) return json({ error: "Not found" }, 404);
+        return await postHandler(request, env);
+      }
+
+      return json({ error: "Method not allowed" }, 405);
     } catch (err) {
       return json({ error: "Internal error", detail: String(err) }, 500);
     }

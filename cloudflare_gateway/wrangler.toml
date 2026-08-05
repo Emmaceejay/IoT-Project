@@ -4,6 +4,10 @@ compatibility_date = "2024-09-23"
 
 # Create with: wrangler kv namespace create DSGV_KV
 # Paste the "id" it prints below.
+# Also holds firmware binaries for the publish/OTA-manifest flow (not R2 —
+# R2 requires a credit card on file to enable, even within its free tier;
+# KV's 25MiB-per-value limit comfortably covers these binaries and needs no
+# card at all).
 [[kv_namespaces]]
 binding = "DSGV_KV"
 id = "99343417e0194e8988b127fbbfeb23eb"
@@ -11,3 +15,4 @@ id = "99343417e0194e8988b127fbbfeb23eb"
 # Secrets (never go in this file) — set with:
 #   wrangler secret put MQTT_BROKER_USERNAME
 #   wrangler secret put MQTT_BROKER_PASSWORD
+#   wrangler secret put ADMIN_PUBLISH_KEY

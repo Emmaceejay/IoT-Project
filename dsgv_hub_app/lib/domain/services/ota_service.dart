@@ -7,33 +7,45 @@ import 'telemetry_service.dart';
 
 // ── Firmware Manifest ─────────────────────────────────────────────────────────
 
-/// Permanent URL for the firmware manifest JSON file hosted on GitHub.
-/// Update this only if the repo or file path changes — never per-release.
-const _kManifestUrl =
-    'https://raw.githubusercontent.com/Emmaceejay/IoT-Project/main/firmware_manifest.json';
+/// The deployed Cloudflare Worker's base URL — see cloudflare_gateway/.
+/// Same Worker/deployment as gateway_config_service.dart's _kGatewayBase.
+const _kGatewayBase = 'https://dsgv-hub-gateway.tectinkers.workers.dev';
 
-/// Per-device entry inside the manifest: the .bin download URL and its SHA-256.
+/// Per-device entry inside the manifest: version, .bin download URL, its
+/// SHA-256, and optional release notes. Each device type now carries its own
+/// version independently — published one at a time via the admin publish
+/// page (cloudflare_gateway/admin/publish.html), not one global release.
 class ManifestEntry {
+  final String version;
   final String url;
   final String hash;
-  const ManifestEntry({required this.url, required this.hash});
+  final String notes;
+  final int uploadedAtMs;
+
+  const ManifestEntry({
+    required this.version,
+    required this.url,
+    required this.hash,
+    this.notes = '',
+    this.uploadedAtMs = 0,
+  });
+
+  /// Date part only (e.g. "2026-08-05"), or '' if never published.
+  String get uploadedDate {
+    if (uploadedAtMs == 0) return '';
+    return DateTime.fromMillisecondsSinceEpoch(uploadedAtMs)
+        .toIso8601String()
+        .split('T')
+        .first;
+  }
 }
 
-/// Top-level manifest parsed from [_kManifestUrl].
+/// Manifest fetched from the gateway's /getFirmwareManifest route.
 class FirmwareManifest {
-  final String version;
-  final String releaseDate;
-  final String notes;
-
   /// Keyed by device-type string, e.g. "1gang_switch", "rgb_light".
   final Map<String, ManifestEntry> devices;
 
-  const FirmwareManifest({
-    required this.version,
-    required this.releaseDate,
-    required this.notes,
-    required this.devices,
-  });
+  const FirmwareManifest({required this.devices});
 
   factory FirmwareManifest.fromJson(Map<String, dynamic> json) {
     final devicesJson = json['devices'] as Map<String, dynamic>? ?? {};
@@ -42,24 +54,22 @@ class FirmwareManifest {
       return MapEntry(
         key,
         ManifestEntry(
+          version: v['version'] as String? ?? '',
           url: v['url'] as String? ?? '',
           hash: v['hash'] as String? ?? '',
+          notes: v['notes'] as String? ?? '',
+          uploadedAtMs: v['uploaded_at'] as int? ?? 0,
         ),
       );
     });
-    return FirmwareManifest(
-      version: json['version'] as String? ?? '',
-      releaseDate: json['release_date'] as String? ?? '',
-      notes: json['notes'] as String? ?? '',
-      devices: devices,
-    );
+    return FirmwareManifest(devices: devices);
   }
 
   /// Returns the [ManifestEntry] for the given device type, or null if absent.
   ManifestEntry? entryFor(String deviceType) => devices[deviceType];
 }
 
-/// Fetches the firmware manifest from GitHub.
+/// Fetches the firmware manifest from the Cloudflare gateway.
 ///
 /// Starts as `AsyncData(null)` — meaning "not yet checked".
 /// Call [fetch()] to populate. The UI watches this provider and reacts to
@@ -72,7 +82,7 @@ class ManifestNotifier extends AsyncNotifier<FirmwareManifest?> {
     state = const AsyncLoading();
     state = await AsyncValue.guard(() async {
       final response = await http
-          .get(Uri.parse(_kManifestUrl))
+          .get(Uri.parse('$_kGatewayBase/getFirmwareManifest'))
           .timeout(const Duration(seconds: 15));
       if (response.statusCode != 200) {
         throw Exception(
@@ -115,10 +125,17 @@ class OtaOrchestratorService {
     required String deviceId,
     required String firmwareUrl,
     required String expectedHash,
+    required String authToken,
   }) async {
     _activeUpdates[deviceId] = OtaUpdateState.inProgress(deviceId, 0);
 
-    final payload = jsonEncode({'url': firmwareUrl, 'hash': expectedHash});
+    // auth_token is required as of the OTA auth-gate fix — handle_ota() in
+    // dsgv_mqtt.c now rejects any trigger without it, same as handle_config().
+    final payload = jsonEncode({
+      'auth_token': authToken,
+      'url': firmwareUrl,
+      'hash': expectedHash,
+    });
     debugPrint('[OTA] Triggering update for $deviceId | url: $firmwareUrl');
 
     _ref.read(telemetryServiceProvider).logOtaStarted(deviceId, firmwareUrl);

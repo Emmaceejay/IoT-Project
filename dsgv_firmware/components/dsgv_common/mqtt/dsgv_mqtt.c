@@ -16,7 +16,7 @@
  *   devices/{id}/status      ← "online" on connect, "offline" via LWT
  *   devices/{id}/telemetry   ← state snapshot (periodic + after any change)
  *   devices/{id}/command     ← incoming: {"capability":"power","value":true}
- *   devices/{id}/ota-trigger ← incoming: {"url":"https://...","hash":"sha256..."}
+ *   devices/{id}/ota-trigger ← incoming: {"auth_token":"<32hex>","url":"https://...","hash":"sha256..."}
  */
 
 #include "dsgv_config.h"
@@ -624,7 +624,13 @@ static void handle_command(const char *payload, int len) {
 
 /**
  * Handles OTA trigger messages from the DSGV Hub App.
- * Payload: {"url":"https://...","hash":"sha256-of-binary"}
+ * Payload: {"auth_token":"<32hex>","url":"https://...","hash":"sha256-of-binary"}
+ *
+ * Security: same auth_token gate as handle_config() (constant-time-ish memcmp,
+ * see that function's doc comment for the accepted rationale). This command
+ * flashes arbitrary attacker-supplied code onto the device if left open, so it
+ * must never be reachable without proof of the same BLE-provisioned token every
+ * other sensitive command already requires.
  */
 static void handle_ota(const char *payload, int len) {
     char buf[512] = {0};
@@ -633,6 +639,23 @@ static void handle_ota(const char *payload, int len) {
         return;
     }
     memcpy(buf, payload, len);
+
+    cJSON *root = cJSON_Parse(buf);
+    if (!root) {
+        ESP_LOGW(TAG, "OTA: invalid JSON — rejected");
+        return;
+    }
+
+    const cJSON *j_tok = cJSON_GetObjectItemCaseSensitive(root, "auth_token");
+    if (!cJSON_IsString(j_tok) || j_tok->valuestring == NULL ||
+        strlen(j_tok->valuestring) != 32 ||
+        memcmp(j_tok->valuestring, g_device_config.auth_token, 32) != 0) {
+        cJSON_Delete(root);
+        ESP_LOGW(TAG, "OTA: invalid auth_token — rejected");
+        return;
+    }
+    cJSON_Delete(root);
+
     ESP_LOGI(TAG, "OTA trigger received. Handing off to DSGV_ota...");
     DSGV_ota_begin(buf);
 }

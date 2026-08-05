@@ -182,13 +182,13 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
         icon: Icons.info_outline,
         color: Colors.white38,
         message:
-            'Device type "${device.deviceType}" is not listed in the current '
-            'manifest. Update firmware_manifest.json in the repo.',
+            'Device type "${device.deviceType}" has no published firmware yet. '
+            'Publish one from the admin page (cloudflare_gateway/admin/publish.html).',
       );
     }
 
     final isUpToDate = device.firmwareVersion.isNotEmpty &&
-        device.firmwareVersion == manifest.version;
+        device.firmwareVersion == entry.version;
 
     if (isUpToDate) {
       return Column(
@@ -197,7 +197,7 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
           _alertTile(
             icon: Icons.check_circle_outline,
             color: Colors.greenAccent,
-            message: 'Up to date — v${manifest.version}',
+            message: 'Up to date — v${entry.version}',
           ),
           const SizedBox(height: 8),
           _checkButton(label: 'Check again', muted: true),
@@ -209,38 +209,43 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _updateAvailableTile(manifest: manifest, currentVersion: device.firmwareVersion),
+        _updateAvailableTile(entry: entry, currentVersion: device.firmwareVersion),
         const SizedBox(height: 12),
-        ElevatedButton.icon(
-          style: ElevatedButton.styleFrom(
-            backgroundColor: isOnline && entry.url.isNotEmpty
-                ? const Color(0xFF00E5FF)
-                : const Color(0xFF1E2A3A),
-            foregroundColor:
-                isOnline && entry.url.isNotEmpty ? Colors.black : Colors.white38,
-            padding: const EdgeInsets.symmetric(vertical: 14),
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          ),
-          onPressed: isOnline && entry.url.isNotEmpty
-              ? () async {
-                  setState(() => _otaTriggered = true);
-                  await otaService.triggerUpdate(
-                    deviceId: device.uniqueDeviceId,
-                    firmwareUrl: entry.url,
-                    expectedHash: entry.hash,
-                  );
-                }
-              : null,
-          icon: const Icon(Icons.system_update_alt),
-          label: Text(
-            !isOnline
-                ? 'Device Offline'
-                : entry.url.isEmpty
-                    ? 'No binary uploaded yet'
-                    : 'Update to v${manifest.version}',
-          ),
-        ),
+        Builder(builder: (context) {
+          final hasToken = device.authToken != null && device.authToken!.isNotEmpty;
+          final canTrigger = isOnline && entry.url.isNotEmpty && hasToken;
+          return ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(
+              backgroundColor:
+                  canTrigger ? const Color(0xFF00E5FF) : const Color(0xFF1E2A3A),
+              foregroundColor: canTrigger ? Colors.black : Colors.white38,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
+            ),
+            onPressed: canTrigger
+                ? () async {
+                    setState(() => _otaTriggered = true);
+                    await otaService.triggerUpdate(
+                      deviceId: device.uniqueDeviceId,
+                      firmwareUrl: entry.url,
+                      expectedHash: entry.hash,
+                      authToken: device.authToken!,
+                    );
+                  }
+                : null,
+            icon: const Icon(Icons.system_update_alt),
+            label: Text(
+              !isOnline
+                  ? 'Device Offline'
+                  : entry.url.isEmpty
+                      ? 'No binary uploaded yet'
+                      : !hasToken
+                          ? 'Device not paired yet'
+                          : 'Update to v${entry.version}',
+            ),
+          );
+        }),
       ],
     );
   }
@@ -295,7 +300,7 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
   }
 
   Widget _updateAvailableTile({
-    required FirmwareManifest manifest,
+    required ManifestEntry entry,
     required String currentVersion,
   }) {
     return Container(
@@ -315,7 +320,7 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
                   color: Colors.orangeAccent, size: 16),
               const SizedBox(width: 8),
               Text(
-                'Update available: v${manifest.version}',
+                'Update available: v${entry.version}',
                 style: const TextStyle(
                     color: Colors.orangeAccent,
                     fontSize: 13,
@@ -330,17 +335,17 @@ class _DeviceDetailScreenState extends ConsumerState<DeviceDetailScreen> {
               style: const TextStyle(color: Colors.white38, fontSize: 11),
             ),
           ],
-          if (manifest.releaseDate.isNotEmpty) ...[
+          if (entry.uploadedDate.isNotEmpty) ...[
             const SizedBox(height: 2),
             Text(
-              'Released: ${manifest.releaseDate}',
+              'Released: ${entry.uploadedDate}',
               style: const TextStyle(color: Colors.white24, fontSize: 11),
             ),
           ],
-          if (manifest.notes.isNotEmpty) ...[
+          if (entry.notes.isNotEmpty) ...[
             const SizedBox(height: 8),
             Text(
-              manifest.notes,
+              entry.notes,
               style: const TextStyle(
                   color: Colors.white54, fontSize: 12, height: 1.4),
             ),

@@ -1,6 +1,6 @@
 # DSGV Hub — Security Review
 
-**Scope:** ESP-IDF firmware (`dsgv_firmware/`), Flutter app (`dsgv_hub_app/`), Firebase cloud gateway.
+**Scope:** ESP-IDF firmware (`dsgv_firmware/`), Flutter app (`dsgv_hub_app/`), Cloudflare device-config gateway (`cloudflare_gateway/`).
 **Method:** Static review of the current tree (including uncommitted working-directory changes) against `PRE_PRODUCTION_GUIDE.md` §4–7. Not a penetration test — treat as a prioritized punch list, not a certification.
 **Date:** 2026-08-03
 
@@ -10,16 +10,18 @@ Severity: 🔴 Critical (ship-blocking) · 🟠 High (fix before general release
 
 ## Firmware
 
-### 🔴 OTA integrity is not actually verified
-`components/dsgv_common/ota/dsgv_ota.c:28-29` accepts a SHA-256 hash in the OTA payload but does not verify it — the code comment defers to Secure Boot, and Secure Boot is **not confirmed enabled** (`sdkconfig.defaults` does not set `CONFIG_SECURE_BOOT=y`; `PRE_PRODUCTION_GUIDE.md` §4 lists it as a pre-ship action item, still unchecked). As shipped, a device that reaches the OTA URL will flash whatever binary is served there with no cryptographic check that it's genuine.
-- **Fix:** either verify the SHA-256 (and ideally a signature, not just a hash) in `dsgv_ota.c` before writing to the OTA partition, or enable Secure Boot v2 + Flash Encryption per `PRE_PRODUCTION_GUIDE.md` §4 and treat that as the actual control — don't rely on an unverified hash field as if it were one.
+### ✅ OTA trigger had no authentication at all — CLOSED
+`handle_ota()` in `dsgv_mqtt.c` forwarded any payload published to `devices/{id}/ota-trigger` straight to `DSGV_ota_begin()` with **zero auth check** — unlike `handle_config()`, which already required the 32-hex `auth_token`. Anyone able to publish on that topic (or spoof/MITM the broker connection) could trigger a firmware flash with attacker-supplied code, no token needed. Found during the OTA-integrity review below and closed in the same pass, since it's a bigger, cheaper-to-exploit gap than the missing hash check ever was.
+- **Fix:** `handle_ota()` now requires and verifies the same `auth_token` field, `memcmp`-checked against `g_device_config.auth_token`, exactly matching `handle_config()`'s existing pattern, before ever calling `DSGV_ota_begin()`.
 
-### 🟠 OTA channel has no TLS certificate pinning
-`components/dsgv_common/ota/dsgv_ota.c:65` — `.cert_pem` is commented out:
-```c
-// .cert_pem = server_cert_pem_start, // Pin S3/CDN cert for production
-```
-Combined with the missing hash verification above, this is the same gap from two angles: nothing stops a MITM (rogue AP, compromised DNS, CA-store trust abuse) from serving a malicious binary that the device will accept. `PRE_PRODUCTION_GUIDE.md` §5 already documents the fix — it just isn't applied yet.
+### ✅ OTA integrity was not actually verified — CLOSED
+`components/dsgv_common/ota/dsgv_ota.c` accepted a `hash` field in the OTA payload but **never read it** (not "unverified" — literally dead, never parsed). The code comment deferred to Secure Boot, which is **still not enabled** anywhere in this project (`sdkconfig.defaults` has `CONFIG_SECURE_BOOT`/`CONFIG_FLASH_ENCRYPTION_ENABLED` present only as comments) — so prior to this fix there was no integrity verification of any kind, app-level or bootloader-level.
+- **Fix:** `hash` is now a required field (64-char SHA-256 hex). After the download completes but *before* `esp_https_ota_finish()` (which is what marks an image bootable), the code calls ESP-IDF's own `esp_partition_get_sha256()` (`esp_partition.h`) on the just-written OTA partition and compares against the app-supplied hash. This is image-aware (hashes the actual app image content, not raw partition capacity) and validates the image structure as a side effect — a malformed image is rejected outright. A mismatch calls `esp_https_ota_abort()` instead of `finish()` — the bad image is discarded and current firmware stays active. (An earlier draft of this fix hand-rolled the hash with direct `mbedtls_sha256_*` calls; switched away from that after confirming against the actual installed ESP-IDF v6.0.1 source that `mbedtls/sha256.h` isn't on the public include path in this version — its API moved behind a private header as part of an mbedtls/TF-PSA-Crypto backend migration. `esp_partition_get_sha256()` is the stable, IDF-blessed API for exactly this purpose and sidesteps that entirely.)
+- **Note:** this is app-level hash verification, not a cryptographic signature — it stops corrupted/tampered-in-transit images and (combined with the auth-token fix above and the TLS fix below) closes the practical attack surface, but it doesn't replace Secure Boot v2's hardware-rooted trust chain. Secure Boot v2 + Flash Encryption remain the deeper fix, tracked separately below as Phase 2 — not bundled here because enabling them burns an eFuse permanently per device and needs its own hands-on hardware rollout, not a code change.
+
+### ✅ OTA channel had no TLS server verification at all — CLOSED
+Worse than "unpinned": `components/dsgv_common/ota/dsgv_ota.c`'s `esp_http_client_config_t` set none of `.cert_pem`, `.cacert_buf`, or `.crt_bundle_attach`. The only related line was commented out and referenced `server_cert_pem_start` — a symbol that doesn't exist anywhere in the repo (no embedded `.pem`, no `EMBED_TXTFILES` directive); it was unfinished, dead code, not "pinning that got disabled." Nothing stopped a MITM (rogue AP, compromised DNS, CA-store trust abuse) from serving a malicious binary that the device would download and (previously) never even hash-check.
+- **Fix:** `.crt_bundle_attach = esp_crt_bundle_attach` — the same pattern `dsgv_gateway.c` already uses correctly for its own HTTPS calls, validating against ESP-IDF's compiled-in public CA bundle (`CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y`, already enabled project-wide). This is real server authentication, not pinning to one specific certificate — true pinning to a single CDN cert is a stricter future hardening step if wanted, not required for this fix to be meaningful.
 
 ### ✅ Local HTTP server now requires authentication — CLOSED
 `components/dsgv_common/http/dsgv_http_server.c` previously exposed a Tasmota-compatible REST API (`/api/status`, `/api/cmd`, `/cm?cmnd=`) on port 80 with no auth check. All three routes now require `Authorization: Bearer <auth_token>`, validated against the same per-device token the MQTT config-command handler already trusts (`request_is_authorized()` in `dsgv_http_server.c`). `local_http_service.dart` (app side) now sends the header using `SmartDevice.authToken`; if the device has no token yet (mid-pairing), local HTTP is skipped and the command falls through to MQTT rather than failing silently.
@@ -55,18 +57,29 @@ ObjectBox stores device state, group membership, and (per the wifi_manager/provi
 
 ---
 
-## Cloud (Firebase)
+## Cloud (Cloudflare Gateway)
 
-Not independently reviewed here — `PRE_PRODUCTION_GUIDE.md` and the whitepaper describe the intended model (Cloud Functions gate `device_registry`/`device_configs`, auth token required). Given the firmware-side Firebase client is currently dead code (see above), **confirm which component actually owns the broker-config delivery path in the current build** before relying on the documented security model — reviewing Firebase Security Rules and Cloud Function auth checks should be the next follow-up once that's confirmed.
+The device-config gateway (`cloudflare_gateway/`) moved off Firebase Cloud Functions/RTDB to Cloudflare Workers/KV — see `cloudflare_gateway/SETUP_GUIDE.md` for the full rationale. This section covers findings specific to that gateway.
+
+### ✅ `getDeviceConfig` was leaking the live broker credential to unauthenticated callers — CLOSED
+`src/index.js`'s `handleGetDeviceConfig()` returned the **full** factory config — including `broker_username`/`broker_password` — for any `device_id` with no matching registry entry, with no `auth_token` check on that branch at all. Since `device_id` is just a 12-hex-character WiFi MAC and only a small fraction of the address space is ever actually registered, this meant anyone could `POST` a random/guessed `device_id` and get HiveMQ Cloud's real username/password back in plaintext — no valid token needed. This fully undid the point of the Firebase→Cloudflare migration: the broker credential was no longer compiled into firmware, but it was sitting behind what was effectively an open endpoint instead.
+- **Fix:** the unregistered-device branch now returns only `broker_host`/`port`/`tls` (already public — compiled into every firmware binary) with empty `broker_username`/`broker_password`. Credentials are only ever returned once `auth_token` is verified against a real registry entry (`safeEqual(registry.auth_token, token)`).
+- **Side effect handled:** closing this reopened a narrow, legitimate race — a device's very first `getDeviceConfig` call (at first boot after provisioning) can now land before the app's `registerDevice` call has, meaning that first fetch returns no credentials where it previously (insecurely) always did. Firmware (`dsgv_gateway.c`) now retries up to `GATEWAY_MAX_ATTEMPTS` (3), `GATEWAY_RETRY_DELAY_MS` (2s) apart, whenever the gateway responds successfully but with no credentials, before falling back to "anonymous until next boot" — the same accepted tradeoff already documented for a device with no internet at all.
+
+### 🟡 Not independently reviewed beyond the above
+Route-level input validation (`DEVICE_ID_RE`/`AUTH_TOKEN_RE` regex, `safeEqual` constant-time comparison) matches the old Cloud Functions logic and looks sound on read, but hasn't had a dedicated pass — worth revisiting alongside the local-storage question below if a stricter threat model is adopted. No rate limiting exists on any route (Cloudflare's free tier has no built-in per-IP throttling); `registerDevice` writes to KV on every unrecognized `device_id`, so a scripted flood of fake `device_id`s could in principle burn into the 1,000-writes/day KV cap and deny real devices a same-day registration — low real-world likelihood (no public knowledge of valid `device_id` format incentivizes this) but not yet mitigated.
 
 ---
 
 ## Priority Order
 
-1. 🔴 OTA hash/signature verification (or confirm+enable Secure Boot as the real control)
-2. 🟠 OTA TLS cert pinning
-3. ~~🟠 Auth on the local HTTP/Tasmota API~~ ✅ Closed
-4. ~~🟡 Confirm live broker-config delivery path (Firebase client dead code question)~~ ✅ Closed — wired up, no compile-time broker credential remains
-5. ~~🟡 Fix multi-gang/non-relay no-op in group bulk control~~ ✅ Closed
-6. 🟡 Decide on secure storage for any sensitive local app data
-7. 🟢 Flash Encryption (closes the auth-token-at-rest gap)
+1. ~~🔴 OTA trigger had no authentication~~ ✅ Closed
+2. ~~🔴 OTA hash/signature verification~~ ✅ Closed — app-level SHA-256, verified before the image can be marked bootable
+3. ~~🟠 OTA TLS server verification~~ ✅ Closed — `esp_crt_bundle_attach`, not pinning (pinning to one cert is optional future hardening)
+4. ~~🔴 Gateway leaking live broker credential to unauthenticated callers~~ ✅ Closed
+5. ~~🟠 Auth on the local HTTP/Tasmota API~~ ✅ Closed
+6. ~~🟡 Confirm live broker-config delivery path (Firebase client dead code question)~~ ✅ Closed — wired up, no compile-time broker credential remains
+7. ~~🟡 Fix multi-gang/non-relay no-op in group bulk control~~ ✅ Closed
+8. 🟡 Decide on secure storage for any sensitive local app data
+9. 🟡 Rate limiting / write-cap protection on gateway `registerDevice`
+10. 🟢 Secure Boot v2 + Flash Encryption ("Phase 2" — hardware-rooted trust chain and the auth-token-at-rest gap; deliberately not bundled with the app-level OTA fixes above since enabling it burns an eFuse permanently per device and needs its own hands-on hardware rollout, tested on a spare unit first — see `PRE_PRODUCTION_GUIDE.md` §4 for the exact config)
