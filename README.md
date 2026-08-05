@@ -211,21 +211,25 @@ IoT-Project/
 │       ├── contact_sensor/          # Reed switch contact sensor
 │       └── thermostat/              # HVAC controller
 │
-├── cloudflare_gateway/               ← Device-config gateway (Cloudflare Workers + KV)
+├── cloudflare_gateway/               ← Device-config + firmware-publish gateway (Workers + KV)
 │   ├── wrangler.toml                # Worker name, entry point, DSGV_KV binding
 │   ├── package.json                 # zero runtime dependencies
 │   ├── SETUP_GUIDE.md               # Full deploy walkthrough (CLI + dashboard)
+│   ├── FIRMWARE_PUBLISHING_GUIDE.md # Build .bin → publish, start to finish, no dev tools needed
+│   ├── admin/
+│   │   └── publish.html             # Self-contained firmware-publish page (open, no hosting)
 │   └── src/
 │       ├── index.js                 # Router: registerDevice, getDeviceConfig,
-│       │                            #   updateDeviceConfig, revertDeviceToFactory
+│       │                            #   updateDeviceConfig, revertDeviceToFactory,
+│       │                            #   publishFirmware, getFirmwareManifest, /firmware/{type}
 │       ├── store.js                 # Workers KV read/write wrapper
 │       └── safeEqual.js             # Constant-time auth_token comparison
 │
 ├── IoT_APP_Design/                  ← Architecture whitepaper + engineering review docs
 │   ├── IoT_Architecture_Whitepaper.md
-│   ├── Critical_Review.md           # Principal-engineer pass over architecture + in-flight changes
 │   ├── Security_Review.md           # Static security review (firmware, app, cloud gateway)
-│   └── Production_Readiness_GoNoGo.md # Go/No-Go checklist ahead of shipping
+│   ├── Production_Readiness_GoNoGo.md # Go/No-Go checklist ahead of shipping
+│   └── OTA_Update_Design.md         # OTA architecture, security model, release workflow
 │
 ├── FLASHING_GUIDE.md               ← Wiring diagrams + flash commands for every device type
 ├── QUICKSTART_GUIDE.md             ← 5-minute setup for experienced developers
@@ -807,9 +811,9 @@ Use [MQTT Explorer](https://mqtt-explorer.com) (free desktop app) to:
 | `wifi_manager.c` | Wi-Fi connection, AP mode, credential storage | Adding connection modes |
 | `FLASHING_GUIDE.md` | Wiring + flash commands per device type | Reference only |
 | `PRE_PRODUCTION_GUIDE.md` | Production readiness checklist | Before shipping hardware |
-| `IoT_APP_Design/Critical_Review.md` | Principal-engineer review of architecture + in-flight changes | Reference — predates the Cloudflare migration, historical context only |
-| `IoT_APP_Design/Security_Review.md` | Static security review across firmware/app/gateway | Reference — before a security-sensitive release |
+| `IoT_APP_Design/Security_Review.md` | Static security review across firmware/app/gateway, kept current | Reference — before a security-sensitive release |
 | `IoT_APP_Design/Production_Readiness_GoNoGo.md` | Go/No-Go checklist, updated per release candidate | Before shipping hardware |
+| `IoT_APP_Design/OTA_Update_Design.md` | OTA architecture, security model, release workflow, design lessons | Reference — before extending OTA or similar remote-command features |
 | `TEST_CHECKLIST.md` | Hardware + app test checklist for all features | Before every release |
 
 ---
@@ -863,13 +867,14 @@ Worker now. See [§5](#5-part-a--cloudflare-gateway-setup) and
 
 ### Engineering Review Docs
 
-`IoT_APP_Design/` includes three review documents worth reading before a
-production release: `Critical_Review.md` and `Security_Review.md` (both
-predate the Cloudflare migration above — read for historical architecture
-context, not as a description of the current gateway), and
-`Production_Readiness_GoNoGo.md` (release checklist, currently **No-Go**
-pending the items those reviews raised, principally around firmware OTA/Secure
-Boot — unrelated to the gateway change).
+`IoT_APP_Design/` includes three documents worth reading before a production
+release, all kept current (not historical snapshots): `Security_Review.md`
+(static security review across firmware/app/gateway), `OTA_Update_Design.md`
+(OTA architecture, security model, and the firmware-publish workflow), and
+`Production_Readiness_GoNoGo.md` (release checklist — currently **No-Go**,
+but down to a single remaining item: Secure Boot v2 + Flash Encryption. The
+OTA-specific gaps that used to block this — unauthenticated trigger,
+unverified hash, unverified TLS — are closed).
 
 ---
 

@@ -36,7 +36,7 @@ All topics use the device's Wi-Fi MAC address as `{id}` (12 uppercase hex chars,
 | `devices/{id}/status` | Device → Broker | Yes | `"online"` on connect; `"offline"` via LWT when connection drops. |
 | `devices/{id}/telemetry` | Device → Broker | No | Full state snapshot after any change, and every 30 s. |
 | `devices/{id}/command` | App → Device | No | Control commands. Device acts immediately on receipt. |
-| `devices/{id}/ota-trigger` | App → Device | No | OTA firmware update trigger. |
+| `devices/{id}/ota-trigger` | App → Device | No | Authenticated OTA firmware update trigger — requires `auth_token`; also requires a `hash` (SHA-256) verified before the image can boot. See `IoT_APP_Design/OTA_Update_Design.md`. |
 | `devices/{id}/config` | App → Device | No | Authenticated broker reconfiguration. |
 
 ### Announce payload (published retained on every MQTT connect)
@@ -414,12 +414,17 @@ VSCode task is at [devices/1gang_switch/.vscode/tasks.json](dsgv_firmware/device
 
 ## Production Checklist
 
-Before shipping:
+This list used to track pre-ship broker/TLS/credential setup items — all of
+them are done (private HiveMQ Cloud broker with TLS, `mqtt_service.dart`'s
+`onBadCertificate` correctly rejects bad certs, the gateway URL is real and
+no longer a placeholder). The one still-genuinely-open production item is
+Secure Boot v2 + Flash Encryption — tracked in
+`IoT_APP_Design/Production_Readiness_GoNoGo.md`, which is the canonical
+current Go/No-Go status; check that doc rather than this list going forward.
 
-- [ ] Replace `broker.hivemq.com` with a private authenticated broker in `dsgv_config.h` (`MQTT_CLOUD_HOST`, `MQTT_CLOUD_PORT`, `MQTT_CLOUD_TLS`)
-- [ ] Mirror the same broker in `mqtt_config.dart` (`factoryDefault`)
-- [ ] Set `MQTT_CLOUD_TLS = true` and provision TLS CA certificate
-- [ ] Set a strong, unique `auth_token` seed per device (used to authenticate broker-config changes)
-- [ ] Remove `onBadCertificate` callback in `mqtt_service.dart` (currently accepts all certs)
-- [ ] Replace `YOUR_PROJECT_ID` in `dsgv_config.h` `FIREBASE_GET_CONFIG_URL`
-- [ ] Set correct `IDF_TARGET` per hardware revision in each device `CMakeLists.txt`
+One standing (not one-time) practice worth remembering: each device's
+`devices/<name>/CMakeLists.txt` must target the chip that device's hardware
+actually is — most are chosen via `-DIDF_TARGET=...` at build time, but at
+least one (`1gang_switch`) hardcodes it because its board doesn't match the
+usual default. Double-check before a first flash of any new hardware
+revision.
