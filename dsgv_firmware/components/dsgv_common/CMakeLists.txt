@@ -65,6 +65,10 @@ idf_component_register(
         # ADC driver (NTC thermistor temperature sensing)
         esp_adc
 
+        # SoC internal temperature sensor (driver/temperature_sensor.h),
+        # used in dsgv_gpio.c under #if SOC_TEMP_SENSOR_SUPPORTED
+        esp_driver_tsens
+
         # Bluetooth host stack (NimBLE — BLE provisioning GATT server)
         bt
 

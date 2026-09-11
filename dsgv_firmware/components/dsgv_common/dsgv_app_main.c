@@ -21,6 +21,8 @@
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
+// Declares esp_netif_create_default_wifi_sta(); not pulled in by esp_netif.h.
+#include "esp_wifi_default.h"
 #include "esp_app_desc.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -98,7 +100,5 @@ void dsgv_app_main(void)
              g_device_config.capabilities,
              g_device_config.relay_count);
     ESP_LOGI(TAG, "HTTP server: port %d", HTTP_SERVER_PORT);
-    ESP_LOGI(TAG, "MQTT broker: %s:%d (TLS) → %s:%d (fallback)",
-             MQTT_CLOUD_HOST, MQTT_CLOUD_PORT,
-             MQTT_LOCAL_HOST, MQTT_LOCAL_PORT);
+    ESP_LOGI(TAG, "MQTT broker: %s:%d (TLS)", MQTT_CLOUD_HOST, MQTT_CLOUD_PORT);
 }
