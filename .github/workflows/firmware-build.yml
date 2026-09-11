@@ -49,6 +49,21 @@ jobs:
       - name: Validate device catalogue
         run: python3 dsgv_firmware/tools/validate_catalog.py
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # The flasher's pure logic — frame encoding and pin validation — is
+      # testable without a browser or a board. The Web Serial and esptool
+      # layers are not, and are verified by hand against hardware.
+      - name: Web flasher unit tests
+        run: node --test webflasher/test/frame.test.mjs webflasher/test/config.test.mjs
+
+      # The JS framing has to agree with the Python tool byte for byte, since
+      # both talk to the same firmware parser.
+      - name: Cross-check JS and Python framing
+        run: python3 webflasher/test/cross_check_frames.py
+
   # ── Per-SKU regression ─────────────────────────────────────────────────────
   # One target is enough here: these differ only in Kconfig string values, so
   # this catches a malformed capabilities array or an out-of-range relay count.
