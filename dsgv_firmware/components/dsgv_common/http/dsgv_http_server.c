@@ -401,15 +401,18 @@ static void apply_capability(const char *capability, cJSON *value) {
         }
     } else if (strcmp(capability, "red") == 0 && cJSON_IsNumber(value)) {
         int v = (int)value->valuedouble;
-        if (v < 0) v = 0; if (v > 255) v = 255;
+        if (v < 0)   v = 0;
+        if (v > 255) v = 255;
         g_device_state.rgb_r = (uint8_t)v;
     } else if (strcmp(capability, "green") == 0 && cJSON_IsNumber(value)) {
         int v = (int)value->valuedouble;
-        if (v < 0) v = 0; if (v > 255) v = 255;
+        if (v < 0)   v = 0;
+        if (v > 255) v = 255;
         g_device_state.rgb_g = (uint8_t)v;
     } else if (strcmp(capability, "blue") == 0 && cJSON_IsNumber(value)) {
         int v = (int)value->valuedouble;
-        if (v < 0) v = 0; if (v > 255) v = 255;
+        if (v < 0)   v = 0;
+        if (v > 255) v = 255;
         g_device_state.rgb_b = (uint8_t)v;
     } else {
         ESP_LOGW(TAG, "Unknown capability: %s", capability);

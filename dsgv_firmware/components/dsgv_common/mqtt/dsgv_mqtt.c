@@ -455,17 +455,20 @@ static void handle_command(const char *payload, int len) {
     j = cJSON_GetObjectItemCaseSensitive(root, "red");
     if (cJSON_IsNumber(j)) {
         v_red = (int)j->valuedouble;
-        if (v_red < 0) v_red = 0; if (v_red > 255) v_red = 255;
+        if (v_red < 0)   v_red = 0;
+        if (v_red > 255) v_red = 255;
     }
     j = cJSON_GetObjectItemCaseSensitive(root, "green");
     if (cJSON_IsNumber(j)) {
         v_green = (int)j->valuedouble;
-        if (v_green < 0) v_green = 0; if (v_green > 255) v_green = 255;
+        if (v_green < 0)   v_green = 0;
+        if (v_green > 255) v_green = 255;
     }
     j = cJSON_GetObjectItemCaseSensitive(root, "blue");
     if (cJSON_IsNumber(j)) {
         v_blue = (int)j->valuedouble;
-        if (v_blue < 0) v_blue = 0; if (v_blue > 255) v_blue = 255;
+        if (v_blue < 0)   v_blue = 0;
+        if (v_blue > 255) v_blue = 255;
     }
 
     cJSON_Delete(root);  // free before entering the lock
