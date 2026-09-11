@@ -68,8 +68,11 @@ static const ble_uuid128_t s_status_uuid = BLE_UUID128_INIT(
 );
 
 // ── Forward declarations ──────────────────────────────────────────────────────
-// do_advertise() and gap_event_cb() call each other; one must be forward-declared.
+// do_advertise() and gap_event_cb() are mutually recursive: do_advertise()
+// passes gap_event_cb to ble_gap_adv_start(), and gap_event_cb() calls
+// do_advertise() again on disconnect/adv-complete. Both need declaring.
 static void do_advertise(void);
+static int  gap_event_cb(struct ble_gap_event *event, void *arg);
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
