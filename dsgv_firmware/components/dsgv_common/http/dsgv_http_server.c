@@ -183,8 +183,16 @@ static esp_err_t handle_provision_post(httpd_req_t *req) {
         }
         if (cJSON_IsNumber(j_relay)) {
             int rc = (int)j_relay->valuedouble;
-            if (rc >= 1 && rc <= DSGV_MAX_RELAY_COUNT) {
+            // 0 is valid and necessary: the temp, motion and contact sensors
+            // and the thermostat all ship with relay_count = 0. Requiring
+            // rc >= 1 here silently ignored the field for every sensor SKU,
+            // so WiFi AP provisioning could not configure a third of the
+            // catalogue. The BLE path already accepted 0.
+            if (rc >= 0 && rc <= DSGV_MAX_RELAY_COUNT) {
                 cfg.relay_count = (uint8_t)rc;
+            } else {
+                ESP_LOGW(TAG, "provision: relay_count=%d out of range 0-%d, ignored",
+                         rc, DSGV_MAX_RELAY_COUNT);
             }
         }
         DSGV_device_config_save(&cfg);

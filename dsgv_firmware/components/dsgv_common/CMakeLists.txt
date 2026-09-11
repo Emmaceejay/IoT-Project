@@ -9,6 +9,9 @@ idf_component_register(
         # GPIO abstraction (relay outputs, LEDC PWM, sensor inputs)
         "gpio/dsgv_gpio.c"
 
+        # Per-chip GPIO capability rules (which pins are usable, and for what)
+        "gpio/dsgv_pin_rules.c"
+
         # Local HTTP REST server — Tasmota-compatible, same-LAN direct control
         "http/dsgv_http_server.c"
 

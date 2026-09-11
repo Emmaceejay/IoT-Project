@@ -12,6 +12,7 @@
  */
 
 #include "dsgv_device_config.h"
+#include "dsgv_pin_rules.h"
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "esp_log.h"
@@ -110,19 +111,35 @@ esp_err_t DSGV_device_config_load(void) {
 
         nvs_close(nvs);
 
-        // Guard against corrupt NVS blobs delivering out-of-range pin numbers.
-        // gpio_config() and ledc_channel_config() will hard-fault on invalid GPIOs.
-        for (int i = 0; i < (int)g_device_config.relay_count; i++) {
-            if ((int)g_device_config.relay_pins[i] < 0 ||
-                (int)g_device_config.relay_pins[i] >= GPIO_NUM_MAX) {
-                ESP_LOGW(TAG, "relay_pins[%d]=%d invalid — using compile-time default",
-                         i, (int)g_device_config.relay_pins[i]);
+        // Guard against corrupt or mistyped pin numbers arriving from NVS.
+        // DSGV_pin_check() is chip-aware: the old flat "0 <= pin < GPIO_NUM_MAX"
+        // test accepted the SPI flash pins (which hang the chip on the next
+        // flash access) and ESP32's input-only 34-39 as relay outputs (which
+        // silently never actuate).
+        //
+        // Validate the whole relay_pins array, not just the first relay_count
+        // entries: a later config that raises relay_count without rewriting the
+        // blob would otherwise promote unvalidated garbage into use.
+        for (int i = 0; i < DSGV_MAX_RELAY_COUNT; i++) {
+            DSGV_pin_status_t st =
+                DSGV_pin_check(g_device_config.relay_pins[i], /*need_output=*/true);
+            if (st != DSGV_PIN_OK && st != DSGV_PIN_DISABLED) {
+                ESP_LOGW(TAG, "relay_pins[%d]=%d rejected (%s) — reverting to default %d",
+                         i, (int)g_device_config.relay_pins[i],
+                         DSGV_pin_status_str(st), (int)default_relay_pins[i]);
                 g_device_config.relay_pins[i] = default_relay_pins[i];
             }
         }
+
+        // PWM pins are outputs. GPIO_NUM_NC (-1) is preserved rather than
+        // overwritten: the header documents it as "feature not fitted", and the
+        // old guard silently replaced it with the default, making it impossible
+        // to actually disable a channel.
 #define _GUARD_PIN(pin, def) do { \
-    if ((int)(pin) < 0 || (int)(pin) >= GPIO_NUM_MAX) { \
-        ESP_LOGW(TAG, #pin "=%d invalid — using compile-time default", (int)(pin)); \
+    DSGV_pin_status_t _st = DSGV_pin_check((pin), /*need_output=*/true); \
+    if (_st != DSGV_PIN_OK && _st != DSGV_PIN_DISABLED) { \
+        ESP_LOGW(TAG, #pin "=%d rejected (%s) — reverting to default %d", \
+                 (int)(pin), DSGV_pin_status_str(_st), (int)(def)); \
         (pin) = (def); \
     } \
 } while (0)
