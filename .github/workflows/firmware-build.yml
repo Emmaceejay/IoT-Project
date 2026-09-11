@@ -159,9 +159,13 @@ jobs:
           cp "$BUILD/ota_data_initial.bin"                  "$OUT/"
           cp "$BUILD/dsgv_universal.bin"                    "$OUT/"
 
+          # The prefix matters: every target emits bootloader.bin and
+          # dsgv_universal.bin, so without per-chip paths the four builds
+          # collide when published together.
           python3 dsgv_firmware/tools/gen_manifest.py \
             --build-dir "$BUILD" \
             --chip ${{ matrix.target }} \
+            --path-prefix "${{ matrix.target }}/" \
             --out "$OUT/build-${{ matrix.target }}.json"
 
           echo "── staged ──"
@@ -337,3 +341,97 @@ jobs:
           name: manifest
           if-no-files-found: error
           path: manifest.json
+
+  # ── Publish the flasher ────────────────────────────────────────────────────
+  # Assembles the static site and deploys it to GitHub Pages, so the flasher is
+  # reachable at a URL rather than only runnable from a local checkout.
+  #
+  # The site mirrors the repository layout on purpose: catalog/ sits beside
+  # webflasher/, so the relative paths in app.js work identically whether you
+  # are serving the repo locally or hitting the deployed URL. Rewriting paths
+  # at deploy time would mean the thing that ships is not the thing that was
+  # tested.
+  pages:
+    name: deploy flasher
+    needs: [catalog, universal, manifest]
+    # Only from the default branch: a feature branch overwriting the public
+    # flasher would be a surprising side effect of pushing a work in progress.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: universal-*
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: manifest
+          path: dist/manifest
+
+      - name: Assemble site
+        run: |
+          set -euo pipefail
+          mkdir -p _site/webflasher/firmware
+
+          cp -r webflasher/index.html webflasher/app.js webflasher/lib _site/webflasher/
+          cp -r catalog _site/catalog
+
+          # Firmware under per-chip directories, matching the path prefix baked
+          # into each manifest entry.
+          for d in dist/universal-*; do
+            target="${d##*universal-}"
+            mkdir -p "_site/webflasher/firmware/$target"
+            cp "$d"/*.bin "_site/webflasher/firmware/$target/"
+          done
+          cp dist/manifest/manifest.json _site/webflasher/firmware/
+
+          # Bare-URL convenience.
+          cat > _site/index.html <<'HTML'
+          <!doctype html>
+          <meta charset="utf-8">
+          <title>DSGV</title>
+          <meta http-equiv="refresh" content="0; url=./webflasher/">
+          <p><a href="./webflasher/">DSGV Device Flasher</a></p>
+          HTML
+
+          echo "── site ──"
+          find _site -type f | sort
+
+      # Every path the manifest names must exist in the assembled site. A
+      # missing binary would otherwise surface as a 404 partway through a
+      # flash, with the board already erased.
+      - name: Verify manifest paths resolve
+        run: |
+          python3 - <<'PY'
+          import json, sys
+          from pathlib import Path
+          root = Path("_site/webflasher/firmware")
+          manifest = json.loads((root / "manifest.json").read_text())
+          missing = []
+          for build in manifest["builds"]:
+              for part in build["parts"]:
+                  if not (root / part["path"]).is_file():
+                      missing.append(f"{build['chipFamily']}: {part['path']}")
+          for m in missing:
+              print(f"MISSING {m}", file=sys.stderr)
+          if missing:
+              sys.exit(f"{len(missing)} manifest path(s) not present in the site")
+          n = sum(len(b["parts"]) for b in manifest["builds"])
+          print(f"all {n} parts across {len(manifest['builds'])} chip families resolve")
+          PY
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deploy
+        uses: actions/deploy-pages@v4

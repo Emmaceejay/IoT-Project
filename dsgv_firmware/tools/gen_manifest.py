@@ -71,7 +71,7 @@ def parse_flash_args(build_dir: Path):
     return parts
 
 
-def build_entry(build_dir: Path, chip: str):
+def build_entry(build_dir: Path, chip: str, path_prefix: str = ""):
     family = CHIP_FAMILY.get(chip)
     if not family:
         sys.exit(f"unknown chip '{chip}'; known: {', '.join(sorted(CHIP_FAMILY))}")
@@ -81,8 +81,12 @@ def build_entry(build_dir: Path, chip: str):
         src = build_dir / filename
         if not src.is_file():
             sys.exit(f"flash_args names {filename} but it is missing from {build_dir}")
-        # Flatten: bootloader/bootloader.bin is published beside the others.
-        parts.append({"path": Path(filename).name, "offset": offset})
+        # Flattened to a basename, then prefixed per chip. Every target emits
+        # files with the same names — bootloader.bin, dsgv_universal.bin — so
+        # without a prefix the four builds overwrite each other and the
+        # manifest silently points every chip at whichever was published last.
+        parts.append({"path": f"{path_prefix}{Path(filename).name}",
+                      "offset": offset})
 
     return {"chipFamily": family, "parts": parts}
 
@@ -92,6 +96,8 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--build-dir", type=Path)
     ap.add_argument("--chip")
+    ap.add_argument("--path-prefix", default="",
+                    help="prepended to each part path, e.g. 'esp32c3/'")
     ap.add_argument("--merge", nargs="*", type=Path,
                     help="per-chip build entry files to combine")
     ap.add_argument("--name", default="DSGV Universal Firmware")
@@ -121,7 +127,7 @@ def main() -> int:
     if not args.build_dir or not args.chip:
         ap.error("--build-dir and --chip are required unless --merge is used")
 
-    entry = build_entry(args.build_dir, args.chip)
+    entry = build_entry(args.build_dir, args.chip, args.path_prefix)
     args.out.write_text(json.dumps(entry, indent=2) + "\n")
     print(f"{args.out}: {entry['chipFamily']} — " +
           ", ".join(f"{p['path']}@{p['offset']:#x}" for p in entry["parts"]))

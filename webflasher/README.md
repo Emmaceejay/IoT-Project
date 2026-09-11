@@ -29,33 +29,49 @@ up as a warning rather than as a board that quietly does the wrong thing.
 
 ## Running it
 
-It is a static site — no build step. Serve the repository root so that
-`catalog/` and `webflasher/` are both reachable:
+A static site — no build step, no bundler.
+
+### Hosted
+
+Pushes to `main` publish the site to GitHub Pages automatically. The deploy
+job assembles `catalog/`, the flasher, and the firmware for all four chips,
+then checks that every path named in the manifest actually exists before
+publishing — a missing binary would otherwise appear as a 404 partway through
+a flash, with the board already erased.
+
+This needs Pages enabled once, by hand: **Settings → Pages → Source →
+GitHub Actions**. Until that is done the deploy job fails with a permissions
+error; nothing else in the workflow is affected.
+
+### Locally
+
+Serve the repository root so `catalog/` and `webflasher/` are both reachable:
 
 ```bash
 python3 -m http.server 8000
-# then open http://localhost:8000/webflasher/
+# http://localhost:8000/webflasher/
 ```
 
-Web Serial requires a secure context, which `localhost` counts as. Any other
-host needs HTTPS.
+Web Serial needs a secure context, which `localhost` satisfies. Any other host
+needs HTTPS.
 
-`webflasher/firmware/manifest.json` and the `.bin` files beside it are not in
-the repository. Download them from the `universal-*` and `manifest` artifacts
-of a green **Firmware Build** run and unpack them there:
+Local runs have no firmware — the binaries are build artifacts, not
+repository contents. Download the `universal-*` and `manifest` artifacts from
+a green **Firmware Build** run and unpack them to match the manifest's
+per-chip paths:
 
 ```
 webflasher/firmware/
 ├── manifest.json
-├── bootloader.bin
-├── partition-table.bin
-├── ota_data_initial.bin
-└── dsgv_universal.bin
+├── esp32/{bootloader,partition-table,ota_data_initial,dsgv_universal}.bin
+├── esp32c3/…
+├── esp32s3/…
+└── esp32c6/…
 ```
 
-Note that a single flat directory only works for one chip at a time, since the
-four builds use the same filenames. For a real deployment, publish each chip's
-binaries under its own path and adjust the `path` values in the manifest.
+The per-chip directories are not cosmetic: every target emits files with the
+same names, so a flat layout silently leaves all four chips pointing at
+whichever was copied last.
 
 ## Browser support
 
