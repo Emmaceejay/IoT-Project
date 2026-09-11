@@ -209,14 +209,21 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Cache toolchain and SDK
+      # Restore and save are split deliberately. actions/cache runs its save in
+      # a post-step that executes even when the job fails, so a half-finished
+      # install gets cached and every later run silently builds against it.
+      # That already happened once here: run #21 failed partway through the
+      # SDK clone, cached the wreckage, and run #22 went green without ever
+      # running the fixed install step. Saving only on success is what makes a
+      # green run mean what it claims.
+      - name: Restore toolchain and SDK
         id: cache-8266
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/esp8266/xtensa-lx106-elf
             ~/esp8266/ESP8266_RTOS_SDK
-          key: esp8266-sdk-v3.4-gcc8.4.0-v1
+          key: esp8266-sdk-v3.4-gcc8.4.0-v2
 
       - name: Install toolchain and SDK
         if: steps.cache-8266.outputs.cache-hit != 'true'
@@ -257,12 +264,27 @@ jobs:
           export IDF_PATH=~/esp8266/ESP8266_RTOS_SDK
           export PATH=~/esp8266/xtensa-lx106-elf/bin:$PATH
 
+          echo "cache hit: ${{ steps.cache-8266.outputs.cache-hit }}"
+          xtensa-lx106-elf-gcc --version | head -1
+          git -C "$IDF_PATH" describe --tags --always
+
           cd dsgv_firmware_esp8266
           make defconfig
           make -j"$(nproc)"
 
           echo "── build output ──"
           ls -l build/*.bin
+
+      # Only reached when the build passed, so the cache can only ever hold a
+      # toolchain and SDK that are known to work.
+      - name: Save toolchain and SDK
+        if: steps.cache-8266.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/esp8266/xtensa-lx106-elf
+            ~/esp8266/ESP8266_RTOS_SDK
+          key: esp8266-sdk-v3.4-gcc8.4.0-v2
 
       - name: Report image size against the OTA slot
         run: |
