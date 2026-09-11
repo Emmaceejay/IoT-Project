@@ -14,6 +14,7 @@
 #include "dsgv_provisioning.h"
 #include "dsgv_config.h"
 #include "dsgv_device_config.h"
+#include "dsgv_config_json.h"
 #include "wifi_manager.h"
 
 #include "esp_log.h"
@@ -133,39 +134,13 @@ static int credential_write_cb(uint16_t conn_handle, uint16_t attr_handle,
     ESP_LOGI(TAG, "Received credentials for SSID: %s", ssid->valuestring);
 
     // ── Optional device config fields ────────────────────────────────────────
-    // The app may include device_type, capabilities (JSON array), and
-    // relay_count to configure this unit for its hardware SKU at first boot.
-    const cJSON *dev_type    = cJSON_GetObjectItemCaseSensitive(root, "device_type");
-    const cJSON *caps_item   = cJSON_GetObjectItemCaseSensitive(root, "capabilities");
-    const cJSON *relay_count = cJSON_GetObjectItemCaseSensitive(root, "relay_count");
-
-    bool has_device_config = cJSON_IsString(dev_type) ||
-                             cJSON_IsArray(caps_item)  ||
-                             cJSON_IsNumber(relay_count);
-
-    if (has_device_config) {
-        DSGV_device_config_t cfg = g_device_config; // start from current/defaults
-
-        if (cJSON_IsString(dev_type) && dev_type->valuestring) {
-            strlcpy(cfg.device_type, dev_type->valuestring, sizeof(cfg.device_type));
-        }
-
-        if (cJSON_IsArray(caps_item)) {
-            // Re-serialize the JSON array to the flat string format we store
-            char *caps_str = cJSON_PrintUnformatted(caps_item);
-            if (caps_str) {
-                strlcpy(cfg.capabilities, caps_str, sizeof(cfg.capabilities));
-                cJSON_free(caps_str);
-            }
-        }
-
-        if (cJSON_IsNumber(relay_count)) {
-            int cnt = (int)relay_count->valuedouble;
-            if (cnt >= 0 && cnt <= DSGV_MAX_RELAY_COUNT) {
-                cfg.relay_count = (uint8_t)cnt;
-            }
-        }
-
+    // The app may include device_type, capabilities, relay_count and a "pins"
+    // object to configure this unit for its hardware at first boot. Parsing is
+    // shared with the HTTP transport (DSGV_config_apply_json) so the two
+    // cannot diverge — they previously had separate copies and disagreed on
+    // whether relay_count = 0 was legal.
+    DSGV_device_config_t cfg = g_device_config; // start from current/defaults
+    if (DSGV_config_apply_json(&cfg, root)) {
         esp_err_t cfg_err = DSGV_device_config_save(&cfg);
         if (cfg_err != ESP_OK) {
             ESP_LOGW(TAG, "Device config save failed — continuing with defaults");

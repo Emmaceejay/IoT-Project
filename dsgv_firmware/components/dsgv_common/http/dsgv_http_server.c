@@ -8,7 +8,8 @@
  *
  * AP provisioning mode (first-boot, no home WiFi credentials):
  *   GET  /provision/ping → {"status":"ok"} — app polls to detect AP connection
- *   POST /provision      → {ssid, password, [device_type, capabilities, relay_count]}
+ *   POST /provision      → {ssid, password, [device_type, capabilities,
+ *                           relay_count, pins{}]}  — see dsgv_config_json.h
  *                          responds {"status":"ok","auth_token":"...","device_id":"..."}
  *                          then reboots the device to connect to home WiFi
  *
@@ -20,6 +21,7 @@
 #include "dsgv_http_server.h"
 #include "dsgv_config.h"
 #include "dsgv_device_config.h"
+#include "dsgv_config_json.h"
 #include "dsgv_device_state.h"
 #include "wifi_manager.h"
 #include "esp_http_server.h"
@@ -164,37 +166,10 @@ static esp_err_t handle_provision_post(httpd_req_t *req) {
 
     wifi_manager_save_credentials(j_ssid->valuestring, j_pass->valuestring);
 
-    // Apply optional device config fields if provided
-    cJSON *j_type  = cJSON_GetObjectItemCaseSensitive(root, "device_type");
-    cJSON *j_caps  = cJSON_GetObjectItemCaseSensitive(root, "capabilities");
-    cJSON *j_relay = cJSON_GetObjectItemCaseSensitive(root, "relay_count");
-
-    if (cJSON_IsString(j_type) || cJSON_IsArray(j_caps) || cJSON_IsNumber(j_relay)) {
-        DSGV_device_config_t cfg = g_device_config;
-        if (cJSON_IsString(j_type)) {
-            strlcpy(cfg.device_type, j_type->valuestring, sizeof(cfg.device_type));
-        }
-        if (cJSON_IsArray(j_caps)) {
-            char *caps_str = cJSON_PrintUnformatted(j_caps);
-            if (caps_str) {
-                strlcpy(cfg.capabilities, caps_str, sizeof(cfg.capabilities));
-                free(caps_str);
-            }
-        }
-        if (cJSON_IsNumber(j_relay)) {
-            int rc = (int)j_relay->valuedouble;
-            // 0 is valid and necessary: the temp, motion and contact sensors
-            // and the thermostat all ship with relay_count = 0. Requiring
-            // rc >= 1 here silently ignored the field for every sensor SKU,
-            // so WiFi AP provisioning could not configure a third of the
-            // catalogue. The BLE path already accepted 0.
-            if (rc >= 0 && rc <= DSGV_MAX_RELAY_COUNT) {
-                cfg.relay_count = (uint8_t)rc;
-            } else {
-                ESP_LOGW(TAG, "provision: relay_count=%d out of range 0-%d, ignored",
-                         rc, DSGV_MAX_RELAY_COUNT);
-            }
-        }
+    // Apply optional device config fields (identity, capabilities, pin map).
+    // Shared with the BLE transport so the two cannot diverge again.
+    DSGV_device_config_t cfg = g_device_config;
+    if (DSGV_config_apply_json(&cfg, root)) {
         DSGV_device_config_save(&cfg);
     }
 

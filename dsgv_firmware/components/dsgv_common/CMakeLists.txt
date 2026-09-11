@@ -6,6 +6,9 @@ idf_component_register(
         # NVS-backed device configuration (identity, capabilities, relay count)
         "config/dsgv_device_config.c"
 
+        # Shared JSON -> device config mapping (BLE, HTTP, and later serial)
+        "config/dsgv_config_json.c"
+
         # GPIO abstraction (relay outputs, LEDC PWM, sensor inputs)
         "gpio/dsgv_gpio.c"
 
