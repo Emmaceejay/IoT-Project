@@ -1,0 +1,172 @@
+{
+  "version": 1,
+  "_note": [
+    "Device catalogue for the DSGV web flasher.",
+    "",
+    "Adding a device here is the whole job — no firmware change, no rebuild.",
+    "The universal binary receives device_type, capabilities, relay_count and",
+    "a pin map at provisioning time, so a new entry is new data, not new code.",
+    "",
+    "Each pin_roles entry tells the UI which selector to render and how to",
+    "validate it against catalog/chips.json:",
+    "  role      matches the key the firmware expects in the provisioning",
+    "            'pins' object (see dsgv_config_json.h)",
+    "  index     present for per-gang roles (relay, switch); omitted otherwise",
+    "  direction output | input | adc — picks which chip pin list applies",
+    "  required  false means the user may leave it unfitted (-1)"
+  ],
+
+  "pin_role_defaults": {
+    "status_led": { "label": "Status LED", "direction": "output", "required": false },
+    "button":     { "label": "Reset button", "direction": "input",  "required": false }
+  },
+
+  "devices": [
+    {
+      "id": "1gang_switch",
+      "name": "1-Gang Switch",
+      "description": "One relay output, optionally driven by a latching wall switch.",
+      "device_type": "Switch",
+      "capabilities": ["relay"],
+      "relay_count": 1,
+      "pin_roles": [
+        { "role": "relay",  "index": 0, "label": "Relay 1",      "direction": "output", "required": true },
+        { "role": "switch", "index": 0, "label": "Wall switch 1", "direction": "input",  "required": false }
+      ]
+    },
+    {
+      "id": "2gang_switch",
+      "name": "2-Gang Switch",
+      "description": "Two independent relay outputs.",
+      "device_type": "Switch",
+      "capabilities": ["relay", "relay_2"],
+      "relay_count": 2,
+      "pin_roles": [
+        { "role": "relay",  "index": 0, "label": "Relay 1",      "direction": "output", "required": true },
+        { "role": "relay",  "index": 1, "label": "Relay 2",      "direction": "output", "required": true },
+        { "role": "switch", "index": 0, "label": "Wall switch 1", "direction": "input",  "required": false },
+        { "role": "switch", "index": 1, "label": "Wall switch 2", "direction": "input",  "required": false }
+      ]
+    },
+    {
+      "id": "3gang_switch",
+      "name": "3-Gang Switch",
+      "description": "Three independent relay outputs.",
+      "device_type": "Switch",
+      "capabilities": ["relay", "relay_2", "relay_3"],
+      "relay_count": 3,
+      "pin_roles": [
+        { "role": "relay",  "index": 0, "label": "Relay 1",      "direction": "output", "required": true },
+        { "role": "relay",  "index": 1, "label": "Relay 2",      "direction": "output", "required": true },
+        { "role": "relay",  "index": 2, "label": "Relay 3",      "direction": "output", "required": true },
+        { "role": "switch", "index": 0, "label": "Wall switch 1", "direction": "input",  "required": false },
+        { "role": "switch", "index": 1, "label": "Wall switch 2", "direction": "input",  "required": false },
+        { "role": "switch", "index": 2, "label": "Wall switch 3", "direction": "input",  "required": false }
+      ]
+    },
+    {
+      "id": "4gang_switch",
+      "name": "4-Gang Switch",
+      "description": "Four independent relay outputs.",
+      "device_type": "Switch",
+      "capabilities": ["relay", "relay_2", "relay_3", "relay_4"],
+      "relay_count": 4,
+      "pin_roles": [
+        { "role": "relay",  "index": 0, "label": "Relay 1",      "direction": "output", "required": true },
+        { "role": "relay",  "index": 1, "label": "Relay 2",      "direction": "output", "required": true },
+        { "role": "relay",  "index": 2, "label": "Relay 3",      "direction": "output", "required": true },
+        { "role": "relay",  "index": 3, "label": "Relay 4",      "direction": "output", "required": true },
+        { "role": "switch", "index": 0, "label": "Wall switch 1", "direction": "input",  "required": false },
+        { "role": "switch", "index": 1, "label": "Wall switch 2", "direction": "input",  "required": false },
+        { "role": "switch", "index": 2, "label": "Wall switch 3", "direction": "input",  "required": false },
+        { "role": "switch", "index": 3, "label": "Wall switch 4", "direction": "input",  "required": false }
+      ]
+    },
+    {
+      "id": "dimmer",
+      "name": "Dimmer",
+      "description": "Relay plus a PWM channel for brightness control.",
+      "device_type": "Dimmer",
+      "capabilities": ["relay", "brightness"],
+      "relay_count": 1,
+      "pin_roles": [
+        { "role": "relay",  "index": 0, "label": "Relay",        "direction": "output", "required": true },
+        { "role": "dimmer",             "label": "Dimmer PWM",   "direction": "output", "required": true },
+        { "role": "switch", "index": 0, "label": "Wall switch",  "direction": "input",  "required": false }
+      ]
+    },
+    {
+      "id": "colour_temp",
+      "name": "Tunable White",
+      "description": "Relay plus warm and cool PWM channels for colour temperature.",
+      "device_type": "Light",
+      "capabilities": ["relay", "brightness", "color_temp"],
+      "relay_count": 1,
+      "pin_roles": [
+        { "role": "relay",  "index": 0, "label": "Relay",       "direction": "output", "required": true },
+        { "role": "dimmer",             "label": "Brightness",  "direction": "output", "required": true },
+        { "role": "warm",               "label": "Warm white",  "direction": "output", "required": true },
+        { "role": "cool",               "label": "Cool white",  "direction": "output", "required": true }
+      ]
+    },
+    {
+      "id": "rgb_light",
+      "name": "RGB Light",
+      "description": "Relay plus three PWM channels for colour mixing.",
+      "device_type": "Light",
+      "capabilities": ["relay", "brightness", "rgb"],
+      "relay_count": 1,
+      "pin_roles": [
+        { "role": "relay",  "index": 0, "label": "Relay",      "direction": "output", "required": true },
+        { "role": "dimmer",             "label": "Brightness", "direction": "output", "required": true },
+        { "role": "red",                "label": "Red",        "direction": "output", "required": true },
+        { "role": "green",              "label": "Green",      "direction": "output", "required": true },
+        { "role": "blue",               "label": "Blue",       "direction": "output", "required": true }
+      ]
+    },
+    {
+      "id": "temp_sensor",
+      "name": "Temperature Sensor",
+      "description": "NTC thermistor on an ADC pin. Reports temperature and humidity.",
+      "device_type": "Sensor",
+      "capabilities": ["temperature", "humidity"],
+      "relay_count": 0,
+      "pin_roles": [
+        { "role": "adc_temp", "label": "Thermistor (ADC)", "direction": "adc", "required": true }
+      ]
+    },
+    {
+      "id": "motion_sensor",
+      "name": "Motion Sensor",
+      "description": "PIR input, active high.",
+      "device_type": "Sensor",
+      "capabilities": ["motion"],
+      "relay_count": 0,
+      "pin_roles": [
+        { "role": "motion", "label": "PIR input", "direction": "input", "required": true }
+      ]
+    },
+    {
+      "id": "contact_sensor",
+      "name": "Contact Sensor",
+      "description": "Reed switch input, active low when closed.",
+      "device_type": "Sensor",
+      "capabilities": ["contact"],
+      "relay_count": 0,
+      "pin_roles": [
+        { "role": "contact", "label": "Reed switch", "direction": "input", "required": true }
+      ]
+    },
+    {
+      "id": "thermostat",
+      "name": "Thermostat",
+      "description": "Temperature sensing with an HVAC mode selector.",
+      "device_type": "Thermostat",
+      "capabilities": ["temperature", "hvac_mode"],
+      "relay_count": 0,
+      "pin_roles": [
+        { "role": "adc_temp", "label": "Thermistor (ADC)", "direction": "adc", "required": true }
+      ]
+    }
+  ]
+}

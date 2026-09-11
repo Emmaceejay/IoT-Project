@@ -27,6 +27,28 @@ env:
   FW_VERSION: 1.0.0
 
 jobs:
+  # ── Catalogue ──────────────────────────────────────────────────────────────
+  # Fast, no toolchain needed, so it gates the expensive jobs. The catalogue is
+  # designed to be extended by editing JSON with no rebuild — which is only
+  # safe if something checks the JSON, since a bad entry does not fail to
+  # compile, it reaches a user's board and misconfigures it.
+  catalog:
+    name: catalog
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # chips.json is generated from the firmware's own pin masks. If someone
+      # edits dsgv_pin_rules.c without regenerating, the UI would offer pins
+      # the firmware rejects — or worse, pins it should reject.
+      - name: Chip tables match firmware pin rules
+        run: |
+          python3 dsgv_firmware/tools/gen_chip_tables.py \
+            --out catalog/chips.json --check
+
+      - name: Validate device catalogue
+        run: python3 dsgv_firmware/tools/validate_catalog.py
+
   # ── Per-SKU regression ─────────────────────────────────────────────────────
   # One target is enough here: these differ only in Kconfig string values, so
   # this catches a malformed capabilities array or an out-of-range relay count.
