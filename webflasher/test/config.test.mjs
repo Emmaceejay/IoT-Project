@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
   checkPin, selectablePins, validateAssignments, buildProvisioningPayload,
-  roleKey, familyFromChipName,
+  roleKey, familyFromChipName, comparePins,
 } from '../lib/config-builder.js';
 
 // Driven by the real catalogue, not fixtures: these tests should fail if the
@@ -173,4 +173,35 @@ test('refuses a known variant we do not support rather than guessing', () => {
   assert.equal(familyFromChipName(chips, 'ESP8266EX'), null);
   assert.equal(familyFromChipName(chips, ''), null);
   assert.equal(familyFromChipName(chips, undefined), null);
+});
+
+test('comparePins reports a pin the device did not accept', () => {
+  // The realistic case: the firmware refused one pin for a reason the
+  // browser's copy of the rules did not predict, and reverted it to a default.
+  const want = { relay: [2, 3], dimmer: 4, status_led: 8 };
+  const got  = { relay: [2, 3], dimmer: 5, status_led: 8 };
+
+  const diffs = comparePins(want, got);
+  assert.equal(diffs.length, 1);
+  assert.match(diffs[0], /dimmer: asked for 4, device has 5/);
+});
+
+test('comparePins is silent when everything applied', () => {
+  const pins = { relay: [2, 3], switch: [9, -1], dimmer: 4 };
+  assert.deepEqual(comparePins(pins, structuredClone(pins)), []);
+});
+
+test('comparePins catches a shifted per-gang array', () => {
+  // The failure this exists for: gang 2 silently taking gang 1's pin.
+  const diffs = comparePins({ relay: [2, 3, 4] }, { relay: [2, 4, 4] });
+  assert.equal(diffs.length, 1);
+  assert.match(diffs[0], /relay\[1\]: asked for 3, device has 4/);
+});
+
+test('comparePins handles a device that reported nothing for a role', () => {
+  const missingScalar = comparePins({ dimmer: 4 }, {});
+  assert.match(missingScalar[0], /device has nothing/);
+
+  const missingArray = comparePins({ relay: [2] }, { relay: undefined });
+  assert.match(missingArray[0], /no per-gang pins/);
 });

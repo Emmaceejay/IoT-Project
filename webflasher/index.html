@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DSGV Device Flasher</title>
+<style>
+  :root {
+    --bg: #0a0e1a; --panel: #121826; --line: #1e3a5f;
+    --ink: #e8eef7; --dim: #8fa3bf; --accent: #00e5ff;
+    --ok: #00e695; --warn: #ffb020; --err: #ff5252;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0 16px; background: var(--bg); color: var(--ink);
+    font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 780px; margin: 0 auto; padding-block: 32px 64px; }
+  h1 { font-size: 1.6rem; margin: 0 0 4px; }
+  h2 { font-size: 1.05rem; margin: 0 0 12px; color: var(--accent); }
+  .sub { color: var(--dim); margin: 0 0 28px; }
+
+  .step {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 12px; padding: 20px; margin-bottom: 16px;
+  }
+  .step[hidden] { display: none !important; }
+  .step.done { border-color: rgba(0,230,149,.4); }
+
+  button {
+    font: inherit; font-weight: 600; cursor: pointer;
+    background: var(--accent); color: #05101c; border: 0;
+    border-radius: 9px; padding: 11px 18px;
+  }
+  button.secondary { background: #1e2a3a; color: var(--accent); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+
+  label { display: block; font-size: .82rem; color: var(--dim); margin-bottom: 5px; }
+  select {
+    font: inherit; width: 100%; background: #0d1420; color: var(--ink);
+    border: 1px solid var(--line); border-radius: 8px; padding: 9px 10px;
+  }
+  select.bad { border-color: var(--err); }
+
+  .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+  .field-note { font-size: .78rem; margin-top: 4px; min-height: 1em; }
+  .field-note.warn { color: var(--warn); }
+
+  .msg { border-radius: 8px; padding: 10px 12px; margin-top: 12px; font-size: .88rem; }
+  .msg.err  { background: rgba(255,82,82,.1);  border: 1px solid rgba(255,82,82,.4); }
+  .msg.warn { background: rgba(255,176,32,.1); border: 1px solid rgba(255,176,32,.4); }
+  .msg.ok   { background: rgba(0,230,149,.1);  border: 1px solid rgba(0,230,149,.4); }
+  .msg ul { margin: 6px 0 0; padding-left: 18px; }
+
+  .chip-badge {
+    display: inline-block; background: #0d1420; border: 1px solid var(--line);
+    border-radius: 999px; padding: 3px 12px; font-size: .82rem; color: var(--accent);
+  }
+
+  progress { width: 100%; height: 8px; margin-top: 12px; }
+  pre#log {
+    background: #060b14; border: 1px solid var(--line); border-radius: 8px;
+    padding: 12px; max-height: 220px; overflow: auto; margin: 12px 0 0;
+    font-size: .78rem; color: var(--dim); white-space: pre-wrap; word-break: break-word;
+  }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .muted { color: var(--dim); font-size: .84rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>DSGV Device Flasher</h1>
+  <p class="sub">Flash and configure an ESP32 over USB. Nothing is installed and nothing is compiled — the firmware is prebuilt and your choices are written to the device as settings.</p>
+
+  <!-- Browser support ----------------------------------------------------- -->
+  <section class="step" id="step-unsupported" hidden>
+    <h2>This browser can't flash</h2>
+    <p id="unsupported-reason" class="muted"></p>
+    <p class="muted">Web Serial is required. Chrome or Edge on desktop is the most reliable; Firefox 151+ also works.</p>
+  </section>
+
+  <!-- 1. Connect ---------------------------------------------------------- -->
+  <section class="step" id="step-connect">
+    <h2>1 &middot; Connect the board</h2>
+    <p class="muted">Plug the board in over USB, then pick its serial port. If the list is empty, the USB-serial driver may be missing.</p>
+    <div class="row" style="margin-top:14px">
+      <button id="btn-connect">Connect</button>
+      <span id="chip-badge" class="chip-badge" hidden></span>
+    </div>
+    <div id="connect-msg"></div>
+  </section>
+
+  <!-- 2. Device ----------------------------------------------------------- -->
+  <section class="step" id="step-device" hidden>
+    <h2>2 &middot; Choose what to build</h2>
+    <label for="device-select">Device type</label>
+    <select id="device-select"></select>
+    <p class="muted" id="device-desc" style="margin:10px 0 0"></p>
+  </section>
+
+  <!-- 3. Pins ------------------------------------------------------------- -->
+  <section class="step" id="step-pins" hidden>
+    <h2>3 &middot; Assign GPIO pins</h2>
+    <p class="muted" style="margin-top:0">Only pins that are usable on this chip are listed. Flash, PSRAM and non-existent pins are never offered.</p>
+    <div class="grid" id="pin-grid"></div>
+    <div id="pin-msg"></div>
+  </section>
+
+  <!-- 4. Flash ------------------------------------------------------------ -->
+  <section class="step" id="step-flash" hidden>
+    <h2>4 &middot; Flash and configure</h2>
+    <p class="muted" style="margin-top:0">This erases the device's current firmware.</p>
+    <div class="row" style="margin-top:14px">
+      <button id="btn-flash">Flash device</button>
+      <span class="muted" id="flash-status"></span>
+    </div>
+    <progress id="flash-progress" value="0" max="1" hidden></progress>
+    <div id="flash-msg"></div>
+    <pre id="log" hidden></pre>
+  </section>
+</main>
+
+<script type="module" src="./app.js"></script>
+</body>
+</html>

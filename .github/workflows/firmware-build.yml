@@ -12,10 +12,14 @@ on:
     branches: [main, "claude/**"]
     paths:
       - "dsgv_firmware/**"
+      - "catalog/**"
+      - "webflasher/**"
       - ".github/workflows/firmware-build.yml"
   pull_request:
     paths:
       - "dsgv_firmware/**"
+      - "catalog/**"
+      - "webflasher/**"
       - ".github/workflows/firmware-build.yml"
   workflow_dispatch:
 

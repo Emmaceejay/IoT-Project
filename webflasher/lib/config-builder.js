@@ -154,6 +154,40 @@ export function supportedFamilies(chips) {
 }
 
 /**
+ * Compare the pins we asked for against the pins the device says it stored.
+ *
+ * SET_CONFIG echoes the config that actually took effect. Diffing it is what
+ * turns "the write returned OK" into "the device is configured as intended" —
+ * and it catches a pin the firmware refused for a reason this browser copy of
+ * the rules did not predict, which is exactly the drift case worth surfacing.
+ *
+ * @returns string[] human-readable differences; empty means fully applied
+ */
+export function comparePins(want, got) {
+  const out = [];
+  const show = (v) => (v === undefined || v === null ? 'nothing' : String(v));
+
+  for (const [role, value] of Object.entries(want ?? {})) {
+    const actual = got?.[role];
+
+    if (Array.isArray(value)) {
+      if (!Array.isArray(actual)) {
+        out.push(`${role}: device reported no per-gang pins`);
+        continue;
+      }
+      value.forEach((v, i) => {
+        if (actual[i] !== v) {
+          out.push(`${role}[${i}]: asked for ${show(v)}, device has ${show(actual[i])}`);
+        }
+      });
+    } else if (actual !== value) {
+      out.push(`${role}: asked for ${show(value)}, device has ${show(actual)}`);
+    }
+  }
+  return out;
+}
+
+/**
  * Map an esptool-js chip name to a catalogue family key.
  * esptool reports things like "ESP32-C3 (QFN32) (revision v0.4)".
  */
