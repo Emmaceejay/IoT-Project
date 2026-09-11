@@ -88,13 +88,19 @@ static void ledc_init_all(void) {
         return;
     }
 
-    const struct { ledc_channel_t ch; gpio_num_t pin; const char *name; } map[] = {
-        { LEDC_CH_DIMMER, g_device_config.dimmer_pin, "dimmer" },
-        { LEDC_CH_WARM,   g_device_config.warm_pin,   "warm"   },
-        { LEDC_CH_COOL,   g_device_config.cool_pin,   "cool"   },
-        { LEDC_CH_RED,    g_device_config.red_pin,    "red"    },
-        { LEDC_CH_GREEN,  g_device_config.green_pin,  "green"  },
-        { LEDC_CH_BLUE,   g_device_config.blue_pin,   "blue"   },
+    // Each channel is claimed only if the device declares the capability that
+    // uses it. Without this gate a unit provisioned as a plain switch still
+    // configured all six channels, taking the dimmer/CCT/RGB pins away from
+    // whatever the user had actually assigned them to.
+    const struct {
+        ledc_channel_t ch; gpio_num_t pin; const char *name; DSGV_cap_t cap;
+    } map[] = {
+        { LEDC_CH_DIMMER, g_device_config.dimmer_pin, "dimmer", DSGV_CAP_BRIGHTNESS },
+        { LEDC_CH_WARM,   g_device_config.warm_pin,   "warm",   DSGV_CAP_COLOR_TEMP },
+        { LEDC_CH_COOL,   g_device_config.cool_pin,   "cool",   DSGV_CAP_COLOR_TEMP },
+        { LEDC_CH_RED,    g_device_config.red_pin,    "red",    DSGV_CAP_RGB        },
+        { LEDC_CH_GREEN,  g_device_config.green_pin,  "green",  DSGV_CAP_RGB        },
+        { LEDC_CH_BLUE,   g_device_config.blue_pin,   "blue",   DSGV_CAP_RGB        },
     };
 
     ledc_channel_config_t ch_cfg = {
@@ -104,8 +110,10 @@ static void ledc_init_all(void) {
         .hpoint     = 0,
         .intr_type  = LEDC_INTR_DISABLE,
     };
-    int ready = 0;
+    int ready = 0, skipped = 0;
     for (int i = 0; i < (int)(sizeof(map) / sizeof(map[0])); i++) {
+        if (!DSGV_has_cap(map[i].cap)) { skipped++; continue; }
+
         DSGV_pin_status_t st = DSGV_pin_check(map[i].pin, /*need_output=*/true);
         if (st != DSGV_PIN_OK) {
             if (st != DSGV_PIN_DISABLED) {
@@ -126,8 +134,8 @@ static void ledc_init_all(void) {
     }
 
     s_ledc_initialized = true;
-    ESP_LOGI(TAG, "LEDC ready: %d/6 channels @ %d Hz 10-bit",
-             ready, LEDC_TIMER_FREQ_HZ);
+    ESP_LOGI(TAG, "LEDC ready: %d channels @ %d Hz 10-bit (%d not declared by capabilities)",
+             ready, LEDC_TIMER_FREQ_HZ, skipped);
 }
 
 // Set LEDC duty from a 0-100 % integer.
@@ -379,7 +387,7 @@ void DSGV_gpio_init(void) {
     // ── Motion sensor input (PIR, HIGH-active) ────────────────────────────
     // Inputs are validated with need_output=false: ESP32's 34-39 are perfectly
     // good sensor inputs even though they cannot drive a relay.
-    s_motion_ok =
+    s_motion_ok = DSGV_has_cap(DSGV_CAP_MOTION) &&
         DSGV_pin_check(g_device_config.motion_pin, /*need_output=*/false) == DSGV_PIN_OK;
     gpio_config_t in = {
         .mode         = GPIO_MODE_INPUT,
@@ -390,14 +398,16 @@ void DSGV_gpio_init(void) {
     if (s_motion_ok) {
         in.pin_bit_mask = (1ULL << g_device_config.motion_pin);
         gpio_config(&in);
-    } else {
-        ESP_LOGW(TAG, "Motion input GPIO %d rejected — %s",
+    } else if (DSGV_has_cap(DSGV_CAP_MOTION)) {
+        // Declared but unusable — that is a misconfiguration worth warning about.
+        // A device that simply has no PIR is silent.
+        ESP_LOGW(TAG, "Motion capability declared but GPIO %d unusable — %s",
                  (int)g_device_config.motion_pin,
                  DSGV_pin_status_str(DSGV_pin_check(g_device_config.motion_pin, false)));
     }
 
     // ── Contact sensor input (reed switch, LOW-active = closed) ──────────
-    s_contact_ok =
+    s_contact_ok = DSGV_has_cap(DSGV_CAP_CONTACT) &&
         DSGV_pin_check(g_device_config.contact_pin, /*need_output=*/false) == DSGV_PIN_OK;
     if (s_contact_ok) {
         in.pin_bit_mask = (1ULL << g_device_config.contact_pin);
@@ -405,26 +415,30 @@ void DSGV_gpio_init(void) {
         in.pull_down_en = GPIO_PULLDOWN_DISABLE;
         in.intr_type    = GPIO_INTR_ANYEDGE;
         gpio_config(&in);
-    } else {
-        ESP_LOGW(TAG, "Contact input GPIO %d rejected — %s",
+    } else if (DSGV_has_cap(DSGV_CAP_CONTACT)) {
+        ESP_LOGW(TAG, "Contact capability declared but GPIO %d unusable — %s",
                  (int)g_device_config.contact_pin,
                  DSGV_pin_status_str(DSGV_pin_check(g_device_config.contact_pin, false)));
     }
 
-    // ── ADC NTC (temperature fallback) ───────────────────────────────────
-    adc_init();
+    // ── Temperature hardware ─────────────────────────────────────────────
+    // Both the ADC unit and the SOC sensor are only claimed by devices that
+    // report temperature. A switch has no use for either, and the ADC in
+    // particular occupies a pin.
+    if (DSGV_has_cap(DSGV_CAP_TEMPERATURE)) {
+        adc_init();
 
-    // ── Internal SOC temperature sensor ──────────────────────────────────
 #if SOC_TEMP_SENSOR_SUPPORTED
-    temperature_sensor_config_t ts_cfg = TEMPERATURE_SENSOR_CONFIG_DEFAULT(-10, 80);
-    if (temperature_sensor_install(&ts_cfg, &s_temp_sensor) == ESP_OK &&
-        temperature_sensor_enable(s_temp_sensor) == ESP_OK) {
-        ESP_LOGI(TAG, "SOC internal temperature sensor enabled");
-    } else {
-        ESP_LOGW(TAG, "SOC temp sensor init failed; using NTC ADC fallback");
-        s_temp_sensor = NULL;
-    }
+        temperature_sensor_config_t ts_cfg = TEMPERATURE_SENSOR_CONFIG_DEFAULT(-10, 80);
+        if (temperature_sensor_install(&ts_cfg, &s_temp_sensor) == ESP_OK &&
+            temperature_sensor_enable(s_temp_sensor) == ESP_OK) {
+            ESP_LOGI(TAG, "SOC internal temperature sensor enabled");
+        } else {
+            ESP_LOGW(TAG, "SOC temp sensor init failed; using NTC ADC fallback");
+            s_temp_sensor = NULL;
+        }
 #endif
+    }
 
     // ── Sensor / telemetry background task ───────────────────────────────
     // Task created BEFORE attaching ISR handlers so s_sensor_task_handle

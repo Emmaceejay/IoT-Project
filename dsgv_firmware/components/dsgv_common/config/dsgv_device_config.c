@@ -28,6 +28,41 @@ static const char *NVS_NS = "DSGV_cfg";
 
 DSGV_device_config_t g_device_config;
 
+// ── Capability mask ───────────────────────────────────────────────────────────
+// Derived from g_device_config.capabilities, never stored separately: the
+// string remains the single persisted form so the MQTT announce and mDNS TXT
+// record keep echoing exactly what was provisioned.
+
+static uint32_t s_cap_mask = 0;
+
+// Matches a whole quoted token, so "color_temp" cannot satisfy a search for
+// "temp" and "relay" legitimately matches "relay_2" only because the caller
+// asks for "relay" — gang count comes from relay_count, not the string.
+static bool cap_present(const char *caps, const char *name) {
+    char needle[40];
+    snprintf(needle, sizeof(needle), "\"%s\"", name);
+    return strstr(caps, needle) != NULL;
+}
+
+void DSGV_capabilities_refresh(void) {
+    const char *c = g_device_config.capabilities;
+    uint32_t m = 0;
+    if (cap_present(c, "relay"))       m |= DSGV_CAP_RELAY;
+    if (cap_present(c, "brightness"))  m |= DSGV_CAP_BRIGHTNESS;
+    if (cap_present(c, "color_temp"))  m |= DSGV_CAP_COLOR_TEMP;
+    if (cap_present(c, "rgb"))         m |= DSGV_CAP_RGB;
+    if (cap_present(c, "temperature")) m |= DSGV_CAP_TEMPERATURE;
+    if (cap_present(c, "humidity"))    m |= DSGV_CAP_HUMIDITY;
+    if (cap_present(c, "motion"))      m |= DSGV_CAP_MOTION;
+    if (cap_present(c, "contact"))     m |= DSGV_CAP_CONTACT;
+    if (cap_present(c, "hvac_mode"))   m |= DSGV_CAP_HVAC_MODE;
+    s_cap_mask = m;
+}
+
+bool DSGV_has_cap(DSGV_cap_t cap) {
+    return (s_cap_mask & (uint32_t)cap) != 0;
+}
+
 // Generates a 32-char uppercase hex token from 16 bytes of hardware entropy.
 static void _gen_token(char out[33]) {
     for (int i = 0; i < 4; i++) {
@@ -210,6 +245,7 @@ esp_err_t DSGV_device_config_load(void) {
         ESP_LOGI(TAG, "Auth token generated and persisted to NVS (first boot)");
     }
 
+    DSGV_capabilities_refresh();
     return ESP_OK;
 }
 
@@ -246,6 +282,7 @@ esp_err_t DSGV_device_config_save(const DSGV_device_config_t *cfg) {
 
     if (ret == ESP_OK) {
         g_device_config = *cfg;
+        DSGV_capabilities_refresh();
         ESP_LOGI(TAG, "NVS config saved: type=%s caps=%s relay_cnt=%u",
                  cfg->device_type, cfg->capabilities, cfg->relay_count);
     } else {

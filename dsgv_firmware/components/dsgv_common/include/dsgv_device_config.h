@@ -68,6 +68,39 @@ typedef struct {
     char auth_token[33];
 } DSGV_device_config_t;
 
+/**
+ * Capability flags, derived from the capabilities string.
+ *
+ * The string itself stays the stored form (it is echoed verbatim in the MQTT
+ * announce and the mDNS TXT record). This mask is the queryable form, so init
+ * code can ask "does this device do RGB" without re-scanning a string.
+ *
+ * Gating matters for the universal binary: without it every device configures
+ * all six PWM channels and both sensor ISRs, so a unit provisioned as a plain
+ * 1-gang switch would still claim the dimmer, CCT and RGB pins — pins the user
+ * may well have assigned to something else.
+ */
+typedef enum {
+    DSGV_CAP_RELAY       = 1u << 0,
+    DSGV_CAP_BRIGHTNESS  = 1u << 1,   // LEDC dimmer channel
+    DSGV_CAP_COLOR_TEMP  = 1u << 2,   // LEDC warm + cool channels
+    DSGV_CAP_RGB         = 1u << 3,   // LEDC red + green + blue channels
+    DSGV_CAP_TEMPERATURE = 1u << 4,   // SOC sensor and/or NTC ADC
+    DSGV_CAP_HUMIDITY    = 1u << 5,
+    DSGV_CAP_MOTION      = 1u << 6,   // PIR input + ISR
+    DSGV_CAP_CONTACT     = 1u << 7,   // reed input + ISR
+    DSGV_CAP_HVAC_MODE   = 1u << 8,
+} DSGV_cap_t;
+
+/** @brief True if the current config declares @p cap. */
+bool DSGV_has_cap(DSGV_cap_t cap);
+
+/**
+ * @brief Recompute the capability mask from g_device_config.capabilities.
+ *        Called automatically by load and save; exposed for tests.
+ */
+void DSGV_capabilities_refresh(void);
+
 // Global instance — populated by DSGV_device_config_load().
 // All modules read from this instead of the compile-time macros directly.
 extern DSGV_device_config_t g_device_config;
