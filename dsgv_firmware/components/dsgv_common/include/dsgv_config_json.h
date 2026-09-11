@@ -32,7 +32,8 @@
  *       "status_led": 8,
  *       "motion":     11,
  *       "contact":    20,
- *       "button":     9
+ *       "button":     9,
+ *       "adc_temp":   1         // must be an ADC1-capable pin on this chip
  *     }
  *   }
  *

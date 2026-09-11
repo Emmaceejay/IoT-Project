@@ -61,6 +61,11 @@ typedef struct {
     gpio_num_t contact_pin;      // reed switch input, LOW-active = closed
     gpio_num_t button_pin;       // factory-reset button
 
+    // NTC thermistor input. Must be an ADC1-capable pin on this chip — the
+    // channel is derived via DSGV_pin_to_adc1_channel() rather than stored,
+    // so the pin and channel can never disagree.
+    gpio_num_t adc_temp_pin;
+
     // 32-char hex auth token (128-bit entropy) generated at first boot and
     // stored in NVS. Exchanged over BLE during provisioning and stored in the
     // app. Any MQTT broker-change command must carry this token.

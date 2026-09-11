@@ -58,6 +58,8 @@ static temperature_sensor_handle_t s_temp_sensor = NULL;
 
 static adc_oneshot_unit_handle_t s_adc1          = NULL;
 static bool                      s_adc_ready     = false;
+// Derived from g_device_config.adc_temp_pin at init, not stored separately.
+static adc_channel_t             s_adc_channel   = ADC_CHANNEL_0;
 
 static TaskHandle_t  s_sensor_task_handle = NULL;
 static QueueHandle_t s_switch_queue       = NULL;
@@ -174,6 +176,17 @@ static float ntc_raw_to_celsius(int raw) {
 }
 
 static void adc_init(void) {
+    // Derive the channel from the configured pin rather than trusting a
+    // separate macro. Storing pin and channel independently lets them drift;
+    // the mapping is fixed in silicon, so there is only ever one right answer.
+    int ch_num = DSGV_pin_to_adc1_channel(g_device_config.adc_temp_pin);
+    if (ch_num < 0) {
+        ESP_LOGW(TAG, "adc_temp_pin=%d is not an ADC1 pin — NTC unavailable",
+                 (int)g_device_config.adc_temp_pin);
+        return;
+    }
+    s_adc_channel = (adc_channel_t)ch_num;
+
     adc_oneshot_unit_init_cfg_t cfg = {
         .unit_id  = ADC_UNIT_1,
         .ulp_mode = ADC_ULP_MODE_DISABLE,
@@ -186,12 +199,13 @@ static void adc_init(void) {
         .atten    = ADC_ATTEN_DB_12,
         .bitwidth = ADC_BITWIDTH_DEFAULT,
     };
-    if (adc_oneshot_config_channel(s_adc1, GPIO_ADC_TEMP_CHANNEL, &ch) != ESP_OK) {
+    if (adc_oneshot_config_channel(s_adc1, s_adc_channel, &ch) != ESP_OK) {
         ESP_LOGW(TAG, "ADC channel config failed");
         return;
     }
     s_adc_ready = true;
-    ESP_LOGI(TAG, "ADC1 ch%d ready for NTC thermistor", GPIO_ADC_TEMP_CHANNEL);
+    ESP_LOGI(TAG, "ADC1 ch%d (GPIO %d) ready for NTC thermistor",
+             ch_num, (int)g_device_config.adc_temp_pin);
 }
 
 // ── Temperature reading ───────────────────────────────────────────────────────
@@ -207,7 +221,7 @@ static float read_temperature(void) {
 #endif
     if (s_adc_ready && s_adc1) {
         int raw = 0;
-        if (adc_oneshot_read(s_adc1, GPIO_ADC_TEMP_CHANNEL, &raw) == ESP_OK) {
+        if (adc_oneshot_read(s_adc1, s_adc_channel, &raw) == ESP_OK) {
             return ntc_raw_to_celsius(raw);
         }
     }

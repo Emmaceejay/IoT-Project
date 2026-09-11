@@ -50,3 +50,15 @@ bool DSGV_pin_is_usb(int pin);
 
 /** @brief Highest valid pin number + 1 for this chip. */
 int DSGV_pin_count(void);
+
+/**
+ * @brief Map a GPIO to its ADC1 channel.
+ * @return the ADC1 channel number, or -1 if this pin has no ADC1 function.
+ *
+ * The oneshot ADC driver addresses channels, not GPIOs, so a user-selected
+ * analog pin has to be translated. The mapping is fixed in silicon and
+ * differs per chip — e.g. ADC1_CH0 is GPIO 36 on ESP32 but GPIO 1 on S3 and
+ * GPIO 0 on C3/C6 — which is exactly why it belongs here beside the other
+ * per-chip tables rather than being hardcoded at the call site.
+ */
+int DSGV_pin_to_adc1_channel(int pin);

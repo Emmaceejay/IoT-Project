@@ -99,3 +99,34 @@ const char *DSGV_pin_status_str(DSGV_pin_status_t s) {
 bool DSGV_pin_is_strapping(int pin) { return in_mask(pin, M_STRAPPING); }
 bool DSGV_pin_is_console(int pin)   { return in_mask(pin, M_CONSOLE);   }
 bool DSGV_pin_is_usb(int pin)       { return in_mask(pin, M_USB);       }
+
+// ── ADC1 GPIO → channel ───────────────────────────────────────────────────────
+// Fixed in silicon; the ordering is not the same on any two of these chips.
+
+int DSGV_pin_to_adc1_channel(int pin) {
+#if defined(CONFIG_IDF_TARGET_ESP32)
+    // ADC1_CH0..CH7 = GPIO 36, 37, 38, 39, 32, 33, 34, 35
+    switch (pin) {
+        case 36: return 0;  case 37: return 1;
+        case 38: return 2;  case 39: return 3;
+        case 32: return 4;  case 33: return 5;
+        case 34: return 6;  case 35: return 7;
+        default: return -1;
+    }
+#elif defined(CONFIG_IDF_TARGET_ESP32S3)
+    // ADC1_CH0..CH9 = GPIO 1..10
+    if (pin >= 1 && pin <= 10) return pin - 1;
+    return -1;
+#elif defined(CONFIG_IDF_TARGET_ESP32C3)
+    // ADC1_CH0..CH4 = GPIO 0..4
+    if (pin >= 0 && pin <= 4) return pin;
+    return -1;
+#elif defined(CONFIG_IDF_TARGET_ESP32C6)
+    // ADC1_CH0..CH6 = GPIO 0..6
+    if (pin >= 0 && pin <= 6) return pin;
+    return -1;
+#else
+    (void)pin;
+    return -1;
+#endif
+}

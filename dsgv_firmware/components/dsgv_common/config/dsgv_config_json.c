@@ -183,6 +183,23 @@ bool DSGV_config_apply_json(DSGV_device_config_t *cfg, const cJSON *root) {
                 applied = true;
             }
         }
+
+        // adc_temp is handled separately: being a valid digital input is not
+        // sufficient, it must be routed to ADC1 on this particular chip.
+        const cJSON *adc = cJSON_GetObjectItemCaseSensitive(pins, "adc_temp");
+        if (cJSON_IsNumber(adc)) {
+            int p = (int)adc->valuedouble;
+            if (p == GPIO_NUM_NC) {
+                cfg->adc_temp_pin = GPIO_NUM_NC;
+                applied = true;
+            } else if (DSGV_pin_to_adc1_channel(p) < 0) {
+                ESP_LOGW(TAG, "pin 'adc_temp'=%d has no ADC1 channel on this "
+                         "chip (keeping %d)", p, (int)cfg->adc_temp_pin);
+            } else {
+                cfg->adc_temp_pin = (gpio_num_t)p;
+                applied = true;
+            }
+        }
     }
 
     if (applied) warn_on_duplicates(cfg);

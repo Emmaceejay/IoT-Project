@@ -102,6 +102,7 @@ esp_err_t DSGV_device_config_load(void) {
     g_device_config.motion_pin     = GPIO_MOTION_PIN;
     g_device_config.contact_pin    = GPIO_CONTACT_PIN;
     g_device_config.button_pin     = GPIO_BUTTON_PIN;
+    g_device_config.adc_temp_pin   = GPIO_ADC_TEMP_PIN;
     g_device_config.auth_token[0]  = '\0';
 
     // ── Step 2: overlay with NVS values (if any) ──────────────────────────────
@@ -159,6 +160,7 @@ esp_err_t DSGV_device_config_load(void) {
         if (nvs_get_i32(nvs, "motion_pin",  &pin) == ESP_OK) g_device_config.motion_pin     = (gpio_num_t)pin;
         if (nvs_get_i32(nvs, "contact_pin", &pin) == ESP_OK) g_device_config.contact_pin    = (gpio_num_t)pin;
         if (nvs_get_i32(nvs, "button_pin",  &pin) == ESP_OK) g_device_config.button_pin     = (gpio_num_t)pin;
+        if (nvs_get_i32(nvs, "adc_pin",     &pin) == ESP_OK) g_device_config.adc_temp_pin   = (gpio_num_t)pin;
 
         len = sizeof(g_device_config.auth_token);
         if (nvs_get_str(nvs, "auth_tok", g_device_config.auth_token, &len) != ESP_OK) {
@@ -221,6 +223,27 @@ esp_err_t DSGV_device_config_load(void) {
         _GUARD_IN(g_device_config.motion_pin,  GPIO_MOTION_PIN);
         _GUARD_IN(g_device_config.contact_pin, GPIO_CONTACT_PIN);
         _GUARD_IN(g_device_config.button_pin,  GPIO_BUTTON_PIN);
+#undef _GUARD_IN
+
+        // The ADC pin has a stricter rule than the other inputs: it must be
+        // wired to ADC1 on this chip. A pin that is a perfectly good digital
+        // input is still useless for the thermistor.
+        if (g_device_config.adc_temp_pin != GPIO_NUM_NC &&
+            DSGV_pin_to_adc1_channel(g_device_config.adc_temp_pin) < 0) {
+            ESP_LOGW(TAG, "adc_temp_pin=%d has no ADC1 channel on this chip — "
+                     "reverting to default %d",
+                     (int)g_device_config.adc_temp_pin, (int)GPIO_ADC_TEMP_PIN);
+            g_device_config.adc_temp_pin = GPIO_ADC_TEMP_PIN;
+        }
+
+#define _GUARD_IN(pin, def) do { \
+    DSGV_pin_status_t _st = DSGV_pin_check((pin), /*need_output=*/false); \
+    if (_st != DSGV_PIN_OK && _st != DSGV_PIN_DISABLED) { \
+        ESP_LOGW(TAG, #pin "=%d rejected (%s) — reverting to default %d", \
+                 (int)(pin), DSGV_pin_status_str(_st), (int)(def)); \
+        (pin) = (def); \
+    } \
+} while (0)
         for (int i = 0; i < DSGV_MAX_RELAY_COUNT; i++) {
             _GUARD_IN(g_device_config.switch_pins[i], default_switch_pins[i]);
         }
@@ -272,6 +295,7 @@ esp_err_t DSGV_device_config_save(const DSGV_device_config_t *cfg) {
     nvs_set_i32(nvs, "motion_pin",  (int32_t)cfg->motion_pin);
     nvs_set_i32(nvs, "contact_pin", (int32_t)cfg->contact_pin);
     nvs_set_i32(nvs, "button_pin",  (int32_t)cfg->button_pin);
+    nvs_set_i32(nvs, "adc_pin",     (int32_t)cfg->adc_temp_pin);
     // Preserve the auth_token already in NVS — do not overwrite with empty string
     if (cfg->auth_token[0] != '\0') {
         nvs_set_str(nvs, "auth_tok", cfg->auth_token);
