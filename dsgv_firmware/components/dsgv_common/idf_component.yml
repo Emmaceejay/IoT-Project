@@ -8,6 +8,13 @@ dependencies:
   ## cJSON for telemetry/payload parsing
   espressif/cjson: "^1.7.15"
 
+  ## mDNS — local network service discovery (_dsgv._tcp advertisement).
+  ## No longer bundled with ESP-IDF: it was moved out to the component registry
+  ## during the 5.x line, so it must be declared here even though
+  ## CMakeLists.txt lists plain "mdns" in REQUIRES. Without this the build
+  ## fails at configure time with "Failed to resolve component 'mdns'".
+  espressif/mdns: "^1"
+
   ## Note: esp-matter is typically included via an external $IDF_PATH or submodule mapping
   ## rather than the public registry, as it requires a specific bootstrap process.
   ## For our custom app ecosystem, this ensures MQTT and JSON work natively.

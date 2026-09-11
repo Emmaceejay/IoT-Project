@@ -32,8 +32,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # 1gang_switch is intentionally absent: the `targets` job below already
+        # builds it on esp32c3 (plus the other three chips).
         sku:
-          - 1gang_switch
           - 2gang_switch
           - 3gang_switch
           - 4gang_switch
