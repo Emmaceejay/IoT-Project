@@ -1,0 +1,13 @@
+# ── ESP32 classic (Xtensa dual-core) target overrides ────────────────────────
+# Loaded automatically by ESP-IDF after sdkconfig.defaults when the build
+# target is esp32. Other targets ignore this file.
+
+# The original ESP32 ships a dual-mode (BR/EDR + BLE) controller. NimBLE is a
+# BLE-only host, so the controller must be restricted to BLE-only or the build
+# fails to link. ESP32-C3/C6/S3 are BLE-only in hardware and need no equivalent.
+CONFIG_BTDM_CTRL_MODE_BLE_ONLY=y
+
+# Bootloader sits at 0x1000 on ESP32 classic (0x0 on C3/C6/S3). This is the
+# IDF default for this target and is restated here only so the web flasher's
+# offset table has a single documented source of truth.
+CONFIG_BOOTLOADER_OFFSET_IN_FLASH=0x1000

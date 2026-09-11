@@ -1,0 +1,102 @@
+name: Firmware Build
+
+# Phase 0 of the web-flasher platform: prove the firmware builds reproducibly
+# in a clean, pinned container. A green run here is the contract that every
+# later phase builds on — no local toolchain required.
+
+on:
+  push:
+    branches: [main, "claude/**"]
+    paths:
+      - "dsgv_firmware/**"
+      - ".github/workflows/firmware-build.yml"
+  pull_request:
+    paths:
+      - "dsgv_firmware/**"
+      - ".github/workflows/firmware-build.yml"
+  workflow_dispatch:
+
+env:
+  # Single source of truth for the toolchain version. components/dsgv_common/
+  # idf_component.yml declares a ">=5.2" floor, which spans the 5.x/6.x major
+  # boundary and is therefore not reproducible. This pin is what actually ships.
+  IDF_VERSION: v5.5
+
+jobs:
+  # ── Every SKU on one target ────────────────────────────────────────────────
+  # Catches per-SKU sdkconfig errors: bad capability JSON, out-of-range relay
+  # counts, wrong partition CSV paths.
+  skus:
+    name: ${{ matrix.sku }} @ esp32c3
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        sku:
+          - 1gang_switch
+          - 2gang_switch
+          - 3gang_switch
+          - 4gang_switch
+          - dimmer
+          - colour_temp
+          - rgb_light
+          - temp_sensor
+          - motion_sensor
+          - contact_sensor
+          - thermostat
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: ${{ env.IDF_VERSION }}
+          target: esp32c3
+          path: dsgv_firmware/devices/${{ matrix.sku }}
+
+  # ── One SKU on every target ────────────────────────────────────────────────
+  # Catches per-chip compile failures: the NimBLE controller-mode issue on
+  # esp32 classic, pin-map #else fallthrough, target-specific API drift.
+  targets:
+    name: 1gang_switch @ ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [esp32, esp32c3, esp32s3, esp32c6]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: ${{ env.IDF_VERSION }}
+          target: ${{ matrix.target }}
+          path: dsgv_firmware/devices/1gang_switch
+
+      # flash_args records the authoritative offsets esptool used. The web
+      # flasher must consume these rather than hardcoding, since the bootloader
+      # offset differs by chip (0x1000 on esp32, 0x0 on c3/c6/s3).
+      - name: Show flash layout
+        run: |
+          cd dsgv_firmware/devices/1gang_switch/build
+          echo "── flash_args (${{ matrix.target }}) ──"
+          cat flash_args
+          echo
+          echo "── binary sizes ──"
+          ls -l bootloader/bootloader.bin \
+                partition_table/partition-table.bin \
+                ota_data_initial.bin \
+                dsgv_1gang_switch.bin
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ matrix.target }}
+          if-no-files-found: error
+          path: |
+            dsgv_firmware/devices/1gang_switch/build/bootloader/bootloader.bin
+            dsgv_firmware/devices/1gang_switch/build/partition_table/partition-table.bin
+            dsgv_firmware/devices/1gang_switch/build/ota_data_initial.bin
+            dsgv_firmware/devices/1gang_switch/build/dsgv_1gang_switch.bin
+            dsgv_firmware/devices/1gang_switch/build/flash_args

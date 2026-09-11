@@ -12,6 +12,10 @@
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="../../partitions_4mb.csv"
 
+# Flash size must match the partition table or gen_esp32part.py rejects it.
+# partitions_4mb.csv ends exactly at 0x400000, so 2 MB (the IDF default) fails.
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
 # ── MQTT ──────────────────────────────────────────────────────────────────────
 # Buffer size: maximum MQTT message payload in bytes. 2048 B covers all
 # telemetry and command payloads with room to spare.
