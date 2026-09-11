@@ -1,5 +1,11 @@
 #pragma once
 
+// MUST be first. CONFIG_IDF_TARGET_* and CONFIG_DSGV_* live in sdkconfig.h,
+// and the chip pin map below is selected by #if on those macros. ESP-IDF does
+// not force-include this header, so without it the #if silently evaluates
+// false and every target falls through to the ESP32-classic #else branch.
+#include "sdkconfig.h"
+
 /**
  * dsgv_config.h — Hardware and protocol constants for the DSGV Hub firmware.
  *
@@ -138,7 +144,7 @@
 #  define GPIO_WALL_SWITCH_PINS_ALL \
     { GPIO_NUM_0, GPIO_NUM_20, GPIO_NUM_21, GPIO_NUM_22 }
 
-#else
+#elif defined(CONFIG_IDF_TARGET_ESP32)
 // ESP32 (classic) — Xtensa dual-core, 16 LEDC channels (HS+LS), 34 GPIOs ────
 // Input-only GPIOs 34-39: no internal pull resistors; use external resistors.
 //   1-gang: GPIO 26
@@ -162,6 +168,11 @@
 // ESP32 classic: gang 1 reuses the button pin; gangs 2-4 use free output-capable GPIOs.
 #  define GPIO_WALL_SWITCH_PINS_ALL \
     { GPIO_NUM_0, GPIO_NUM_13, GPIO_NUM_15, GPIO_NUM_16 }
+
+#else
+#  error "DSGV: unsupported IDF target. Supported: esp32, esp32c3, esp32c6, \
+esp32s3. Add a pin map block above for any new chip — do not let it fall \
+through, or it will silently inherit another chip's GPIO numbers."
 #endif
 
 // ── LEDC PWM channels ─────────────────────────────────────────────────────────
