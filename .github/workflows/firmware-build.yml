@@ -1,8 +1,11 @@
 name: Firmware Build
 
-# Phase 0 of the web-flasher platform: prove the firmware builds reproducibly
-# in a clean, pinned container. A green run here is the contract that every
-# later phase builds on — no local toolchain required.
+# Produces the artifacts the web flasher consumes: one universal binary per
+# chip family, plus an ESP Web Tools manifest describing where each part goes.
+#
+# The eleven per-SKU projects are still built as a regression check that the
+# Kconfig path works, but they are not what gets published — the universal
+# image configures itself into any SKU at provisioning time.
 
 on:
   push:
@@ -17,24 +20,24 @@ on:
   workflow_dispatch:
 
 env:
-  # Single source of truth for the toolchain version. components/dsgv_common/
-  # idf_component.yml declares a ">=5.2" floor, which spans the 5.x/6.x major
-  # boundary and is therefore not reproducible. This pin is what actually ships.
+  # Single source of truth for the toolchain. idf_component.yml declares a
+  # ">=5.2" floor, which spans the 5.x/6.x boundary and is not reproducible;
+  # this pin is what actually ships.
   IDF_VERSION: v5.5
+  FW_VERSION: 1.0.0
 
 jobs:
-  # ── Every SKU on one target ────────────────────────────────────────────────
-  # Catches per-SKU sdkconfig errors: bad capability JSON, out-of-range relay
-  # counts, wrong partition CSV paths.
+  # ── Per-SKU regression ─────────────────────────────────────────────────────
+  # One target is enough here: these differ only in Kconfig string values, so
+  # this catches a malformed capabilities array or an out-of-range relay count.
   skus:
     name: ${{ matrix.sku }} @ esp32c3
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        # 1gang_switch is intentionally absent: the `targets` job below already
-        # builds it on esp32c3 (plus the other three chips).
         sku:
+          - 1gang_switch
           - 2gang_switch
           - 3gang_switch
           - 4gang_switch
@@ -55,10 +58,9 @@ jobs:
           target: esp32c3
           path: dsgv_firmware/devices/${{ matrix.sku }}
 
-      # ninja interleaves output from parallel jobs, so the tail of the console
-      # log frequently belongs to a different file than the one that failed.
-      # ESP-IDF also writes each invocation's stderr to its own file; dumping
-      # those gives the actual diagnostics with no interleaving.
+      # ninja interleaves output from parallel compile jobs, so the tail of the
+      # console log often belongs to a different file than the one that failed.
+      # These files hold only diagnostics, in order.
       - name: Dump build error log
         if: failure()
         run: |
@@ -68,11 +70,9 @@ jobs:
             cat "$f"
           done
 
-  # ── One SKU on every target ────────────────────────────────────────────────
-  # Catches per-chip compile failures: the NimBLE controller-mode issue on
-  # esp32 classic, pin-map #else fallthrough, target-specific API drift.
-  targets:
-    name: 1gang_switch @ ${{ matrix.target }}
+  # ── Universal image, one per chip ──────────────────────────────────────────
+  universal:
+    name: universal @ ${{ matrix.target }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -86,40 +86,95 @@ jobs:
         with:
           esp_idf_version: ${{ env.IDF_VERSION }}
           target: ${{ matrix.target }}
-          path: dsgv_firmware/devices/1gang_switch
+          path: dsgv_firmware/devices/universal
 
       - name: Dump build error log
         if: failure()
         run: |
-          for f in dsgv_firmware/devices/1gang_switch/build/log/idf_py_stderr_output_*; do
+          for f in dsgv_firmware/devices/universal/build/log/idf_py_stderr_output_*; do
             [ -e "$f" ] || continue
             echo "───── $f ─────"
             cat "$f"
           done
 
-      # flash_args records the authoritative offsets esptool used. The web
-      # flasher must consume these rather than hardcoding, since the bootloader
-      # offset differs by chip (0x1000 on esp32, 0x0 on c3/c6/s3).
-      - name: Show flash layout
+      # Flatten into the layout the manifest references. Offsets come from the
+      # build's own flash_args, never hardcoded: the bootloader is at 0x1000 on
+      # ESP32 but 0x0 on C3/C6/S3, and a wrong offset flashes cleanly and then
+      # fails to boot — painful to diagnose from a browser.
+      - name: Stage artifacts and generate manifest entry
         run: |
-          cd dsgv_firmware/devices/1gang_switch/build
-          echo "── flash_args (${{ matrix.target }}) ──"
-          cat flash_args
-          echo
-          echo "── binary sizes ──"
-          ls -l bootloader/bootloader.bin \
-                partition_table/partition-table.bin \
-                ota_data_initial.bin \
-                dsgv_1gang_switch.bin
+          set -euo pipefail
+          BUILD=dsgv_firmware/devices/universal/build
+          OUT=dist/${{ matrix.target }}
+          mkdir -p "$OUT"
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+          echo "── flash_args (${{ matrix.target }}) ──"
+          cat "$BUILD/flash_args"
+
+          cp "$BUILD/bootloader/bootloader.bin"             "$OUT/"
+          cp "$BUILD/partition_table/partition-table.bin"   "$OUT/"
+          cp "$BUILD/ota_data_initial.bin"                  "$OUT/"
+          cp "$BUILD/dsgv_universal.bin"                    "$OUT/"
+
+          python3 dsgv_firmware/tools/gen_manifest.py \
+            --build-dir "$BUILD" \
+            --chip ${{ matrix.target }} \
+            --out "$OUT/build-${{ matrix.target }}.json"
+
+          echo "── staged ──"
+          ls -l "$OUT"
+
+      - name: Check app fits its OTA slot
+        run: |
+          set -euo pipefail
+          # partitions_4mb.csv gives each OTA slot 0x1D0000.
+          LIMIT=$((0x1D0000))
+          SIZE=$(stat -c%s dist/${{ matrix.target }}/dsgv_universal.bin)
+          PCT=$((SIZE * 100 / LIMIT))
+          echo "app: $SIZE B of $LIMIT B (${PCT}%)"
+          if [ "$SIZE" -gt "$LIMIT" ]; then
+            echo "::error::app exceeds the OTA slot by $((SIZE - LIMIT)) bytes"
+            exit 1
+          fi
+          if [ "$PCT" -gt 90 ]; then
+            echo "::warning::app is at ${PCT}% of the OTA slot"
+          fi
+
+      - uses: actions/upload-artifact@v4
         with:
-          name: firmware-${{ matrix.target }}
+          name: universal-${{ matrix.target }}
           if-no-files-found: error
-          path: |
-            dsgv_firmware/devices/1gang_switch/build/bootloader/bootloader.bin
-            dsgv_firmware/devices/1gang_switch/build/partition_table/partition-table.bin
-            dsgv_firmware/devices/1gang_switch/build/ota_data_initial.bin
-            dsgv_firmware/devices/1gang_switch/build/dsgv_1gang_switch.bin
-            dsgv_firmware/devices/1gang_switch/build/flash_args
+          path: dist/${{ matrix.target }}
+
+  # ── Combined manifest ──────────────────────────────────────────────────────
+  manifest:
+    name: manifest
+    needs: universal
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: universal-*
+          path: dist
+
+      - name: Merge per-chip entries
+        run: |
+          set -euo pipefail
+          find dist -name 'build-*.json' | sort
+
+          python3 dsgv_firmware/tools/gen_manifest.py \
+            --merge $(find dist -name 'build-*.json' | sort) \
+            --name "DSGV Universal Firmware" \
+            --version "${FW_VERSION}" \
+            --out manifest.json
+
+          echo "── manifest.json ──"
+          cat manifest.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: manifest
+          if-no-files-found: error
+          path: manifest.json

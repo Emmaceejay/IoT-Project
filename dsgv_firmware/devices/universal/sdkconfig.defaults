@@ -1,0 +1,23 @@
+# ── DSGV Universal Firmware ───────────────────────────────────────────────────
+# One binary per chip, configured into any device type at provisioning time
+# over serial, BLE or the WiFi softAP. This is the image the web flasher ships.
+#
+# The eleven devices/<sku>/ projects remain for hand builds and as a CI
+# regression check that the Kconfig path still works. They are not what the
+# flasher distributes.
+#
+# Deliberately neutral defaults. An unconfigured unit declares no capabilities
+# and no relays, so it initialises no PWM channels, no sensor ISRs and no ADC,
+# and drives nothing. It still runs the serial listener and BLE/AP
+# provisioning, so it can be told what it is.
+#
+# The alternative — defaulting to a 1-gang switch — would mean a device that
+# was flashed but not yet configured starts driving whatever GPIO the chip's
+# default map happens to name. That risks back-driving something already wired
+# to that pin. Inert until told otherwise is the safer failure mode, and the
+# flasher configures immediately anyway, so the neutral state is transient.
+CONFIG_DSGV_DEVICE_TYPE="Unconfigured"
+CONFIG_DSGV_DEVICE_CAPABILITIES="[]"
+CONFIG_DSGV_RELAY_COUNT=0
+
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="../../partitions_4mb.csv"
