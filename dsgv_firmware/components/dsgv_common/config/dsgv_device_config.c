@@ -51,20 +51,23 @@ esp_err_t DSGV_device_config_load(void) {
         g_device_config.relay_pins[i] = default_relay_pins[i];
     }
 
-    // Wall switch input pins — compile-time defaults; not stored in NVS
     static const gpio_num_t default_switch_pins[DSGV_MAX_RELAY_COUNT] =
         GPIO_WALL_SWITCH_PINS_ALL;
     for (int i = 0; i < DSGV_MAX_RELAY_COUNT; i++) {
         g_device_config.switch_pins[i] = default_switch_pins[i];
     }
 
-    g_device_config.dimmer_pin    = GPIO_DIMMER_PIN;
-    g_device_config.warm_pin      = GPIO_WARM_PIN;
-    g_device_config.cool_pin      = GPIO_COOL_PIN;
-    g_device_config.red_pin       = GPIO_RED_PIN;
-    g_device_config.green_pin     = GPIO_GREEN_PIN;
-    g_device_config.blue_pin      = GPIO_BLUE_PIN;
-    g_device_config.auth_token[0] = '\0';
+    g_device_config.dimmer_pin     = GPIO_DIMMER_PIN;
+    g_device_config.warm_pin       = GPIO_WARM_PIN;
+    g_device_config.cool_pin       = GPIO_COOL_PIN;
+    g_device_config.red_pin        = GPIO_RED_PIN;
+    g_device_config.green_pin      = GPIO_GREEN_PIN;
+    g_device_config.blue_pin       = GPIO_BLUE_PIN;
+    g_device_config.status_led_pin = GPIO_STATUS_LED_PIN;
+    g_device_config.motion_pin     = GPIO_MOTION_PIN;
+    g_device_config.contact_pin    = GPIO_CONTACT_PIN;
+    g_device_config.button_pin     = GPIO_BUTTON_PIN;
+    g_device_config.auth_token[0]  = '\0';
 
     // ── Step 2: overlay with NVS values (if any) ──────────────────────────────
     bool need_new_token = false;
@@ -96,13 +99,31 @@ esp_err_t DSGV_device_config_load(void) {
         size_t pins_len = sizeof(g_device_config.relay_pins);
         nvs_get_blob(nvs, "relay_pins", g_device_config.relay_pins, &pins_len);
 
+        // Wall switch pins. Only applied if the stored blob is exactly the
+        // expected size — a short read would leave later entries holding the
+        // compile-time defaults while earlier ones came from NVS, which is a
+        // confusing half-applied state.
+        size_t sw_len = sizeof(g_device_config.switch_pins);
+        if (nvs_get_blob(nvs, "sw_pins", g_device_config.switch_pins, &sw_len) == ESP_OK &&
+            sw_len != sizeof(g_device_config.switch_pins)) {
+            ESP_LOGW(TAG, "sw_pins blob is %u bytes, expected %u — ignoring",
+                     (unsigned)sw_len, (unsigned)sizeof(g_device_config.switch_pins));
+            for (int i = 0; i < DSGV_MAX_RELAY_COUNT; i++) {
+                g_device_config.switch_pins[i] = default_switch_pins[i];
+            }
+        }
+
         int32_t pin;
-        if (nvs_get_i32(nvs, "dim_pin",   &pin) == ESP_OK) g_device_config.dimmer_pin = (gpio_num_t)pin;
-        if (nvs_get_i32(nvs, "warm_pin",  &pin) == ESP_OK) g_device_config.warm_pin   = (gpio_num_t)pin;
-        if (nvs_get_i32(nvs, "cool_pin",  &pin) == ESP_OK) g_device_config.cool_pin   = (gpio_num_t)pin;
-        if (nvs_get_i32(nvs, "red_pin",   &pin) == ESP_OK) g_device_config.red_pin    = (gpio_num_t)pin;
-        if (nvs_get_i32(nvs, "green_pin", &pin) == ESP_OK) g_device_config.green_pin  = (gpio_num_t)pin;
-        if (nvs_get_i32(nvs, "blue_pin",  &pin) == ESP_OK) g_device_config.blue_pin   = (gpio_num_t)pin;
+        if (nvs_get_i32(nvs, "dim_pin",     &pin) == ESP_OK) g_device_config.dimmer_pin     = (gpio_num_t)pin;
+        if (nvs_get_i32(nvs, "warm_pin",    &pin) == ESP_OK) g_device_config.warm_pin       = (gpio_num_t)pin;
+        if (nvs_get_i32(nvs, "cool_pin",    &pin) == ESP_OK) g_device_config.cool_pin       = (gpio_num_t)pin;
+        if (nvs_get_i32(nvs, "red_pin",     &pin) == ESP_OK) g_device_config.red_pin        = (gpio_num_t)pin;
+        if (nvs_get_i32(nvs, "green_pin",   &pin) == ESP_OK) g_device_config.green_pin      = (gpio_num_t)pin;
+        if (nvs_get_i32(nvs, "blue_pin",    &pin) == ESP_OK) g_device_config.blue_pin       = (gpio_num_t)pin;
+        if (nvs_get_i32(nvs, "led_pin",     &pin) == ESP_OK) g_device_config.status_led_pin = (gpio_num_t)pin;
+        if (nvs_get_i32(nvs, "motion_pin",  &pin) == ESP_OK) g_device_config.motion_pin     = (gpio_num_t)pin;
+        if (nvs_get_i32(nvs, "contact_pin", &pin) == ESP_OK) g_device_config.contact_pin    = (gpio_num_t)pin;
+        if (nvs_get_i32(nvs, "button_pin",  &pin) == ESP_OK) g_device_config.button_pin     = (gpio_num_t)pin;
 
         len = sizeof(g_device_config.auth_token);
         if (nvs_get_str(nvs, "auth_tok", g_device_config.auth_token, &len) != ESP_OK) {
@@ -149,7 +170,26 @@ esp_err_t DSGV_device_config_load(void) {
         _GUARD_PIN(g_device_config.red_pin,    GPIO_RED_PIN);
         _GUARD_PIN(g_device_config.green_pin,  GPIO_GREEN_PIN);
         _GUARD_PIN(g_device_config.blue_pin,   GPIO_BLUE_PIN);
+        _GUARD_PIN(g_device_config.status_led_pin, GPIO_STATUS_LED_PIN);
 #undef _GUARD_PIN
+
+        // Inputs: validated with need_output=false so ESP32's input-only
+        // 34-39 stay legal here, unlike for relays and PWM.
+#define _GUARD_IN(pin, def) do { \
+    DSGV_pin_status_t _st = DSGV_pin_check((pin), /*need_output=*/false); \
+    if (_st != DSGV_PIN_OK && _st != DSGV_PIN_DISABLED) { \
+        ESP_LOGW(TAG, #pin "=%d rejected (%s) — reverting to default %d", \
+                 (int)(pin), DSGV_pin_status_str(_st), (int)(def)); \
+        (pin) = (def); \
+    } \
+} while (0)
+        _GUARD_IN(g_device_config.motion_pin,  GPIO_MOTION_PIN);
+        _GUARD_IN(g_device_config.contact_pin, GPIO_CONTACT_PIN);
+        _GUARD_IN(g_device_config.button_pin,  GPIO_BUTTON_PIN);
+        for (int i = 0; i < DSGV_MAX_RELAY_COUNT; i++) {
+            _GUARD_IN(g_device_config.switch_pins[i], default_switch_pins[i]);
+        }
+#undef _GUARD_IN
 
         ESP_LOGI(TAG, "NVS config loaded: type=%s caps=%s relay_cnt=%u",
                  g_device_config.device_type,
@@ -185,12 +225,17 @@ esp_err_t DSGV_device_config_save(const DSGV_device_config_t *cfg) {
     nvs_set_str(nvs, "caps",       cfg->capabilities);
     nvs_set_u8 (nvs, "relay_cnt",  cfg->relay_count);
     nvs_set_blob(nvs, "relay_pins", cfg->relay_pins, sizeof(cfg->relay_pins));
-    nvs_set_i32(nvs, "dim_pin",   (int32_t)cfg->dimmer_pin);
-    nvs_set_i32(nvs, "warm_pin",  (int32_t)cfg->warm_pin);
-    nvs_set_i32(nvs, "cool_pin",  (int32_t)cfg->cool_pin);
-    nvs_set_i32(nvs, "red_pin",   (int32_t)cfg->red_pin);
-    nvs_set_i32(nvs, "green_pin", (int32_t)cfg->green_pin);
-    nvs_set_i32(nvs, "blue_pin",  (int32_t)cfg->blue_pin);
+    nvs_set_blob(nvs, "sw_pins",    cfg->switch_pins, sizeof(cfg->switch_pins));
+    nvs_set_i32(nvs, "dim_pin",     (int32_t)cfg->dimmer_pin);
+    nvs_set_i32(nvs, "warm_pin",    (int32_t)cfg->warm_pin);
+    nvs_set_i32(nvs, "cool_pin",    (int32_t)cfg->cool_pin);
+    nvs_set_i32(nvs, "red_pin",     (int32_t)cfg->red_pin);
+    nvs_set_i32(nvs, "green_pin",   (int32_t)cfg->green_pin);
+    nvs_set_i32(nvs, "blue_pin",    (int32_t)cfg->blue_pin);
+    nvs_set_i32(nvs, "led_pin",     (int32_t)cfg->status_led_pin);
+    nvs_set_i32(nvs, "motion_pin",  (int32_t)cfg->motion_pin);
+    nvs_set_i32(nvs, "contact_pin", (int32_t)cfg->contact_pin);
+    nvs_set_i32(nvs, "button_pin",  (int32_t)cfg->button_pin);
     // Preserve the auth_token already in NVS — do not overwrite with empty string
     if (cfg->auth_token[0] != '\0') {
         nvs_set_str(nvs, "auth_tok", cfg->auth_token);

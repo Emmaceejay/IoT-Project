@@ -42,6 +42,16 @@ static const char *TAG = "DSGV_gpio";
 
 static bool s_ledc_initialized = false;
 
+// Whether the status LED pin configured successfully at init. Guards the
+// gpio_set_level() calls on the relay path: with the LED set to "not fitted"
+// (GPIO_NUM_NC) an unguarded write logs an ESP_ERR_INVALID_ARG on every
+// single relay change, which would bury the log on a headless board.
+static bool s_led_ok     = false;
+// Same for the sensor inputs: the telemetry task polls these every cycle, so
+// an unusable pin must be skipped rather than read.
+static bool s_motion_ok  = false;
+static bool s_contact_ok = false;
+
 #if SOC_TEMP_SENSOR_SUPPORTED
 static temperature_sensor_handle_t s_temp_sensor = NULL;
 #endif
@@ -303,8 +313,10 @@ static void sensor_task(void *pvParam) {
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(DSGV_TELEMETRY_INTERVAL_MS));
 
         float temp    = read_temperature();
-        bool  motion  = gpio_get_level(GPIO_MOTION_PIN) == 1;
-        bool  contact = gpio_get_level(GPIO_CONTACT_PIN) == 0;  // LOW = closed
+        // Pins that failed validation are reported as inactive rather than
+        // read, so a board without a PIR fitted does not poll GPIO_NUM_NC.
+        bool  motion  = s_motion_ok  && gpio_get_level(g_device_config.motion_pin) == 1;
+        bool  contact = s_contact_ok && gpio_get_level(g_device_config.contact_pin) == 0;  // LOW = closed
 
         STATE_LOCK();
         if (temp > -99.0f) g_device_state.current_temp = temp;
@@ -350,10 +362,12 @@ void DSGV_gpio_init(void) {
     }
 
     // ── Status LED output ─────────────────────────────────────────────────
-    if (DSGV_pin_check(GPIO_STATUS_LED_PIN, /*need_output=*/true) == DSGV_PIN_OK) {
-        out.pin_bit_mask = (1ULL << GPIO_STATUS_LED_PIN);
+    s_led_ok = DSGV_pin_check(g_device_config.status_led_pin,
+                              /*need_output=*/true) == DSGV_PIN_OK;
+    if (s_led_ok) {
+        out.pin_bit_mask = (1ULL << g_device_config.status_led_pin);
         gpio_config(&out);
-        gpio_set_level(GPIO_STATUS_LED_PIN, 0);
+        gpio_set_level(g_device_config.status_led_pin, 0);
     }
 
     // ── LEDC PWM channels ─────────────────────────────────────────────────
@@ -365,36 +379,36 @@ void DSGV_gpio_init(void) {
     // ── Motion sensor input (PIR, HIGH-active) ────────────────────────────
     // Inputs are validated with need_output=false: ESP32's 34-39 are perfectly
     // good sensor inputs even though they cannot drive a relay.
-    const bool motion_ok =
-        DSGV_pin_check(GPIO_MOTION_PIN, /*need_output=*/false) == DSGV_PIN_OK;
+    s_motion_ok =
+        DSGV_pin_check(g_device_config.motion_pin, /*need_output=*/false) == DSGV_PIN_OK;
     gpio_config_t in = {
         .mode         = GPIO_MODE_INPUT,
         .pull_up_en   = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,  // use external pull-down
         .intr_type    = GPIO_INTR_ANYEDGE,
     };
-    if (motion_ok) {
-        in.pin_bit_mask = (1ULL << GPIO_MOTION_PIN);
+    if (s_motion_ok) {
+        in.pin_bit_mask = (1ULL << g_device_config.motion_pin);
         gpio_config(&in);
     } else {
         ESP_LOGW(TAG, "Motion input GPIO %d rejected — %s",
-                 (int)GPIO_MOTION_PIN,
-                 DSGV_pin_status_str(DSGV_pin_check(GPIO_MOTION_PIN, false)));
+                 (int)g_device_config.motion_pin,
+                 DSGV_pin_status_str(DSGV_pin_check(g_device_config.motion_pin, false)));
     }
 
     // ── Contact sensor input (reed switch, LOW-active = closed) ──────────
-    const bool contact_ok =
-        DSGV_pin_check(GPIO_CONTACT_PIN, /*need_output=*/false) == DSGV_PIN_OK;
-    if (contact_ok) {
-        in.pin_bit_mask = (1ULL << GPIO_CONTACT_PIN);
+    s_contact_ok =
+        DSGV_pin_check(g_device_config.contact_pin, /*need_output=*/false) == DSGV_PIN_OK;
+    if (s_contact_ok) {
+        in.pin_bit_mask = (1ULL << g_device_config.contact_pin);
         in.pull_up_en   = GPIO_PULLUP_DISABLE;   // use external pull-up
         in.pull_down_en = GPIO_PULLDOWN_DISABLE;
         in.intr_type    = GPIO_INTR_ANYEDGE;
         gpio_config(&in);
     } else {
         ESP_LOGW(TAG, "Contact input GPIO %d rejected — %s",
-                 (int)GPIO_CONTACT_PIN,
-                 DSGV_pin_status_str(DSGV_pin_check(GPIO_CONTACT_PIN, false)));
+                 (int)g_device_config.contact_pin,
+                 DSGV_pin_status_str(DSGV_pin_check(g_device_config.contact_pin, false)));
     }
 
     // ── ADC NTC (temperature fallback) ───────────────────────────────────
@@ -420,8 +434,8 @@ void DSGV_gpio_init(void) {
     // Attach ISR handlers now that the task handle is valid. Only for pins
     // that actually got configured above — attaching to an unconfigured pin
     // installs a handler that can never fire.
-    if (motion_ok)  gpio_isr_handler_add(GPIO_MOTION_PIN,  motion_isr_handler,  NULL);
-    if (contact_ok) gpio_isr_handler_add(GPIO_CONTACT_PIN, contact_isr_handler, NULL);
+    if (s_motion_ok)  gpio_isr_handler_add(g_device_config.motion_pin,  motion_isr_handler,  NULL);
+    if (s_contact_ok) gpio_isr_handler_add(g_device_config.contact_pin, contact_isr_handler, NULL);
 
     // ── Wall switch inputs (latch switch, edge-triggered relay toggle) ────────
     s_switch_queue = xQueueCreate(8, sizeof(uint32_t));
@@ -459,17 +473,17 @@ void DSGV_gpio_init(void) {
     ESP_LOGI(TAG, "GPIO ready (relay[0]=%d cnt=%u LED=%d dim=%d warm=%d cool=%d "
              "R=%d G=%d B=%d motion=%d contact=%d)",
              g_device_config.relay_pins[0], g_device_config.relay_count,
-             GPIO_STATUS_LED_PIN,
+             g_device_config.status_led_pin,
              g_device_config.dimmer_pin, g_device_config.warm_pin,
              g_device_config.cool_pin,
              g_device_config.red_pin, g_device_config.green_pin,
              g_device_config.blue_pin,
-             GPIO_MOTION_PIN, GPIO_CONTACT_PIN);
+             g_device_config.motion_pin, g_device_config.contact_pin);
 }
 
 void DSGV_gpio_relay_set(bool on) {
     gpio_set_level(g_device_config.relay_pins[0], on ? 1 : 0);
-    gpio_set_level(GPIO_STATUS_LED_PIN, on ? 1 : 0);
+    if (s_led_ok) gpio_set_level(g_device_config.status_led_pin, on ? 1 : 0);
 
     STATE_LOCK();
     g_device_state.relay_states[0] = on;
@@ -524,7 +538,7 @@ void DSGV_gpio_apply_state(void) {
         gpio_set_level(g_device_config.relay_pins[i], s.relay_states[i] ? 1 : 0);
     }
     // Status LED mirrors gang 1 (primary relay)
-    gpio_set_level(GPIO_STATUS_LED_PIN, s.relay_states[0] ? 1 : 0);
+    if (s_led_ok) gpio_set_level(g_device_config.status_led_pin, s.relay_states[0] ? 1 : 0);
 
     // PWM outputs are gated by gang 1 (relay_states[0])
     ledc_set_pct(LEDC_CH_DIMMER, s.relay_states[0] ? s.brightness : 0);

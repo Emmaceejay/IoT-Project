@@ -52,6 +52,15 @@ typedef struct {
     gpio_num_t green_pin;
     gpio_num_t blue_pin;
 
+    // Fixed-function pins. These were compile-time macros until the web
+    // flasher needed them selectable per board: a user picking "motion sensor
+    // on GPIO 7" cannot rebuild firmware to say so.
+    // Any of these may be GPIO_NUM_NC (-1) to mean "not fitted".
+    gpio_num_t status_led_pin;   // lit in parallel with relay gang 1
+    gpio_num_t motion_pin;       // PIR input, HIGH-active
+    gpio_num_t contact_pin;      // reed switch input, LOW-active = closed
+    gpio_num_t button_pin;       // factory-reset button
+
     // 32-char hex auth token (128-bit entropy) generated at first boot and
     // stored in NVS. Exchanged over BLE during provisioning and stored in the
     // app. Any MQTT broker-change command must carry this token.
