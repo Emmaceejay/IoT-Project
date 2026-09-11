@@ -12,12 +12,14 @@ on:
     branches: [main, "claude/**"]
     paths:
       - "dsgv_firmware/**"
+      - "dsgv_firmware_esp8266/**"
       - "catalog/**"
       - "webflasher/**"
       - ".github/workflows/firmware-build.yml"
   pull_request:
     paths:
       - "dsgv_firmware/**"
+      - "dsgv_firmware_esp8266/**"
       - "catalog/**"
       - "webflasher/**"
       - ".github/workflows/firmware-build.yml"
@@ -186,6 +188,89 @@ jobs:
           name: universal-${{ matrix.target }}
           if-no-files-found: error
           path: dist/${{ matrix.target }}
+
+  # ── ESP8266 ────────────────────────────────────────────────────────────────
+  # A different silicon generation and a different SDK: ESP8266_RTOS_SDK v3.4
+  # is a frozen fork tracking ESP-IDF v3.3 APIs, with its own xtensa-lx106
+  # toolchain. There is no official CI action, so both are installed by hand.
+  #
+  # This exists before any device code is ported, on purpose. Writing the
+  # firmware first and discovering later that it never compiled is precisely
+  # what produced the 17 defects Phase 0 had to clear.
+  esp8266:
+    name: esp8266
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The SDK's tooling predates modern Python packaging; its pinned
+      # dependencies do not all build on 3.12.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache toolchain and SDK
+        id: cache-8266
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/esp8266/xtensa-lx106-elf
+            ~/esp8266/ESP8266_RTOS_SDK
+          key: esp8266-sdk-v3.4-gcc8.4.0-v1
+
+      - name: Install toolchain and SDK
+        if: steps.cache-8266.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p ~/esp8266 && cd ~/esp8266
+
+          echo "── toolchain ──"
+          curl -fsSL -o tc.tar.gz \
+            https://dl.espressif.com/dl/xtensa-lx106-elf-gcc8_4_0-esp-2020r3-linux-amd64.tar.gz
+          tar -xzf tc.tar.gz && rm tc.tar.gz
+          ./xtensa-lx106-elf/bin/xtensa-lx106-elf-gcc --version | head -1
+
+          echo "── SDK ──"
+          git clone --depth 1 -b v3.4 --recursive \
+            https://github.com/espressif/ESP8266_RTOS_SDK.git
+
+      - name: Install SDK Python requirements
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip wheel
+          python -m pip install -r ~/esp8266/ESP8266_RTOS_SDK/requirements.txt
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          export IDF_PATH=~/esp8266/ESP8266_RTOS_SDK
+          export PATH=~/esp8266/xtensa-lx106-elf/bin:$PATH
+
+          cd dsgv_firmware_esp8266
+          make defconfig
+          make -j"$(nproc)"
+
+          echo "── build output ──"
+          ls -l build/*.bin
+
+      - name: Report image size against the OTA slot
+        run: |
+          set -euo pipefail
+          cd dsgv_firmware_esp8266
+          APP=$(ls build/dsgv_universal_8266.bin)
+          SIZE=$(stat -c%s "$APP")
+          echo "app: $SIZE bytes"
+          # Recorded rather than gated: the slot size depends on the partition
+          # layout, which changes once the real device code lands.
+          echo "::notice::ESP8266 app image is $SIZE bytes"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: esp8266-proof
+          if-no-files-found: error
+          path: |
+            dsgv_firmware_esp8266/build/*.bin
+            dsgv_firmware_esp8266/build/*.map
 
   # ── Combined manifest ──────────────────────────────────────────────────────
   manifest:

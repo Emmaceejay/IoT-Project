@@ -1,0 +1,9 @@
+# 4 MB modules (ESP-12F, NodeMCU, Wemos D1 Mini). ESP-01 has 1 MB and cannot
+# hold two OTA slots, so it needs its own layout — see the note in README.
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="4MB"
+CONFIG_PARTITION_TABLE_TWO_OTA=y
+
+# ESP8266 has ~50 KB of usable heap against the ESP32's ~300 KB, so size
+# matters far more here than it does on the ESP32 side.
+CONFIG_ESP8266_OPTIMIZATION_SIZE=y
