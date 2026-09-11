@@ -18,6 +18,9 @@
 #include "esp_random.h"
 #include <string.h>
 #include <stdio.h>
+// PRIX32 etc. uint32_t is 'unsigned long' on RISC-V targets (C3/C6) but
+// 'unsigned int' on Xtensa, so plain %X is only correct on some chips.
+#include <inttypes.h>
 
 static const char *TAG    = "DSGV_cfg";
 static const char *NVS_NS = "DSGV_cfg";
@@ -28,7 +31,7 @@ DSGV_device_config_t g_device_config;
 static void _gen_token(char out[33]) {
     for (int i = 0; i < 4; i++) {
         uint32_t r = esp_random();
-        snprintf(out + i * 8, 9, "%08X", r);
+        snprintf(out + i * 8, 9, "%08" PRIX32, r);
     }
 }
 

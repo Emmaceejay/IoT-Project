@@ -28,6 +28,8 @@
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+// PRIu32 — uint32_t is 'unsigned long' on RISC-V, 'unsigned int' on Xtensa.
+#include <inttypes.h>
 
 #if SOC_TEMP_SENSOR_SUPPORTED
 #include "driver/temperature_sensor.h"
@@ -263,7 +265,7 @@ static void switch_task(void *pvParam) {
         build_telemetry(buf, sizeof(buf));
         DSGV_mqtt_publish_telemetry(buf);
 
-        ESP_LOGI(TAG, "Wall switch gang %u → relay %s",
+        ESP_LOGI(TAG, "Wall switch gang %" PRIu32 " → relay %s",
                  triggered, new_state ? "ON" : "OFF");
     }
 }
