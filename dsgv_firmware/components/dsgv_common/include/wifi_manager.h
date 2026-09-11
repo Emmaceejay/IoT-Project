@@ -1,5 +1,6 @@
 #pragma once
 #include "esp_err.h"
+#include <stdbool.h>   // wifi_manager_is_connected() / _is_ap_mode() return bool
 
 /**
  * wifi_manager.h

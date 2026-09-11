@@ -24,6 +24,7 @@
 #include "esp_log.h"
 #include "esp_wifi.h"
 #include "esp_mac.h"
+#include "esp_app_desc.h"   // esp_app_get_description() — running fw version
 #include "mdns.h"
 #include "dsgv_mdns.h"
 #include "dsgv_config.h"
@@ -102,7 +103,7 @@ static esp_err_t register_services(void)
 
         // "fw" — the running firmware version. The app compares this
         // against the latest available version to flag pending OTA updates.
-        { .key = "fw",   .value = dsgv_firmware_VERSION },
+        { .key = "fw",   .value = esp_app_get_description()->version },
     };
 
     esp_err_t err = mdns_service_add(

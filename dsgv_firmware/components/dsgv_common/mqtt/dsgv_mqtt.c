@@ -24,6 +24,7 @@
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_netif.h"
+#include "esp_app_desc.h"   // esp_app_get_description() — running fw version
 #include "cJSON.h"
 #include "freertos/timers.h"
 #include <stdio.h>
@@ -344,7 +345,7 @@ static void publish_announcement(void) {
         s_device_name,
         g_device_config.capabilities,
         ip_copy,
-        dsgv_firmware_VERSION
+        esp_app_get_description()->version
     );
 
     // Retained = true so a freshly subscribed App sees it immediately

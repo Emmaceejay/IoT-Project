@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include "esp_err.h"
+#include <stdbool.h>   // DSGV_http_set_ap_mode() takes a bool
 
 /**
  * DSGV_http_server.h
