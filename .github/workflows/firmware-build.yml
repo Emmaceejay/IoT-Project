@@ -55,6 +55,19 @@ jobs:
           target: esp32c3
           path: dsgv_firmware/devices/${{ matrix.sku }}
 
+      # ninja interleaves output from parallel jobs, so the tail of the console
+      # log frequently belongs to a different file than the one that failed.
+      # ESP-IDF also writes each invocation's stderr to its own file; dumping
+      # those gives the actual diagnostics with no interleaving.
+      - name: Dump build error log
+        if: failure()
+        run: |
+          for f in dsgv_firmware/devices/${{ matrix.sku }}/build/log/idf_py_stderr_output_*; do
+            [ -e "$f" ] || continue
+            echo "───── $f ─────"
+            cat "$f"
+          done
+
   # ── One SKU on every target ────────────────────────────────────────────────
   # Catches per-chip compile failures: the NimBLE controller-mode issue on
   # esp32 classic, pin-map #else fallthrough, target-specific API drift.
@@ -74,6 +87,15 @@ jobs:
           esp_idf_version: ${{ env.IDF_VERSION }}
           target: ${{ matrix.target }}
           path: dsgv_firmware/devices/1gang_switch
+
+      - name: Dump build error log
+        if: failure()
+        run: |
+          for f in dsgv_firmware/devices/1gang_switch/build/log/idf_py_stderr_output_*; do
+            [ -e "$f" ] || continue
+            echo "───── $f ─────"
+            cat "$f"
+          done
 
       # flash_args records the authoritative offsets esptool used. The web
       # flasher must consume these rather than hardcoding, since the bootloader

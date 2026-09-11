@@ -141,8 +141,12 @@
 #  define GPIO_STATUS_LED_PIN      GPIO_NUM_2
 #  define GPIO_BUTTON_PIN          GPIO_NUM_0
 // Wall switch inputs — latch switch, one pin per relay gang (edge = toggle relay)
+// Gang 1 reuses the button pin, as on the other targets. Gangs 3-4 were
+// GPIO 21 and 22: 21 is relay gang 2's output (a collision), and 22-25 do
+// not exist on the S3 die at all. Moved to 13 and 14, which are free here.
+// Avoid 26-32 (SPI flash), 33-37 (octal PSRAM) and 43/44 (UART0 console).
 #  define GPIO_WALL_SWITCH_PINS_ALL \
-    { GPIO_NUM_0, GPIO_NUM_20, GPIO_NUM_21, GPIO_NUM_22 }
+    { GPIO_NUM_0, GPIO_NUM_20, GPIO_NUM_13, GPIO_NUM_14 }
 
 #elif defined(CONFIG_IDF_TARGET_ESP32)
 // ESP32 (classic) — Xtensa dual-core, 16 LEDC channels (HS+LS), 34 GPIOs ────
