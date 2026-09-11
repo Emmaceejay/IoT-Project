@@ -27,6 +27,9 @@ idf_component_register(
         # OTA (Over-The-Air) firmware updates with SHA-256 verification
         "ota/dsgv_ota.c"
 
+        # Serial config transport (UART0) — used by the web flasher
+        "serial/dsgv_serial_config.c"
+
         # BLE provisioning — pushes Wi-Fi credentials on first boot
         "provisioning/dsgv_provisioning.c"
 

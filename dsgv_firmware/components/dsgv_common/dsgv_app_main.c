@@ -34,6 +34,7 @@
 #include "dsgv_http_server.h"
 #include "dsgv_mdns.h"        // local network discovery
 #include "dsgv_provisioning.h"
+#include "dsgv_serial_config.h"   // UART0 config channel used by the flasher
 
 esp_err_t DSGV_mqtt_start(void);
 void      DSGV_gpio_init(void);
@@ -63,6 +64,13 @@ void dsgv_app_main(void)
 
     // ── Step 3: GPIO ─────────────────────────────────────────────────────────
     DSGV_gpio_init();
+
+    // ── Step 3b: Serial config listener ──────────────────────────────────────
+    // Started before Wi-Fi deliberately. It has no network dependency, so a
+    // device that cannot join a network — or has never been given credentials
+    // — is still fully configurable over the port the flasher already holds
+    // open. Failure here is not fatal: the device runs normally without it.
+    DSGV_serial_config_start();
 
     // ── Step 4: Wi-Fi ────────────────────────────────────────────────────────
     esp_err_t wifi_err = wifi_manager_connect();
