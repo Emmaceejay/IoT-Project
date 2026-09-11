@@ -46,6 +46,10 @@ idf_component_register(
         # OTA: esp_https_ota downloads the firmware image over HTTPS
         esp_https_ota
 
+        # OTA partition ops (esp_ota_ops.h) — used by dsgv_ota.c to select and
+        # commit the ota_0 / ota_1 slot. Lives in the app_update component.
+        app_update
+
         # HTTP client: used to fetch broker config from Firebase Cloud Functions
         esp_http_client
 
