@@ -231,8 +231,19 @@ jobs:
           ./xtensa-lx106-elf/bin/xtensa-lx106-elf-gcc --version | head -1
 
           echo "── SDK ──"
-          git clone --depth 1 -b v3.4 --recursive \
+          # Not --recursive. The coap component carries a nested tinydtls
+          # submodule pointing at Eclipse's old Gerrit URL, which now redirects
+          # to GitHub; git refuses a redirect that changes the URL base, so a
+          # recursive clone of v3.4 cannot succeed. Bitrot in a frozen SDK.
+          # Only the submodules this firmware actually needs are initialised.
+          git clone --depth 1 -b v3.4 \
             https://github.com/espressif/ESP8266_RTOS_SDK.git
+          cd ESP8266_RTOS_SDK
+          git submodule update --init --depth 1 \
+            components/json/cJSON \
+            components/lwip/lwip \
+            components/mbedtls/mbedtls \
+            components/mqtt/esp-mqtt
 
       - name: Install SDK Python requirements
         run: |
